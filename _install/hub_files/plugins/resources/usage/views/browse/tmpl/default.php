@@ -2,10 +2,10 @@
 /**
  * @package     hubzero-cms
  * @author      Shawn Rice <zooley@purdue.edu>
- * @copyright   Copyright 2005-2011 Purdue University. All rights reserved.
+ * @copyright   Copyright 2005-2012 HUBzero Foundation, LLC.
  * @license     http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
  *
- * Copyright 2005-2011 Purdue University. All rights reserved.
+ * Copyright 2005-2012 HUBzero Foundation, LLC.
  *
  * This file is part of: The HUBzero(R) Platform for Scientific Collaboration
  *
@@ -23,7 +23,7 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
- * HUBzero is a registered trademark of Purdue University.
+ * HUBzero is a registered trademark of HUBzero Foundation, LLC.
  */
 
 // Check to ensure this file is included in Joomla!
