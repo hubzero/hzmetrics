@@ -25,12 +25,30 @@
 # HUBzero is a registered trademark of HUBzero Foundation, LLC.
 #
 
+BASESCRIPTS=gen_tool_plots 				__process_usage_metrics_summary.sh  xlogfix_domain \
+			xlogfix_prep 				gen_tool_stats 						_setup_permissions_temp \
+			xlogfix_ipcountry 			xlogfix_summary 					gen_tool_toplists \
+			logfix_session				xlogfix_andmore_usage				xlogfix_middleware_cpu \
+			xlogfix_user_info			gen_tool_tops			   			__process_tool_metrics.sh \
+			xlogfix_clean				xlogfix_middleware_wall  			xlogfix_whoisonline \
+   			__process_usage_metrics.sh	xlogfix_dns			   				xlogfix_plot \
+   			xlogimport_tool_and_reg_user_data
+
+INCLUDES=	db_connect.php	func_andmore.php	func_misc.php hub_parameters.php	xlogplotgraph
+
+IMPORT=	_archive_apache_and_auth_log.sh			__fetch_apache_and_auth_log.sh		__import_apache_and_auth_log.sh \
+		xlogfix_identify_bots					xlogimport_apache					xlogimport_authlog \
+		xlogimport_webhits
+
 
 default all build:
 	@true
 
 install:
-	@true
+	for f in $(BASESCRIPTS); do install --mode 0755 -D $$f $(USRSHAREDIR)/hubzero-metrics/$$f ; done
+	for f in $(INCLUDES); do install --mode 0755 -D $$f $(USRSHAREDIR)/hubzero-metrics/includes/$$f ; done
+	for f in $(IMPORT); do install --mode 0755 -D $$f $(USRSHAREDIR)/hubzero-metrics/import/$$f ; done
+
 
 configure:
 	@true
