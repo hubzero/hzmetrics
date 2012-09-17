@@ -1,0 +1,174 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This script computes the top lists for each simulation tool
+# - Users By Organization Type
+# - Users by Country of Residence
+# - Top Domains by User Count
+#
+# USAGE: ./gen_tool_tops [<YYYY-MM>]
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+if ($_SERVER['argc'] < 2) {
+    $dthis_ = date('Y').'-'.date('m').'-'.date('d');
+} else {
+	$dthis_ = $_SERVER['argv'][1];
+}
+
+$dates = get_dates($dthis_, 12);
+$dthis = $dates['dthis'];
+
+$tops = array(1, 2, 3);
+foreach ($tops as $top) {
+	$sql = 'SELECT res_stats.id, res_stats.resid, res.alias, res_stats.users, res_stats.simulations, res_stats.period, LEFT(res_stats.datetime, 10) AS dthis FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS res_stats, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res_stats.resid=res.id AND res_stats.restype = "7" AND res.standalone = "1" AND res_stats.datetime = '.dbquote($dthis).' ORDER BY datetime DESC';
+	$result = mysql_query($sql, $db_hub);
+	if($result) {
+		if(mysql_num_rows($result) > 0) {
+    		while($row = mysql_fetch_assoc($result)) {
+				$id = $row['id'];
+				$resid = $row['resid'];
+				$tool = $row['alias'];
+				$users = $row['users'];
+				$sims = $row['simulations'];
+				$period = $row['period'];
+				$dthis = $row['dthis'];
+
+				$filter = '';
+           		$tool = '"'.$row['alias'].'"';
+        		$filter = get_tool_versions_aliases($db_hub, $tool);
+
+		   		$dates = get_dates($dthis_, $period);
+	    		$dstart = $dates['start'];
+				$dstop = $dates['stop'];
+
+				$sql_ = 'DELETE FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals WHERE id = '.dbquote($id).' AND top = '.dbquote($top);
+				mysql_exec($db_hub, $sql_);
+				if($top == '1') { // Users by Country of Residence
+					gen_topcountryres($db_hub, $filter, $dstart, $dstop, $id, $users, $top);
+				} else if ($top == '2') { // Top domains by sim users
+					gen_topdomains($db_hub, $filter, $dstart, $dstop, $id, $users, $top);
+				} else if ($top == '3') { // Orgtypes
+					gen_orgtypes($db_hub, $filter, $dstart, $dstop, $id, $users, $top);
+				} else {
+					 echo "No Tops to compute";
+				 	exit;
+				}
+			}
+		}
+	} else {
+		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		clean_exit($msg);
+	}
+}
+
+db_close($db_hub);
+
+// ----------
+function gen_topdomains($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
+
+	global $hub_db, $metrics_db, $db_prefix;
+
+	$rank = 0;
+	$sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
+	mysql_exec($db_hub, $sql_);
+	$sql = 'SELECT DISTINCT(domain) AS dom, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY dom ORDER BY cnt DESC LIMIT 10';
+    $result = mysql_query($sql, $db_hub);
+	if($result) {
+    	if(mysql_num_rows($result) > 0) {
+       		while($row = mysql_fetch_assoc($result)) {
+				$rank = $rank + 1;
+				$domain = $row['dom'];
+				if ($domain == "") {
+					$domain = "Unknown";
+				}
+				$sql1 = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).','.dbquote($domain).','.dbquote($row['cnt']).')';
+				mysql_exec($db_hub, $sql1);
+       		}
+    	}
+	} else {
+		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		clean_exit($msg);
+	}
+}
+
+// ----------
+function gen_orgtypes($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
+
+	global $hub_db, $metrics_db, $db_prefix;
+
+	$rank = 0;
+	$sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
+	mysql_exec($db_hub, $sql_);
+	$sql = 'SELECT DISTINCT(user.orgtype), COUNT(DISTINCT tool.user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics AS tool, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS user WHERE tool.user=user.username AND tool.appname IN ('.$filter.') AND tool.start > '.dbquote($dstart).' AND tool.start < '.dbquote($dstop).' GROUP BY user.orgtype ORDER BY cnt DESC';
+    $result = mysql_query($sql, $db_hub);
+	if($result) {
+    	if(mysql_num_rows($result) > 0) {
+        	while($row = mysql_fetch_assoc($result)) {
+				$rank = $rank + 1;
+				$orgtype = $row['orgtype'];
+				if ($orgtype == "") {
+					$orgtype = "Unknown";
+				}
+				$sql1 = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).','.dbquote($orgtype).','.dbquote($row['cnt']).')';
+				mysql_exec($db_hub, $sql1);
+        	}
+    	}
+	} else {
+		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		clean_exit($msg);
+	}
+}
+
+// ----------
+function gen_topcountryres($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
+
+	global $hub_db, $metrics_db, $db_prefix;
+
+	$rank = 0;
+	$sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
+	mysql_exec($db_hub, $sql_);
+	$sql = 'SELECT DISTINCT(countryresident) AS country, name, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics LEFT JOIN '.$metrics_db.'.countries ON countryresident=code WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY country ORDER BY cnt DESC LIMIT 10';
+    $result = mysql_query($sql, $db_hub);
+	if($result) {
+    	if(mysql_num_rows($result) > 0) {
+        	while($row = mysql_fetch_assoc($result)) {
+				$rank = $rank + 1;
+				$country = $row['name'];
+				if ($country == "") {
+					$country = "Unknown";
+				}
+				$sql1 = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).','.dbquote($country).','.dbquote($row['cnt']).')';
+				mysql_exec($db_hub, $sql1);
+        	}
+    	}
+	} else {
+		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		clean_exit($msg);
+	}
+	if ($rank == 0) {
+		$rank = 1;
+		$sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Unknown",'.dbquote($users).')';
+		mysql_exec($db_hub, $sql_);
+		
+	}
+}
+
+?>

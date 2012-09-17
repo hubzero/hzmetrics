@@ -1,0 +1,37 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This Script makes a copy of the HUB sessionlog table records into the 
+# metrics' sessionlog_metrics table and HUB jos_xprofiles table into metrics
+# jos_xprofiles_metrics table.
+#
+# USAGE: ./xlogimport_tool_and_reg_user_data
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+$sql = 'INSERT IGNORE INTO '.$metrics_db.'.sessionlog_metrics (sessnum, user, ip, start, appname) SELECT sessnum, username, remoteip, start, appname FROM '.$hub_db.'.sessionlog';
+mysql_exec($db_hub, $sql);
+
+$sql = 'INSERT INTO '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics SELECT * FROM '.$hub_db.'.'.$db_prefix.'xprofiles AS hub_users ON DUPLICATE KEY UPDATE orgtype = hub_users.orgtype, countryresident = hub_users.countryresident, countryorigin = hub_users.countryorigin, registerDate = hub_users.registerDate';
+mysql_exec($db_hub, $sql);
+
+db_close($db_hub);
+
+?>

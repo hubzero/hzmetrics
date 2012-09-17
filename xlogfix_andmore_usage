@@ -1,0 +1,136 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This script computes usage metrics for "and more" resources
+#
+# USAGE: ./xlogfix_andmore_usage <YYYY-MM>
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+require_once(__DIR__."/includes/func_andmore.php");
+
+$db_hub = db_connect('db_hub');
+
+if ($_SERVER['argc'] < 2) {
+        $dthis_ = date('Y').'-'.date('m').'-'.date('d');
+	$processed_on = date('Y').'-'.date('m').'-01';
+} else {
+	$dthis_ = $_SERVER['argv'][1];
+	$processed_on = $dthis_.'-01';
+}
+
+$overwrite = 1;
+$dbug = 0;
+
+$periods  = array(12, 14, 1);
+
+# --------------------------------------------------------------------------------------------
+$sql = 'SELECT DISTINCT id, type FROM '.$hub_db.'.'.$db_prefix.'resources WHERE published = 1 AND standalone = 1 AND type <> 7 ORDER BY publish_up DESC';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+   	if(mysql_num_rows($result) > 0) {
+       	while($row = mysql_fetch_assoc($result)) {
+			$resid = $row['id'];
+			$restype = $row['type'];
+			$child_resid_list = array();
+			array_push($child_resid_list, $resid);
+			get_child_resources($db_hub, $resid, $child_resid_list);
+			$resid_list = '';
+			foreach ($child_resid_list as $childid) {
+				$resid_list .= '"'.$childid.'",';
+			}
+			$resid_list = rtrim($resid_list,",");
+			$match_string = '';
+			$match_string = get_paths($db_hub, $resid_list);
+		
+			$users = 0;
+			if ($match_string) {
+				foreach ($periods as $period) {
+    				$dates = get_dates($dthis_, $period);
+    				$dstart = $dates['start'];
+    				$dstop = $dates['stop'];
+			
+					if (!mysql_ping($db_hub))
+						$db_hub = db_connect('db_hub');
+					$id_ = 0;
+					$sql = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats WHERE resid = '.dbquote($resid).' AND datetime = '.dbquote($processed_on).' AND period = '.dbquote($period);
+					$id_  = mysql_fetch($db_hub, $sql);
+					if ($id_) {
+						if ($overwrite) {
+							$users = get_usage($db_hub, $match_string, $dstart, $dstop);
+							if (!mysql_ping($db_hub))
+								$db_hub = db_connect('db_hub');
+							$sql_updt = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET users = '.dbquote($users).' WHERE id = '.dbquote($id_);
+							if ($dbug) {
+								print $sql_updt.';'.n;
+							} else {
+								mysql_exec($db_hub,$sql_updt);
+							}
+						
+						}
+					} else {
+						$users = get_usage($db_hub, $match_string,  $dstart, $dstop);
+						if (!mysql_ping($db_hub))
+							$db_hub = db_connect('db_hub');
+						$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, datetime, period) VALUES ('.dbquote($resid).','.dbquote($restype).','.dbquote($users).','.dbquote($processed_on).','.dbquote($period).')';
+						if ($dbug) {
+							print $sql_ins.';'.n;
+						} else {
+							mysql_exec($db_hub,$sql_ins);
+						}
+					}
+				}
+			}
+		}
+	}
+} else {
+	echo mysql_error($db_hub)." while executing ".$sql."\n";
+	die;
+}
+
+db_close($db_hub);
+
+# --------------------------------------------------------------------------------------------
+function get_usage($db_hub, $match_string, $dstart, $dstop) {
+
+	global $metrics_db;
+
+	$sql = 'SELECT COUNT(DISTINCT ip, host) FROM '.$metrics_db.'.web';
+    if ($match_string) {
+        $sql .= ' WHERE ('.$match_string.')';
+    } else {
+        print "something is horribly wrong\n\n\n";
+    }
+    $sql .=  ' AND datetime >= '.dbquote($dstart).' and datetime < '.dbquote($dstop);
+	if (!mysql_ping($db_hub))
+	$db_hub = db_connect('db_hub');
+	$result = mysql_query($sql, $db_hub);
+	if($result) {
+   		if(mysql_num_rows($result) > 0) {
+       		while($row = mysql_fetch_row($result)) {
+				$users = $row['0'];
+			}
+		}
+	} else {
+		echo mysql_error($db_hub)." while executing ".$sql."\n";
+		die;
+	}
+
+	return $users;
+}
+
+?>

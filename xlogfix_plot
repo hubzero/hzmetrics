@@ -1,0 +1,217 @@
+#!/usr/bin/perl -w
+# =========================================================================
+# This script generates the gnuplots for the /usage page
+#
+# USAGE: ./xlogfix_plot <YYYY-MM>
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+use strict;
+use DBI;
+use Cwd;
+
+use FindBin '$Bin';
+my $filename = $Bin.'/includes/access.cfg';
+
+our $hub_dir;
+our $hub_db;
+our $db_host;
+our $db_user;
+our $db_pass;
+do $filename;
+
+my $dbname = $hub_db."_metrics";
+my $mon;
+my $year;
+my $lmon;
+our $graphdir = $hub_dir."/site/stats/plots";
+our $logplotgraph = $Bin.'/includes/xlogplotgraph';
+
+my $dthis = shift();
+
+if(!$dthis) {
+
+	($mon,$year) = (localtime)[4,5];
+	$year += 1900;
+	$mon++;
+	$lmon = $mon-1;
+	if ($mon == '1'){
+		$year = $year-1;
+		$lmon = '12';
+	}
+	$dthis = $year.'-'.sprintf("%02d", $lmon);
+}
+
+#  Open database...
+#-------------------
+my $dbhandle = DBI->connect("DBI:mysql:database=$dbname;host=$db_host", $db_user, $db_pass);
+
+my $table = "summary_user";
+my $type = 'u';
+charts_($dbhandle, $table, $type);
+
+$table = "summary_simusage";
+$type = 's';
+charts_($dbhandle, $table, $type);
+
+$table = "summary_misc";
+$type = 'm';
+charts_($dbhandle, $table, $type);
+
+
+#  Close database...
+#--------------------
+$dbhandle->disconnect;
+
+#  Delete any empty/failed graphs...
+#------------------------------------
+system('find ' . $graphdir . ' -size 0 -exec rm {} \;');
+
+sub charts_ {
+	
+	my $dbhandle;
+	my $table;
+	my $type;
+
+	my $sql;
+	my $dbquery;
+	my $dbresult;
+	my (@totals);
+	my $rowid;
+	my $colid = 1;
+	my $title;
+
+	($dbhandle, $table, $type) = @_;
+
+	my @tables = ('summary_user','summary_simusage','summary_misc','summary_andmore','summary_collab');
+	my $tablevals = $table."_vals";
+
+	# First find max date with data.
+	$sql = "SELECT max(datetime) FROM ".$tablevals." WHERE datetime <= '".$dthis."-00'";
+	$dbquery = $dbhandle->prepare($sql)
+   	or die "Error:  can't prepare statement \"$sql\" ($dbhandle->errstr).\n";
+	$dbresult = $dbquery->execute
+   	or die "Error:  can't execute the query ($dbquery->errstr).\n";
+	while(@totals = $dbquery->fetchrow_array) {
+   		$dthis = $totals[0];
+	}
+
+	# Find Title(label) for the plot
+	$sql = "SELECT id, label FROM ".$table." WHERE plot=1";
+	$dbquery = $dbhandle->prepare($sql)
+    	or die "Error:  can't prepare statement \"$sql\" ($dbhandle->errstr).\n";
+	$dbresult = $dbquery->execute
+    	or die "Error:  can't execute the query ($dbquery->errstr).\n";
+	while(@totals = $dbquery->fetchrow_array) {
+   		$rowid = $totals[0];
+   		$title = $totals[1];
+		my $ylable = "Users";
+		if (($rowid == "2") && ($table eq "summary_simusage")) {
+			$ylable = "Runs";
+		}
+		plot_graph($dbhandle, $tablevals, $dthis, $type, $title, $rowid, $colid, $ylable);
+	}
+	$dbquery->finish;
+}
+
+sub plot_graph {
+
+	my $dbhandle;
+	my $tablevals;
+	my $dthis;
+	my $type;
+	my $title;
+	my $rowid;
+	my $colid;
+	my $ylable;
+
+	my $dbquery;
+	my $dbresult;
+	my (@totals);
+
+	my $sqm;
+	($dbhandle, $tablevals, $dthis, $type, $title, $rowid, $colid, $ylable) = @_;
+    	
+	my @periods = (0,1,3,12,13,14);
+	foreach (@periods) {
+
+		my $period = $_;
+
+		if ( $period == '1' || $period == '12'  || $period == '14' ) {
+       		$sqm = "SELECT CONCAT(SUBSTR(datetime,6,2),'/', LEFT(datetime,4)), value FROM ".$tablevals." WHERE colid='".$colid."' AND period='".$period."' AND rowid='".$rowid."' AND datetime <= '".$dthis."' AND value > 0 ORDER BY datetime";
+		} elsif ( $period == '0' ) {
+       		$sqm = "SELECT CONCAT(SUBSTR(datetime,6,2),'/', LEFT(datetime,4)), value FROM ".$tablevals." WHERE rowid = '".$rowid."' AND colid = '".$colid."' AND period = '".$period."' AND (datetime LIKE '____-12-00%' OR datetime = '".$dthis."') AND datetime <= '".$dthis."' AND value > 0 ORDER BY datetime";
+   		} elsif ( $period == '3' ) {
+       		$sqm = "SELECT CONCAT(SUBSTR(datetime,6,2),'/', LEFT(datetime,4)), value FROM ".$tablevals." WHERE rowid = '".$rowid."' AND colid = '".$colid."' AND period = '".$period."' AND (datetime LIKE '____-03-00%' OR datetime LIKE '____-06-00%' OR datetime LIKE '____-09-00%' OR datetime LIKE '____-12-00%' OR datetime = '".$dthis."') AND datetime <= '".$dthis."' AND value > 0 ORDER BY datetime";
+   		} elsif ( $period == '13' ) {
+     		$sqm = "SELECT CONCAT(SUBSTR(datetime,6,2),'/', LEFT(datetime,4)), value FROM ".$tablevals." WHERE rowid = '".$rowid."' AND colid = '".$colid."' AND period = '".$period."' AND (datetime LIKE '____-09-00%' OR datetime = '".$dthis."') AND datetime <= '".$dthis."' AND value > 0 ORDER BY datetime";
+		}
+		
+		#  Scripts being called
+		my $logplotgraph = $main::logplotgraph;
+
+	
+		# Directory where graphs will be stored
+		my $graphdir = $main::graphdir;
+		my $file;
+		my $filename=$graphdir."/hub.dat";
+		my $line;
+		#my @lines;
+
+		my $ddate = substr($dthis,0,7);
+
+		my $graphname;
+		my $command;
+
+		$dbquery = $dbhandle->prepare($sqm)
+			or die "Error:  can't prepare statement \"$sqm\" ($dbhandle->errstr).\n";
+		$dbresult = $dbquery->execute
+			or die "Error:  can't execute the query ($dbquery->errstr).\n";
+
+		open $file, '>', $filename
+			or die "Can't open $file: $!";
+		my @lines;
+		while(@totals = $dbquery->fetchrow_array) {
+			push(@lines, "${totals[0]} ${totals[1]}");
+		}
+		foreach $line (@lines) {
+			print { $file } "$line\n";
+		}
+		close $file;
+
+		$graphname = $graphdir."/".$ddate."-".$period."-".$type.$rowid;
+
+		# getting rid of " in title as gnuplot complains
+		$title =~ s/"/'/g;
+		# getting rid of leading " - " in title
+		$title =~ s/ - //g;
+		my @heading = split("{",$title);
+		$title = $heading[0];
+
+		# gif
+		$command = $logplotgraph." -xdate -o '" . $graphname . "' -f gif -title \"" . $title . "\" -ylabel 'Number of " . $ylable . "' -xformat '%b%y' -b " . $filename. " 2> /dev/null";
+
+		system($command) == 0
+			or die "Error: couldn't exec logplotgraph: $! $command";
+
+		# postscript
+		# $command = $logplotgraph." -xdate -o '" . $graphname . "' -f ps -title \"" . $title . "\" -ylabel 'Number of " . $ylable . "' -xformat '%b%y' -b " . $filename. " 2> /dev/null";
+
+		# system($command) == 0
+		#	or die "Error: couldn't exec logplotgraph: $! $command";
+
+		#  Create the thumb of the graph
+    	$graphname = "${graphname}thumb";
+    	system("$logplotgraph -xdate -o \"$graphname\" -f gif -thumbnail -b " . $graphdir . "/hub.dat") == 0
+    		or die "Error: couldn't exec logplotgraph: $!";
+
+		# delete old plot data file
+		if(-e $graphdir . "/hub.dat") {
+			system("rm -f " . $graphdir . "/hub.dat");
+		}
+		$dbquery->finish;
+	}
+}

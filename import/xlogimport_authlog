@@ -1,0 +1,85 @@
+#!/usr/bin/php
+<?php
+# ------------------------------------------------------------------------- 
+# This Script imports information in the auth.log file into table userlogin
+#
+# USAGE: ./xlogimport_authlog <filename>
+#
+# NOTES: This script handles log files in the old and new formats
+# 2007-05-17 11:06:39 username 128.210.189.195 login
+# 2009-01-17 11:06:39 1234 [username] 128.210.189.195 login
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/../includes/hub_parameters.php");
+require_once(__DIR__."/../includes/db_connect.php");
+require_once(__DIR__."/../includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+$unrec = '';
+
+$filehandle = fopen($_SERVER['argv'][1], "r");
+if (!$filehandle) {
+	$msg = "Error opening file: ".$_SERVER['argv'][1]."\n";
+	clean_exit($msg);
+}
+
+# building excluded IP list
+$filtered_ips = gen_exclude_list('ip');
+
+$log_pattern_1 = '/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([\d]+)\s+(\[.+\])\s+([\.\d]+)\s+([\w]+)$/';
+$log_pattern_2 = '/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+)\s+([\.\d]+)\s+([\w]+)$/';
+
+while (1) {
+
+	if (feof($filehandle))
+		break;
+
+	$line = fgets($filehandle);
+	if (!$line) 
+		break;
+
+	if (preg_match($log_pattern_1, $line, $matches)) {
+	    $datetime = $matches[1].' '.$matches[2];
+		$uidNumber = trim($matches[3]);
+		$user = rtrim(ltrim(trim($matches[4]),'['),']');
+		$ip = trim($matches[5]);
+		$action = trim($matches[6]);
+    } else if ( preg_match($log_pattern_2, $line, $matches)) {
+	    $datetime = $matches[1].' '.$matches[2];
+		$uidNumber = 0;
+		$user = trim($matches[3]);
+		$ip = trim($matches[4]);
+		$action = trim($matches[5]);
+    } else {
+    	$unrec .= 'Unrecognized format: '.$line;
+		continue;
+	}
+
+	if ($user == "")
+		$user = '-';
+
+	if ($user <> "hubstatus" && $user <> "hubadmin" && (!search_array($ip, $filtered_ips))) {
+		$sql_ins = 'INSERT IGNORE INTO '.$metrics_db.'.userlogin (datetime, uidNumber, user, ip, action) VALUES ('.dbquote($datetime).','.dbquote($uidNumber).','.dbquote($user).','.dbquote($ip).','.dbquote($action).')';
+		mysql_exec($db_hub, $sql_ins);
+	}
+}
+
+if ($unrec)
+	print $unrec;
+
+fclose($filehandle);
+mysql_close($db_hub);
+
+?>

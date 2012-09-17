@@ -1,0 +1,40 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This script creates an include file for the PERL scripts
+#
+# USAGE: ./xlogfix_setup
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) { 
+    $fPos = strrpos(__FILE__, "/"); 
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/"); 
+} 
+
+require_once(__DIR__."/includes/hub_parameters.php");
+
+$file = __DIR__."/includes/access.cfg";
+
+$fh = fopen($file, 'w') or die("can't open file");
+$Data = "\$hub_dir = '".$hub_dir."';\n";
+$Data .= "\$hub_db = '".trim($hub_db,'`')."';\n";
+$Data .= "\$metrics_db = '".trim($metrics_db,'`')."';\n";
+$Data .= "\$db_host = '".$db_host."';\n";
+$Data .= "\$db_user = '".$db_user."';\n";
+$Data .= "\$db_pass = '".$db_pass."';\n";
+$Data .= "\$db_prefix = '".$db_prefix."';\n";
+fwrite($fh, $Data); 
+fclose($fh);
+
+# Removing installation directory
+$sh = "rm -rf ".$hub_dir."/installation";
+shell_exec($sh);
+
+?>

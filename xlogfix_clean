@@ -1,0 +1,64 @@
+#!/usr/bin/php
+<?php
+# ------------------------------------------------------------------------- 
+# This script clears the web and websessions tables of identified bots 
+#
+# USAGE: ./xlogfix_clean <tablename> 
+# <tablename> is 'web' or 'websession'
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+	$fPos = strrpos(__FILE__, "/");
+	define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+$table = $_SERVER['argv'][1];
+if(!$table) {
+	$msg = 'USAGE: xlogfix_clean <tablename>'.n;
+	clean_exit($msg);
+}
+
+$sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "domain"';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+	if(mysql_num_rows($result) > 0) {
+  		while($row = mysql_fetch_row($result)) {
+			$sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
+			mysql_exec($db_hub, $sql_del);
+		}
+	}
+} else {
+	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	clean_exit($msg);
+}
+
+$sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "host"';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+	if(mysql_num_rows($result) > 0) {
+  		while($row = mysql_fetch_row($result)) {
+			$sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE host LIKE '.dbquote($row[0]);
+			mysql_exec($db_hub, $sql_);
+		}
+	}
+} else {
+	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	clean_exit($msg);
+}
+
+db_close($db_hub);
+
+?>

@@ -1,0 +1,244 @@
+#!/usr/bin/perl -w
+#
+# logfix_session
+
+use lib '/opt/DBI/lib/site_perl/5.6.1/sun4-solaris';
+use lib '/opt/Data-ShowTable/lib/site_perl/5.6.1';
+use lib '/opt/DBD-mysql/lib/site_perl/5.6.1/sun4-solaris';
+use lib '/opt/mysql/lib/mysql';
+use strict;
+use DBI;
+
+use FindBin '$Bin';
+my $filename = $Bin.'/includes/access.cfg';
+
+our $hub_db;
+our $metrics_db;
+our $db_host;
+our $db_user;
+our $db_pass;
+do $filename;
+
+#my $procmonth = shift(@ARGV);
+my @dbrow;
+my $dbhandle;
+my $dbsthandle;
+my $dbrowvalues;
+my $statement;
+my $id;
+my $datetime;
+my $datetimeint;
+my $content;
+my $ip;
+my $host;
+my $duration;
+my $domain;
+my $s_id;
+my $s_datetime;
+my $s_datetimeint;
+my $s_ip;
+my $s_host;
+my $s_duration;
+my $s_domain;
+my $s_jobs;
+my @s_events;
+my $s_webevents;
+my $s_videoevents;
+my $s_ee659;
+my $s_videoend;
+my $s_endfound;
+my $prev_datetime;
+my $prev_datetimeint;
+my $i;
+my $stime_inactive = 1800;
+
+
+# Opening database...
+$dbhandle = DBI->connect("DBI:mysql:$metrics_db:$db_host", $db_user, $db_pass);
+
+
+#  Finding next available web session id...
+$s_id = 0;
+$statement = "SELECT MAX(id) FROM websessions";
+$dbsthandle = $dbhandle->prepare($statement)
+  or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
+$dbrowvalues = $dbsthandle->execute
+  or die "Error:  can't execute the query ($dbsthandle->errstr).\n";
+if(@dbrow = $dbsthandle->fetchrow_array) {
+	if($dbrow[0]) {
+		$s_id = $dbrow[0];
+	}
+}
+
+#  Select all web records missing corresponding session records...
+$statement = "SELECT id, datetime, content, ip, host, domain, UNIX_TIMESTAMP(datetime) FROM web WHERE (sessionid = '0' OR sessionid IS NULL) AND (ip <> '' OR (host <> '' AND host <> '?' AND host IS NOT NULL)) ORDER BY ip, host, datetime";
+$dbsthandle = $dbhandle->prepare($statement)
+  or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
+$dbrowvalues = $dbsthandle->execute
+  or die "Error:  can't execute the query ($dbsthandle->errstr).\n";
+
+#  Loop through all web activity...
+#-----------------------------------
+while(@dbrow = $dbsthandle->fetchrow_array) {
+	$id = $dbrow[0];
+	$datetime = $dbrow[1];
+	$content = $dbrow[2];
+	$ip = $dbrow[3];
+	$host = $dbrow[4];
+	$domain = $dbrow[5];
+	$datetimeint = $dbrow[6];
+
+	#  Check for end of session...
+	#------------------------------
+	if($s_datetime && ($s_ip && $s_ip ne $ip) || (!$s_ip && $s_host && $s_host ne $host)) {
+		# New IP/host...
+		$s_endfound = 1;
+	}
+	elsif(($s_ip || $s_host) && ($datetimeint - $prev_datetimeint > $stime_inactive) && ($datetimeint - $s_videoend > $stime_inactive)) {
+		# Timed out...
+		$s_endfound = 1;
+	}
+	else {
+		$s_endfound = 0;
+	}
+
+	#  Session end found, insert new websession record...
+	#-----------------------------------------------------
+	if($s_endfound) {
+		if($s_videoend > $prev_datetimeint) {
+			$prev_datetimeint = $s_videoend;
+		}
+		$s_duration = $prev_datetimeint - $s_datetimeint;
+		$s_id++;
+		$s_jobs = iphost_jobs($dbhandle, $s_id, $s_ip, $s_host, $s_datetime, $prev_datetime);
+		$statement = "INSERT INTO websessions (id, datetime, ip, host, duration, domain, jobs, webevents) VALUES ("
+		   . $dbhandle->quote($s_id) . ", "
+		   . $dbhandle->quote($s_datetime) . ", ";
+		if($s_ip) {
+			$statement .= $dbhandle->quote($s_ip);
+		}
+		else {
+			$statement .= "''";
+		}
+		$statement .= ", ";
+		if($s_host) {
+			$statement .= $dbhandle->quote($s_host);
+		}
+		else {
+			$statement .= "''";
+		}
+		$statement .= ", " . $dbhandle->quote($s_duration) . ", ";
+		if($s_domain) {
+			$statement .= $dbhandle->quote($s_domain);
+		}
+		else {
+			$statement .= "''";
+		}
+		$statement .= ", "
+		   . $dbhandle->quote($s_jobs) . ", "
+		   . $dbhandle->quote($s_webevents) . ") ";
+		$dbhandle->do($statement)
+		  or die "Error:  can't execute statement \"$statement\" ($dbhandle->errstr).\n";
+		$statement = "UPDATE web SET sessionid = "
+		   . $dbhandle->quote($s_id) . " WHERE ";
+		for($i = 0; $i < scalar(@s_events); $i++) {
+			if($i > 0) {
+				$statement .= " OR ";
+			}
+			$statement .= "id = " . $dbhandle->quote($s_events[$i]);
+		}
+		$dbhandle->do($statement)
+		  or die "Error:  can't execute statement \"$statement\" ($dbhandle->errstr).\n";
+		$s_datetime = "";
+	}
+
+	#  Session beginning found, restart tracking...
+	#-----------------------------------------------
+	if(!$s_datetime) {
+		$s_webevents = 0;
+		$s_videoevents = 0;
+		$s_videoend = 0;
+		$s_ee659 = 0;
+		$s_datetime = $datetime;
+		$s_datetimeint = $datetimeint;
+		$s_ip = "";
+		$s_host = "";
+		$s_domain = "";
+		@s_events = ();
+	}
+
+	#  Watch for potentially missing/partial session information...
+	#---------------------------------------------------------------
+	if(!$s_ip && $ip) {
+		$s_ip = $ip;
+	}
+	if(!$s_host && $host) {
+		$s_host = $host;
+	}
+	if(!$s_domain && $domain) {
+		$s_domain = $domain;
+	}
+
+	$prev_datetime = $datetime;
+	$prev_datetimeint = $datetimeint;
+	push(@s_events, $id);
+}
+
+#  Close database...
+$dbsthandle->finish;
+$dbhandle->disconnect;
+
+#function iphost_jobs($dbhandle, $s_id, $ip, $host, $dstart, $dstop) {
+sub iphost_jobs {
+	my $dbhandle;
+	my $s_id;
+	my $ip;
+	my $host;
+	my $dstart;
+	my $dstop;
+	my $dbsthandle;
+	my @dbrow;
+	my @s_jobs;
+	my $i;
+	my $jobs = 0;
+
+	($dbhandle, $s_id, $ip, $host, $dstart, $dstop) = @_;
+
+	$statement = "SELECT id FROM toolstart WHERE datetime >= " . $dbhandle->quote($dstart) . " AND UNIX_TIMESTAMP(datetime) <= (UNIX_TIMESTAMP("
+	  . $dbhandle->quote($dstop) . ")+1799) AND success = '1' AND ";
+	if($ip && $host) {
+		$statement .= "(ip = " . $dbhandle->quote($ip) . " OR host = " . $dbhandle->quote($host) . ")";
+	}
+	elsif($ip) {
+		$statement .= "ip = " . $dbhandle->quote($ip);
+	}
+	elsif($host) {
+		$statement .= "host = " . $dbhandle->quote($host);
+	}
+	else {
+		return(0);
+	}
+	$dbsthandle = $dbhandle->prepare($statement)
+	  or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
+	$dbrowvalues = $dbsthandle->execute
+	  or die "Error:  can't execute the query ($dbsthandle->errstr).\n";
+	@s_jobs = ();
+	while(@dbrow = $dbsthandle->fetchrow_array) {
+		push(@s_jobs, $dbrow[0]);
+	}
+	$dbsthandle->finish;
+	$jobs = scalar(@s_jobs);
+	if($jobs) {
+		$statement = "UPDATE toolstart SET sessionid = " . $dbhandle->quote($s_id) . " WHERE ";
+		for($i = 0; $i < $jobs; $i++) {
+			if($i > 0) {
+				$statement .= " OR ";
+			}
+			$statement .= "id = " . $dbhandle->quote($s_jobs[$i]);
+		}
+		$dbhandle->do($statement)
+		  or die "Error:  can't execute statement \"$statement\" ($dbhandle->errstr).\n";
+	}
+	return($jobs);
+}
+

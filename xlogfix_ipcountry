@@ -1,0 +1,66 @@
+#!/usr/bin/php
+<?php
+# ------------------------------------------------------------------------- 
+# This script assigns assigns a country to IP addresses 
+#
+# USAGE: xlogfix_ipcountry <database> <table>
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
+{
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'.n;
+	clean_exit($msg);
+} else {
+	$database = $_SERVER['argv'][1];
+	$table = $_SERVER['argv'][2];
+}
+
+if ($database == 'hub') {
+	$database = $hub_db;
+} else if ($database == 'metrics') {
+	$database = $metrics_db;
+} else {
+	$msg = 'Invalid database type'.n;
+	clean_exit($msg);
+}
+
+$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE (ipcountry = "" OR ipcountry IS NULL) GROUP BY n_ip ORDER by hits desc;';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+	if(mysql_num_rows($result) > 0) {
+  		while($row = mysql_fetch_assoc($result)) {
+			$country = '';
+			$n_ip = $row['n_ip'];
+			$ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
+			if($ip_geodata['countrySHORT'] <> '') {
+				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
+				mysql_exec($db_hub, $sql_updt);
+			}
+		}
+	}
+} else {
+	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	clean_exit($msg);
+}
+
+db_close($db_hub);
+
+?>

@@ -1,0 +1,69 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This script resolves host fields from ip address fields in various tables
+#
+# USAGE: ./xlogfix_dns <database> <table>
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+#
+# BASED ON SIMILAR PERL SCRIPT BY: Swaroop Shivarajapura S, Purdue University
+# and PHP SCRIPT by Nicholas Kisseberth, Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$timeout = 1;
+$db_hub = db_connect('db_hub');
+
+if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
+{
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'.n;
+	clean_exit($msg);
+} else {
+	$database = $_SERVER['argv'][1];
+	$table = $_SERVER['argv'][2];
+}
+
+if ($database == 'hub') {
+	$database = $hub_db;
+} else if ($database == 'metrics') {
+	$database = $metrics_db;
+} else {
+	$msg = 'Invalid database type'.n;
+	clean_exit($msg);
+}
+	
+$sql = 'SELECT DISTINCT ip FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND (host = "" OR host = "?" OR host IS NULL) ORDER BY ip DESC';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+    if(mysql_num_rows($result) > 0) {
+        while($row = mysql_fetch_row($result)) {
+			$host = xgethostbyaddr($row[0], $timeout);
+			if ($host == $row[0])
+				$host = "?";
+   				# Update table record...
+   				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
+				mysql_exec($db_hub, $sql_updt);
+        }
+    }
+} else {
+	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	clean_exit($msg);
+}
+
+db_close($db_hub);
+
+?>

@@ -1,0 +1,180 @@
+#!/usr/bin/php
+<?php
+# =========================================================================
+# This script resolves domain fields from host fields in various tables
+#
+# USAGE: ./xlogfix_domain <database> <table>
+#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+#
+# BASED ON SIMILAR PERL SCRIPT BY: Swaroop Shivarajapura S, Purdue University
+# and PHP SCRIPT by Nicholas Kisseberth, Purdue University
+# =========================================================================
+
+error_reporting(E_ALL & ~E_NOTICE);
+@ini_set('display_errors','1');
+
+if(!defined('__DIR__')) {
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+}
+
+require_once(__DIR__."/includes/hub_parameters.php");
+require_once(__DIR__."/includes/db_connect.php");
+require_once(__DIR__."/includes/func_misc.php");
+
+$db_hub = db_connect('db_hub');
+
+if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
+{
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'.n;
+	clean_exit($msg);
+} else {
+	$database = $_SERVER['argv'][1];
+	$table = $_SERVER['argv'][2];
+}
+
+if ($database == 'hub') {
+	$database = $hub_db;
+} else if ($database == 'metrics') {
+	$database = $metrics_db;
+} else {
+	$msg = 'Invalid database type'.n;
+	clean_exit($msg);
+}
+	
+# Select all web records missing domain names...
+$sql = 'SELECT id, LOWER(host) FROM '.$database.'.'.$table.' WHERE (domain = "" OR domain = "?" OR domain IS NULL) AND host <> ""';
+$result = mysql_query($sql, $db_hub);
+if($result) {
+    if(mysql_num_rows($result) > 0) {
+        while($row = mysql_fetch_row($result)) {
+			$id = $row[0];
+			$host = $row[1];
+			#  Update table  record...
+			$sql_updt = 'UPDATE '.$database.'.'.$table.' SET domain = '.dbquote(get_domain($host)).' WHERE id = '.dbquote($id);
+			mysql_exec($db_hub, $sql_updt);
+        }
+    }
+} else {
+	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	clean_exit($msg);
+}
+
+db_close($db_hub);
+
+function get_domain($hostname) 
+{
+	$host = $hostname;
+
+	$no2_3level["ub"] = 1;
+	$mil_3level["af"] = 1;
+	$mil_3level["army"] = 1;
+	$mil_3level["navy"] = 1;
+	$int_3level["com"] = 1;
+	$int_3level["net"] = 1;
+	$int_3level["org"] = 1;
+	$int_3level["edu"] = 1;
+	$int_3level["gov"] = 1;
+	$int_3level["mil"] = 1;
+	$int_3level["ac"] = 1;
+	$int_3level["co"] = 1;
+	$int_3level["ne"] = 1;
+	$int_3level["or"] = 1;
+	$int_3level["ed"] = 1;
+	$us_4level["k12"] = 1;
+	$us_4level["lib"] = 1;
+	$us_4level["cc"] = 1;
+	$us_4level["tec"] = 1;
+	
+	$force = array("brain.grub.org","crawl.yahoo.net","crawl8-public.alexa.com","hanta.yahoo.com","idle.eidetica.com","morgue1.corp.yahoo.com","msnbot.msn.com","panchma.tivra.com","tpiol.tpiol.com","xs4.kso.co.uk","zeus.nj.nec.com","punch.purdue.edu","san2.attens.net","search.msn.com","sac.overture.com","66.237.109.194.ptr.us.xo.net","67.108.223.130.ptr.us.xo.net","67.106.152.131.ptr.us.xo.net");
+
+	$field = array_reverse(explode(".", $host));
+	$domain = $host;
+	$force_found = 0;
+	
+	foreach($force as $forcedomain) 
+	{
+		$pattern = "/$forcedomain$/";
+		if (preg_match($pattern, $host) )
+		{
+			$domain = $forcedomain;
+			$force_found = 1;
+		}
+	}
+
+	if (!$force_found && $field[0]) 
+	{
+		$domain = $field[0];
+		
+		if($field[1]) 
+		{
+			$domain = $field[1] . "." . $field[0];
+			
+			if($field[2]) 
+			{
+				if (!isset($no2_3level[$field[1]]) && strlen($field[1]) == 2 && strlen($field[0]) == 2
+			  		|| isset($int_3level[$field[1]]) && strlen($field[0]) == 2
+			  		|| isset($mil_3level[$field[1]]) && $field[0] == "mil") 
+				{
+					$domain = $field[2] . "." . $field[1] . "." . $field[0];
+				}
+				
+				if ($field[3]) 
+				{
+					if (isset($us_4level[$field[2]]) && $field[0] == "us") 
+					{
+						$domain = $field[3] . "." . $field[2] . "." . $field[1] . "." . $field[0];
+					}		
+				}
+			}
+			elseif (preg_match('/^(.+\-.+\-.+\-.+)\-(.+)$/', $field[1]))
+			{
+				if (preg_match('/^(.+\-.+\-.+\-.+)\-(.+)$/', $field[1], $matches))
+				{
+					$field[2] = $matches[1];
+					$field[1] = $matches[2];
+				}
+				$domain = $field[1] . "." . $field[0];
+			}
+			elseif (preg_match('/^(.+\_.+\_.+\_.+)\-(.+)$/', $field[1]))
+			{
+				if (preg_match('/^(.+\_.+\_.+\_.+)\-(.+)$/', $field[1], $matches))
+				{
+					$field[2] = $matches[1];
+					$field[1] = $matches[2];
+				}
+				$domain = $field[1] . "." . $field[0];
+			}
+			elseif(preg_match('/^(.+\_.+\_.+\_.+)\_(.+)$/', $field[1]))
+			{
+				if (preg_match('/^(.+\_.+\_.+\_.+)\_(.+)$/', $field[1], $matches))
+				{
+					$field[2] = $matches[1];
+					$field[1] = $matches[2];
+				}
+				$domain = $field[1] . "." . $field[0];
+			}
+			elseif(preg_match('/^(.+\-.+\-.+\-.+)\_(.+)$/', $field[1]))
+			{
+				if (preg_match('/^(.+\-.+\-.+\-.+)\_(.+)$/', $field[1], $matches))
+				{
+					$field[2] = $matches[1];
+					$field[1] = $matches[2];
+				}
+				$domain = $field[1] . "." . $field[0];
+			}
+		}
+	}
+
+	if (!$domain || $domain == ".") 
+	{
+		$domain = "?";
+	}
+
+	return($domain);
+}
+
+?>
