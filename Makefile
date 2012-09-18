@@ -66,7 +66,7 @@ install:
 	install --mode 0755 -D metrics/import/xlogimport_apache $(USRSHAREDIR)/hubzero-metrics/scripts/import/xlogimport_apache
 	install --mode 0755 -D metrics/import/xlogimport_authlog $(USRSHAREDIR)/hubzero-metrics/scripts/import/xlogimport_authlog
 	install --mode 0755 -D metrics/import/xlogimport_webhits $(USRSHAREDIR)/hubzero-metrics/scripts/import/xlogimport_webhits
-	install --mode 0644 -D metrics/_install/db_create_metrics_tables.sql \$$\(USRSHAREDIR\)/hubzero-metrics/hubzero_metrics.sql
+	install --mode 0644 -D metrics/_install/db_create_metrics_tables.sql $(USRSHAREDIR)/hubzero-metrics/hubzero_metrics.sql
 	sed -e "s#/opt/hubzero/bin/metrics#/usr/share/hubzero-metrics/scripts#" metrics/_install/crontab_metrics   > $(ETCDIR)/crontab/crontab_metrics
 	
 configure:
