@@ -32,7 +32,11 @@ error_reporting(E_ALL & ~E_NOTICE);
 define('n', "\n");
 define('t', "\t");
 
-$result = parse_ini_file('/etc/hubzero.conf.metrics', true);
+$inicontents = file_get_contents('/etc/hubzero.conf');
+$inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
+$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)$/m','BaseDN="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*Org\s*=\s*(.*)$/m','Org="$1"', $inicontents);
+$result = parse_ini_string($inicontents, true);
 
 if (!is_array($result))
 {
