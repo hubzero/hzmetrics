@@ -371,7 +371,7 @@ function checkbot (&$db_hub, $useragent) {
 
 function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
 
-	global $hub_db, $db_hub;
+	global $hub_db, $db_hub, $db_prefix;
 
 	$geo_data = array();
     $geo_data['n_ip'] = $n_ip;
@@ -386,10 +386,10 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
     if (!is_numeric($n_ip))
 		return $geo_data;
 
-    $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
+    $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
 	$local_exists = mysql_fetch($db_hub, $sql);
 	if ($local_exists) {
-    	$sql = 'SELECT * FROM '.$hub_db.'.metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
+    	$sql = 'SELECT * FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
         $result = mysql_query($sql, $db_hub);
         if($result) {
             if(mysql_num_rows($result) > 0) {
@@ -422,7 +422,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
         	$geo_data['ipLATITUDE'] = $xml->ipset->lat;
         	$geo_data['ipLONGITUDE'] = $xml->ipset->long;
 			if ($geo_data['countrySHORT'] <> '-') {
-				$sql_ins = 'INSERT INTO '.$hub_db.'.metrics_ipgeo_cache (ip, countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE) VALUES ('.dbquote($geo_data['n_ip']).','.dbquote($geo_data['countrySHORT']).','.dbquote($geo_data['countryLONG']).','.dbquote($geo_data['ipREGION']).','.dbquote($geo_data['ipCITY']).','.dbquote($geo_data['ipLATITUDE']).','.dbquote($geo_data['ipLONGITUDE']).') ON DUPLICATE KEY UPDATE countrySHORT = '.dbquote($geo_data['countrySHORT']).', countryLONG = '.dbquote($geo_data['countryLONG']).', ipREGION = '.dbquote($geo_data['ipREGION']).', ipCITY = '.dbquote($geo_data['ipCITY']).', ipLATITUDE = '.dbquote($geo_data['ipLATITUDE']).', ipLONGITUDE = '.dbquote($geo_data['ipLONGITUDE']);
+				$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache (ip, countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE) VALUES ('.dbquote($geo_data['n_ip']).','.dbquote($geo_data['countrySHORT']).','.dbquote($geo_data['countryLONG']).','.dbquote($geo_data['ipREGION']).','.dbquote($geo_data['ipCITY']).','.dbquote($geo_data['ipLATITUDE']).','.dbquote($geo_data['ipLONGITUDE']).') ON DUPLICATE KEY UPDATE countrySHORT = '.dbquote($geo_data['countrySHORT']).', countryLONG = '.dbquote($geo_data['countryLONG']).', ipREGION = '.dbquote($geo_data['ipREGION']).', ipCITY = '.dbquote($geo_data['ipCITY']).', ipLATITUDE = '.dbquote($geo_data['ipLATITUDE']).', ipLONGITUDE = '.dbquote($geo_data['ipLONGITUDE']);
 				mysql_exec($db_hub, $sql_ins);
 			}
     	} else if ( $xml->status == "_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_" ) {

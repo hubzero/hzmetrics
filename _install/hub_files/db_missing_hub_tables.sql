@@ -125,11 +125,11 @@ CREATE TABLE IF NOT EXISTS `jos_session_geo` (
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
 
 --
--- Table structure for table `metrics_ipgeo_cache`
+-- Table structure for table `jos_metrics_ipgeo_cache`
 --
 
-DROP TABLE IF EXISTS `metrics_ipgeo_cache`;
-CREATE TABLE IF NOT EXISTS `metrics_ipgeo_cache` (
+DROP TABLE IF EXISTS `jos_metrics_ipgeo_cache`;
+CREATE TABLE IF NOT EXISTS `jos_metrics_ipgeo_cache` (
   `ip` int(10) NOT NULL DEFAULT '0000000000',
   `countrySHORT` char(2) NOT NULL DEFAULT '',
   `countryLONG` varchar(64) NOT NULL DEFAULT '',
