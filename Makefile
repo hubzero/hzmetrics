@@ -1,10 +1,10 @@
 # @package      hubzero-metrics
 # @file         Makefile
 # @author       Nicholas J. Kisseberth <nkissebe@purdue.edu>
-# @copyright    Copyright (c) 2012-2014 HUBzero Foundation, LLC.
+# @copyright    Copyright (c) 2010-2014 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2012-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2010-2014 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -54,10 +54,10 @@ install:
 	install --mode 0755 -D metrics/xlogfix_dns $(USRSHARE)/hubzero-metrics/scripts/xlogfix_dns
 	install --mode 0755 -D metrics/xlogfix_plot $(USRSHARE)/hubzero-metrics/scripts/xlogfix_plot
 	install --mode 0755 -D metrics/xlogimport_tool_and_reg_user_data $(USRSHARE)/hubzero-metrics/scripts/xlogimport_tool_and_reg_user_data
-	install --mode 0755 -D metrics/includes/db_connect.php $(USRSHARE)/hubzero-metrics/scripts/includes/db_connect.php
-	install --mode 0755 -D metrics/includes/func_andmore.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_andmore.php
-	install --mode 0755 -D metrics/includes/func_misc.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_misc.php
-	install --mode 0755 -D metrics/includes/hub_parameters.php $(USRSHARE)/hubzero-metrics/scripts/includes/hub_parameters.php
+	install --mode 0644 -D metrics/includes/db_connect.php $(USRSHARE)/hubzero-metrics/scripts/includes/db_connect.php
+	install --mode 0644 -D metrics/includes/func_andmore.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_andmore.php
+	install --mode 0644 -D metrics/includes/func_misc.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_misc.php
+	install --mode 0644 -D metrics/includes/hub_parameters.php $(USRSHARE)/hubzero-metrics/scripts/includes/hub_parameters.php
 	install --mode 0755 -D metrics/includes/xlogplotgraph $(USRSHARE)/hubzero-metrics/scripts/includes/xlogplotgraph
 	install --mode 0755 -D metrics/import/__archive_apache_and_auth_log.sh $(USRSHARE)/hubzero-metrics/scripts/import/__archive_apache_and_auth_log.sh
 	install --mode 0755 -D metrics/import/__fetch_apache_and_auth_log.sh $(USRSHARE)/hubzero-metrics/scripts/import/__fetch_apache_and_auth_log.sh
@@ -72,10 +72,13 @@ install:
 	mkdir -p $(ETC)/cron.d
 	sed -e "s#/opt/hubzero/bin/metrics#/usr/share/hubzero-metrics/scripts#" metrics/_install/hub_files/crontab_metrics   > $(ETC)/cron.d/crontab_metrics
 
+uninstall:
+	@true
+
 postinst:
 	@true
 
 clean:
 	@true
 
-.PHONY: all install postinst clean
+.PHONY: all install uninstall postinst clean
