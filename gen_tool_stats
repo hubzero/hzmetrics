@@ -31,6 +31,10 @@
 #
 # USAGE: ./gen_tool_stats [<YYYY-MM>]
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');

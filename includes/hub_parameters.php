@@ -34,8 +34,9 @@ define('t', "\t");
 
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
-$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)$/m','BaseDN="$1"', $inicontents);
-$inicontents = preg_replace('/^\s*Org\s*=\s*(.*)$/m','Org="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)/m','BaseDN="$1"',
+$inicontents);
+$inicontents = preg_replace('/^\s*Org\s*=\s*(.*)/m','Org="$1"', $inicontents);
 $result = parse_ini_string($inicontents, true);
 
 if (!is_array($result))
@@ -58,10 +59,10 @@ define( 'DS', DIRECTORY_SEPARATOR );
 require_once ( JPATH_BASE .DS.'includes'.DS.'defines.php' );
 require_once ( JPATH_BASE .DS.'includes'.DS.'framework.php' );
 
-$mainframe =& JFactory::getApplication('site');
+$mainframe = JFactory::getApplication('site');
 $mainframe->initialise();
 
-$jconfig    =& JFactory::getConfig();
+$jconfig    = JFactory::getConfig();
 
 $hub_db = $jconfig->getValue('config.db');
 $hub_dir = JPATH_BASE;

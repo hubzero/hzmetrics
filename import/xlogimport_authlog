@@ -35,7 +35,10 @@
 # NOTES: This script handles log files in the old and new formats
 # 2007-05-17 11:06:39 username 128.210.189.195 login
 # 2009-01-17 11:06:39 1234 [username] 128.210.189.195 login
-#
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');

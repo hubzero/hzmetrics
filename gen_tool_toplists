@@ -31,6 +31,10 @@
 #
 # USAGE: ./gen_tool_toplists [<YYYY-MM>]
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -101,7 +105,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
 		} else if ($top == '4') { // Top Tools by Simulation Sessions (Simulate button clicks)
 	
 			$top_type = "Total Simulation Sessions";
-			$sql = 'SELECT SUM(sessions) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
+			$sql = 'SELECT SUM(simulations) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
 			$total = mysql_fetch($db_hub, $sql);
 			$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
 			mysql_exec($db_hub, $sql_ins);
@@ -113,7 +117,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
 	
 			$top_type = "Total Simulation Runs";
 			$sql = 'SELECT SUM(jobs) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
-			$total = mysql_exec($db_hub, $sql);
+			$total = mysql_fetch($db_hub, $sql);
 			$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
 			mysql_exec($db_hub, $sql_ins);
 

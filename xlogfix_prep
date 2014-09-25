@@ -31,6 +31,10 @@
 #
 # USAGE: ./xlogfix_setup
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -56,7 +60,7 @@ fwrite($fh, $Data);
 fclose($fh);
 
 # Removing installation directory
-$sh = "rm -rf ".$hub_dir."/installation";
-shell_exec($sh);
+// $sh = "rm -rf ".$hub_dir."/installation";
+// shell_exec($sh);
 
 ?>

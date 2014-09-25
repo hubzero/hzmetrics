@@ -31,6 +31,10 @@
 #
 # USAGE: ./xlogfix_summary <YYYY-MM>
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -1095,15 +1099,14 @@ function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 		$valfmt = 5;
 		$total = 0;
 
-		$sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime),count(*) AS jobs FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' GROUP BY users HAVING jobs > 1';
+		$sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime),count(*) AS jobs FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime > "1995-01-01" AND datetime < '.dbquote($dstop).' GROUP BY users HAVING jobs > 1';
     	$result1 = mysql_query($sql1, $db_hub);
     	if ($result1) {
 			if(mysql_num_rows($result1) > 0) {
         		while($row1 = mysql_fetch_row($result1)) {
                		$user = $row1[0];
-
                 	$max_date = $row1[1];
-                	$sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
+                	$sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > "1995-01-01" AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
                 	$result2 = mysql_query($sql2, $db_hub);
                 	if($result2) {
                   		if (mysql_num_rows($result2) > 0) {

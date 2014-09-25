@@ -31,6 +31,10 @@
 #
 # USAGE: ./xlogfix_plot <YYYY-MM>
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 use strict;
 use DBI;

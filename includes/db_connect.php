@@ -25,6 +25,7 @@
 #
 # HUBzero is a registered trademark of HUBzero Foundation, LLC.
 #
+
 function db_connect($dblink) {
 
 	switch($dblink) {

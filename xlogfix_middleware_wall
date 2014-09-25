@@ -30,6 +30,10 @@
 #
 # USAGE: ./xlogimport_middleware_wall
 #
+# =========================================================================
+# AUTHOR: Swaroop Shivarajapura S, Purdue University
+# Copyright (c) 2011 Purdue University
+# =========================================================================
 
 use lib '/opt/DBI/lib/site_perl/5.6.1/sun4-solaris';
 use lib '/opt/Data-ShowTable/lib/site_perl/5.6.1';
