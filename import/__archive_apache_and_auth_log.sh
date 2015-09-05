@@ -1,12 +1,12 @@
-#!/bin/bash 
+#!/bin/bash
 #
 # @package      hubzero-metrics
 # @file         _archive_apache_and_auth_log.sh
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -29,6 +29,8 @@
 
 SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
+CMSLOGDIR=/var/log/hubzero
+CMSLOGPREFIX=
 
 if [ -f /etc/hubzero.conf ]
 then
@@ -40,30 +42,30 @@ fi
 # -----------------------------------------------------------------------------------------------
 # Archiving apache and CMS logs
 # -----------------------------------------------------------------------------------------------
-files=$(ls /var/log/apache2/daily/$site-access.log-* 2> /dev/null | wc -l)
+files=$(ls /var/log/apache2/daily/$site-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/apache2/daily/$site-access.log-*
-	mv --backup=numbered /var/log/apache2/daily/$site-access.log-* /var/log/apache2/imported/
+	gzip --quiet /var/log/apache2/daily/$site-access*log*
+	mv --backup=numbered /var/log/apache2/daily/$site-access*log* /var/log/apache2/imported/
 fi
 
-files=$(ls /var/log/apache2/daily/new-$site-access.log-* 2> /dev/null | wc -l)
+files=$(ls /var/log/apache2/daily/new-$site-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/apache2/daily/new-$site-access.log-*
-	mv --backup=numbered /var/log/apache2/daily/new-$site-access.log-* /var/log/apache2/imported/
+	gzip --quiet /var/log/apache2/daily/new-$site-access*log*
+	mv --backup=numbered /var/log/apache2/daily/new-$site-access*log* /var/log/apache2/imported/
 fi
 
-files=$(ls /var/log/hubzero/daily/cmsauth.log-* 2> /dev/null | wc -l)
+files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/hubzero/daily/cmsauth.log-*
-	mv --backup=numbered /var/log/hubzero/daily/cmsauth.log-* /var/log/hubzero/imported/
+	gzip --quiet ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log*
+	mv --backup=numbered ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* ${CMSLOGDIR}/imported/
 fi
 
-files=$(ls /var/log/hubzero/daily/cmsdebug.log-* 2> /dev/null | wc -l)
+files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsdebug*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/hubzero/daily/cmsdebug.log-*
-	mv --backup=numbered /var/log/hubzero/daily/cmsdebug.log-* /var/log/hubzero/imported/
+	gzip --quiet ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsdebug*log*
+	mv --backup=numbered ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsdebug*log* ${CMSLOGDIR}/imported/
 fi

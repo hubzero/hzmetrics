@@ -2,11 +2,11 @@
 #
 # @package      hubzero-metrics
 # @file         _import_apache_and_auth_log.sh
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #

@@ -1,10 +1,10 @@
 # @package      hubzero-metrics
 # @file         crontab_metrics
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -28,6 +28,8 @@
 # Format is:
 # min hour day-of-month month day-of-week user command...
 #
+# Use only on hosted HUBs
+#MAILTO=hubmetrics@hubzero.org
 
 */5 * * * *	www-data	/opt/hubzero/bin/metrics/xlogfix_whoisonline
 # 5 0 * * *   root		/opt/hubzero/bin/metrics/_setup_permissions_temp

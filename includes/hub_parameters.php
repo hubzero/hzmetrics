@@ -1,11 +1,11 @@
 <?php
 # @package      hubzero-metrics
 # @file         hub_parameters.php
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -34,9 +34,8 @@ define('t', "\t");
 
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
-$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)/m','BaseDN="$1"',
-$inicontents);
-$inicontents = preg_replace('/^\s*Org\s*=\s*(.*)/m','Org="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)$/m','BaseDN="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*Org\s*=\s*(.*)$/m','Org="$1"', $inicontents);
 $result = parse_ini_string($inicontents, true);
 
 if (!is_array($result))

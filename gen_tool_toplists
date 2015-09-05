@@ -2,11 +2,11 @@
 <?php
 # @package      hubzero-metrics
 # @file         gen_tool_toplists
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -31,10 +31,6 @@
 #
 # USAGE: ./gen_tool_toplists [<YYYY-MM>]
 #
-# =========================================================================
-# AUTHOR: Swaroop Shivarajapura S, Purdue University
-# Copyright (c) 2011 Purdue University
-# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -56,7 +52,7 @@ if ($_SERVER['argc'] < 2) {
     $dthis_ = $_SERVER['argv'][1];
 }
 
-$tops  = array(2, 3, 4, 5, 6, 7, 8);
+$tops  = array(2, 5, 6, 7, 8);
 foreach ($tops as $top) {
 	compute_data($db_hub, $dthis_, $top);
 }
@@ -89,28 +85,6 @@ function compute_data(&$db_hub, $dthis_, $top) {
 			mysql_exec($db_hub, $sql_ins);
 
 			$sql = 'SELECT res.title, rt.resid, rt.users AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
-			gen_top_tools($db_hub, $sql, $top, $dthis, $period);
-
-		} else if ($top == '3') { // Top Tools by Interactive Sessions
-	
-			$top_type = "Total Interactive Sessions";
-			$sql = 'SELECT SUM(sessions) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
-			$total = mysql_fetch($db_hub, $sql);
-			$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
-			mysql_exec($db_hub, $sql_ins);
-
-			$sql = 'SELECT res.title, rt.resid, rt.sessions AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
-			gen_top_tools($db_hub, $sql, $top, $dthis, $period);
-
-		} else if ($top == '4') { // Top Tools by Simulation Sessions (Simulate button clicks)
-	
-			$top_type = "Total Simulation Sessions";
-			$sql = 'SELECT SUM(simulations) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
-			$total = mysql_fetch($db_hub, $sql);
-			$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
-			mysql_exec($db_hub, $sql_ins);
-
-			$sql = 'SELECT res.title, rt.resid, rt.simulations AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' AND datetime = '.$dthis.' ORDER BY cnt DESC';
 			gen_top_tools($db_hub, $sql, $top, $dthis, $period);
 
 		} else if ($top == '5') { // Top Tools by Sim Runs

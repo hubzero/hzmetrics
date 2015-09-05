@@ -2,11 +2,11 @@
 <?php
 # @package      hubzero-metrics
 # @file         xlogimport_tool_and_reg_user_data
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -27,16 +27,12 @@
 # HUBzero is a registered trademark of HUBzero Foundation, LLC.
 #
 # =========================================================================
-# This Script makes a copy of the HUB sessionlog table records into the 
+# This Script makes a copy of the HUB sessionlog table records into the
 # metrics' sessionlog_metrics table and HUB jos_xprofiles table into metrics
 # jos_xprofiles_metrics table.
 #
 # USAGE: ./xlogimport_tool_and_reg_user_data
 #
-# =========================================================================
-# AUTHOR: Swaroop Shivarajapura S, Purdue University
-# Copyright (c) 2011 Purdue University
-# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -55,7 +51,13 @@ $db_hub = db_connect('db_hub');
 $sql = 'INSERT IGNORE INTO '.$metrics_db.'.sessionlog_metrics (sessnum, user, ip, start, appname) SELECT sessnum, username, remoteip, start, appname FROM '.$hub_db.'.sessionlog';
 mysql_exec($db_hub, $sql);
 
-$sql = 'INSERT INTO '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics SELECT uidNumber, name, username, email, registerDate, gidNumber, homeDirectory, loginShell, ftpShell, userPassword, gid, orgtype, organization, countryresident, countryorigin, gender, url, reason, mailPreferenceOption, usageAgreement, jobsAllowed, modifiedDate, emailConfirmed, regIP, regHost, nativeTribe, phone, proxyPassword, proxyUidNumber, givenName, middleName, surname, picture, vip, public, params, note, shadowExpire FROM '.$hub_db.'.'.$db_prefix.'xprofiles AS hub_users ON DUPLICATE KEY UPDATE orgtype = hub_users.orgtype, countryresident = hub_users.countryresident, countryorigin = hub_users.countryorigin, registerDate = hub_users.registerDate';
+$sql = 'DROP TABLE IF EXISTS '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics';
+mysql_exec($db_hub, $sql);
+
+$sql = 'CREATE TABLE '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics LIKE '.$hub_db.'.jos_xprofiles';
+mysql_exec($db_hub, $sql);
+
+$sql = 'INSERT INTO '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics SELECT * FROM '.$hub_db.'.'.$db_prefix.'xprofiles WHERE emailConfirmed > 0';
 mysql_exec($db_hub, $sql);
 
 db_close($db_hub);

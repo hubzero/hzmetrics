@@ -2,11 +2,11 @@
 #
 # @package      hubzero-metrics
 # @file         _fetch_apache_and_auth_log.sh
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -29,6 +29,8 @@
 
 SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
+CMSLOGDIR=/var/log/hubzero
+CMSLOGPREFIX=
 
 if [ -f /etc/hubzero.conf ]
 then
@@ -40,14 +42,14 @@ fi
 # -----------------------------------------------------------------------------------------------
 # Fetching apache and CMS logs
 # -----------------------------------------------------------------------------------------------
-files=$(ls /var/log/apache2/daily/"$site"-access.log-* 2> /dev/null | wc -l)
+files=$(ls /var/log/apache2/daily/"$site"-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat /var/log/apache2/daily/$site-access.log-* > $SCRIPTPATH/_hub_apache.log
+	cat /var/log/apache2/daily/$site-access*log* > $SCRIPTPATH/_hub_apache.log
 fi
 
-files=$(ls /var/log/hubzero/daily/cmsauth.log-* 2> /dev/null | wc -l)
+files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat /var/log/hubzero/daily/cmsauth.log-* > $SCRIPTPATH/_hub_auth.log
+	cat ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* > $SCRIPTPATH/_hub_auth.log
 fi

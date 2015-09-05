@@ -1,11 +1,11 @@
 #!/usr/bin/perl -w
 # @package      hubzero-metrics
 # @file         xlogfix_middleware_wall
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -30,10 +30,6 @@
 #
 # USAGE: ./xlogimport_middleware_wall
 #
-# =========================================================================
-# AUTHOR: Swaroop Shivarajapura S, Purdue University
-# Copyright (c) 2011 Purdue University
-# =========================================================================
 
 use lib '/opt/DBI/lib/site_perl/5.6.1/sun4-solaris';
 use lib '/opt/Data-ShowTable/lib/site_perl/5.6.1';
@@ -83,8 +79,7 @@ $dbhandle = DBI->connect("DBI:mysql:$metrics_db:$db_host", $db_user, $db_pass);
 #  Select all Middleware records...
 #--------------------------------
 #print "Finding all Middleware records...\n";
-# sessionlog.exechost vs. joblog.venue  ?????  Which is it?  - Kevin
-$statement = "SELECT joblog.start, sessionlog.username, sessionlog.remoteip, sessionlog.appname, sessionlog.exechost, joblog.walltime FROM joblog, sessionlog WHERE joblog.sessnum = sessionlog.sessnum AND sessionlog.username NOT IN (".$exclude_users.") AND joblog.event <> '[waiting]' ORDER BY joblog.start, sessionlog.username, sessionlog.remoteip";
+$statement = "SELECT joblog.start, sessionlog.username, sessionlog.remoteip, sessionlog.appname, sessionlog.exechost, joblog.walltime FROM joblog, sessionlog WHERE joblog.sessnum = sessionlog.sessnum AND sessionlog.username NOT IN (".$exclude_users.") AND sessionlog.username NOT LIKE 'hctest%' AND joblog.event <> '[waiting]' ORDER BY joblog.start, sessionlog.username, sessionlog.remoteip";
 $mw_sthandle = $mw_handle->prepare($statement)
   or die "Error:  can't prepare statement \"$statement\" ($mw_handle->errstr).\n";
 $mw_rowvalues = $mw_sthandle->execute

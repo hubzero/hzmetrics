@@ -2,11 +2,11 @@
 <?php
 # @package      hubzero-metrics
 # @file         xlogfix_summary
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -31,10 +31,6 @@
 #
 # USAGE: ./xlogfix_summary <YYYY-MM>
 #
-# =========================================================================
-# AUTHOR: Swaroop Shivarajapura S, Purdue University
-# Copyright (c) 2011 Purdue University
-# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -98,7 +94,7 @@ if($result) {
 	 clean_exit($msg);
 }
 
-$download_files = '';
+$download_files = ' w.content LIKE "/resources/%/download/%" OR w.dnload = 1 OR ';
 foreach (array_unique($file_names) as $file_name) {
 	$file_name = '/resources/%'.$file_name.'%';
     $download_files .= ' w.content LIKE '.dbquote($file_name).' OR ';
@@ -288,7 +284,7 @@ function reg_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
 	insert_record($db_hub, $rowid, $colid, $dthis, $period, $ind_reg_users, $valfmt, $table);
 
 	# -------------------------- 
-	# Organization  - Governmenet
+	# Organization  - Government
 	$colid = 10;
 	$valfmt = 2;
 
@@ -1047,7 +1043,7 @@ function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 		$cputime_non_rappture = mysql_fetch($db_hub, $sql);
 
 		# CPU Time for Rappture Tools
-    	$sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog j, '.$hub_db.'.sessionlog s WHERE s.sessnum = j.sessnum AND s.start > '.dbquote($dstart).' AND s.start < '.dbquote($dstop).' AND j.event <> "[waiting]" AND j.job > 0 AND s.username <> "gridstat" AND s.appname IN ('.$rappture_tools.')';
+    	$sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog j, '.$hub_db.'.sessionlog s WHERE s.sessnum = j.sessnum AND s.start > '.dbquote($dstart).' AND s.start < '.dbquote($dstop).' AND j.event <> "[waiting]" AND j.job > 0 AND s.username <> "gridstat" AND s.username NOT LIKE "hctest%" AND s.appname IN ('.$rappture_tools.')';
 		$cputime_rappture = mysql_fetch($db_hub, $sql);
 
 		$cputime = $cputime_non_rappture + $cputime_rappture;
@@ -1059,7 +1055,7 @@ function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 		$rowid = 4;
 		$valfmt = 5;
 
-		$sql = 'SELECT SUM(walltime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat"';
+		$sql = 'SELECT SUM(walltime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
 		$walltime = mysql_fetch($db_hub, $sql);
 		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
 		insert_record($db_hub, $rowid, $colid, $dthis, $period, $walltime, $valfmt, $table);
@@ -1069,7 +1065,7 @@ function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 		$rowid = 5;
 		$valfmt = 5;
 
-		$sql = 'SELECT SUM(viewtime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat"';
+		$sql = 'SELECT SUM(viewtime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
 		$viewtime = mysql_fetch($db_hub, $sql);
 		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
 		insert_record($db_hub, $rowid, $colid, $dthis, $period, $viewtime, $valfmt, $table);
@@ -1079,7 +1075,7 @@ function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 		$rowid = 6;
 		$valfmt = 3;
 
-		$sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT username AS users, SUM(cputime) AS total_cputime FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY users HAVING total_cputime >="600" AND username <> "gridstat" ) AS SUBTABLE';
+		$sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT username AS users, SUM(cputime) AS total_cputime FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY users HAVING total_cputime >="600" AND username <> "gridstat" AND username NOT LIKE "hctest%") AS SUBTABLE';
 		$cputime = mysql_fetch($db_hub, $sql);
 		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
 		insert_record($db_hub, $rowid, $colid, $dthis, $period, $cputime, $valfmt, $table);

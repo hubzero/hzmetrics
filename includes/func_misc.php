@@ -1,11 +1,11 @@
 <?php
 # @package      hubzero-metrics
 # @file         func_misc.php
-# @author       Swaroop Shivarajapura <swaroop@purdue.edu>
-# @copyright    Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
+# @copyright    Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 # @license      http://www.gnu.org/licenses/lgpl-3.0.html LGPLv3
 #
-# Copyright (c) 2011-2014 HUBzero Foundation, LLC.
+# Copyright (c) 2011-2015 HUBzero Foundation, LLC.
 #
 # This file is part of: The HUBzero(R) Platform for Scientific Collaboration
 #
@@ -32,8 +32,7 @@ function get_tool_versions_aliases(&$db_hub, $aliases_x) {
 
     if ($aliases_x) {
         $aliases = $aliases_x.',';
-        $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.')';
-		#print $sql;
+        $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.') AND instance NOT LIKE "%\_dev"';
         $result = mysql_query($sql, $db_hub);
         if($result) {
             if(mysql_num_rows($result) > 0) {
@@ -232,7 +231,8 @@ function get_dates_for_period($dthis, $period) {
 
 function xgethostbyaddr($ip, $timeout = 1)
 {
-    $output = `/usr/bin/host -W $timeout $ip`;
+	$cmd = "/bin/bash -c \"/usr/bin/host -W $timeout $ip 2>/dev/null\"";
+	$output = shell_exec($cmd);
 
     if (preg_match('/.*pointer ([A-Za-z0-9.-]+)\..*/',$output,$regs))
         return $regs[1];
@@ -270,17 +270,16 @@ function get_countries(&$db_hub, $sql) {
 } 
 
 function get_rappture_tools() {
-   
-   	$rappture_tools = '"workspace"';	
 
-    $cmd = "find /apps -name tool.xml";
-    $cmd_res = shell_exec($cmd);
+	$rappture_tools = '"workspace",';
+
+	$cmd = "/bin/bash -c \"find /apps -name 'tool.xml' 2>/dev/null\"";
+	$cmd_res = shell_exec($cmd);
 	if ($cmd_res) {
     	$applines = explode("\n", $cmd_res);
 		$applines = array_filter($applines);
 
     	$apps = array();
-    	$rappture_tools = '';
     	foreach ($applines as $appline) {
         	$tmp = explode("/",$appline);
         	if ($tmp[2])
