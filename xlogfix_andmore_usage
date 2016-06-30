@@ -100,7 +100,7 @@ if($result) {
 								$db_hub = db_connect('db_hub');
 							$sql_updt = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET users = '.dbquote($users).' WHERE id = '.dbquote($id_);
 							if ($dbug) {
-								print $sql_updt.';'.n;
+								print $sql_updt.';'."\n";
 							} else {
 								mysql_exec($db_hub,$sql_updt);
 							}
@@ -112,7 +112,7 @@ if($result) {
 							$db_hub = db_connect('db_hub');
 						$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, datetime, period) VALUES ('.dbquote($resid).','.dbquote($restype).','.dbquote($users).','.dbquote($processed_on).','.dbquote($period).')';
 						if ($dbug) {
-							print $sql_ins.';'.n;
+							print $sql_ins.';'."\n";
 						} else {
 							mysql_exec($db_hub,$sql_ins);
 						}

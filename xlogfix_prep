@@ -56,9 +56,4 @@ $Data .= "\$db_pass = '".$db_pass."';\n";
 $Data .= "\$db_prefix = '".$db_prefix."';\n";
 fwrite($fh, $Data); 
 fclose($fh);
-
-# Removing installation directory
-$sh = "rm -rf ".$hub_dir."/installation";
-// shell_exec($sh);
-
 ?>

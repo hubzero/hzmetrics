@@ -54,7 +54,7 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'.n;
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
 	clean_exit($msg);
 } else {
 	$database = $_SERVER['argv'][1];
@@ -66,7 +66,7 @@ if ($database == 'hub') {
 } else if ($database == 'metrics') {
 	$database = $metrics_db;
 } else {
-	$msg = 'Invalid database type'.n;
+	$msg = 'Invalid database type'."\n";
 	clean_exit($msg);
 }
 	
@@ -84,7 +84,7 @@ if($result) {
         }
     }
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 

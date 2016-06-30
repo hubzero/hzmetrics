@@ -32,7 +32,7 @@
 # This script generates data shown in the whoisonline maps for the HUB.
 # - Updates hostname, domain name and IP Latitude & Longitute information 
 #   for IPs in hub_metrics.user_session (logged in users)
-# - Creates a file <hub_dir>/site/stats/maps/whoisonline.xml which is
+# - Creates a file <hub_site_root_dir>/site/stats/maps/whoisonline.xml which is
 #	read by google maps
 #
 # USAGE: xlogfix_whoisonline (executed as a cron every 5 minutes)
@@ -56,15 +56,21 @@ $idle_time = 3600;
 
 $session_table = $hub_db.'.'.$db_prefix.'session_geo';
 
-$mapDir = $hub_dir.'/site/stats/maps';
+if (is_dir($hub_dir . '/app')) {
+	$mapDir = $hub_dir.'/app/site/stats/maps';
+}
+else {
+	$mapDir = $hub_dir.'/site/stats/maps';
+}
+
 $xmlFile = $mapDir."/whoisonline.xml";
 if (!is_dir($mapDir)) {
-	$msg = 'Directory '.$mapDir.' is missing. Please create it.'.n;
+	$msg = 'Directory '.$mapDir.' is missing. Please create it.'."\n";
 	clean_exit($msg);
 } else {
 	$fh = fopen($xmlFile, 'w');
 	if (!$fh) {
-		$msg = 'Could not open or create new file '.$xmlFile.' for writing.'.n;
+		$msg = 'Could not open or create new file '.$xmlFile.' for writing.'."\n";
 		clean_exit($msg);
 	}
 }
@@ -88,7 +94,7 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
@@ -106,7 +112,7 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
@@ -132,13 +138,13 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
 # Creating an xml file that will be read by google maps
 #------------------------------------------------------------------------------
-$xml = '<markers>'.n;
+$xml = '<markers>'."\n";
 $sql = 'SELECT DISTINCT ipLATITUDE, ipLONGITUDE, ipCITY, ipREGION, countrySHORT FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE <> "" GROUP BY ipLATITUDE, ipLONGITUDE';
 $result = mysql_query($sql, $db_hub);
 if($result) {
@@ -151,14 +157,14 @@ if($result) {
 			$sql_bot = 'SELECT bot FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE ='.dbquote($location['lat']).' AND ipLONGITUDE = '.dbquote($location['lng']).' ORDER BY bot DESC LIMIT 1';
 			$bot = mysql_fetch($db_hub, $sql_bot);
 			$xml .= '<marker lat="'.$location['lat'].'" lng="'.$location['lng'].'" info = "'.$city.'_hr_'.$info.'" bot = "'.$bot.'"/>';
-			$xml .= n;
+			$xml .= "\n";
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
-$xml .= '</markers>'.n;
+$xml .= '</markers>'."\n";
 fwrite($fh, $xml);
 
 fclose($fh);
@@ -282,7 +288,7 @@ function get_hosts($db_hub, $location) {
 			}
 		}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 	return rtrim($info,'_br_');

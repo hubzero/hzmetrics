@@ -43,14 +43,14 @@ function get_tool_versions_aliases(&$db_hub, $aliases_x) {
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql.n;
+            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
     }
 	/* not needed as HUBs don't have jos_tool_version_alias tables (?)
     if ($aliases_x) {
-        $sql = 'SELECT DISTINCT tva.alias FROM '.$hub_db.'.'.$db_prefix.'tool_version_alias AS tva, '.$hub_db.'.'.$db_prefix.'tool_version AS tv WHERE tva.tool_version_id = tv.id AND tv.toolname IN ('.$aliases_x.')';
+        $sql = 'SELECT DISTINCT tva.alias FROM '.$hub_db.'.'.$db_prefix.'tool_version_alias AS tva, '.$hub_db.'.'.$db_prefix.'tool_version AS tv WHERE tva.tool_version_id = tv.id AND tv.toolname IN ('.$aliases_x.') AND tva.alias NOT LIKE "%\_dev"';
         $result = mysql_query($sql, $db_hub);
         if($result) {
             if(mysql_num_rows($result) > 0) {
@@ -59,13 +59,13 @@ function get_tool_versions_aliases(&$db_hub, $aliases_x) {
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql.n;
+            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
     }
     if ($aliases_x) {
-        $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.')';
+        $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.') AND instance NOT LIKE "%\_dev"';
         $result = mysql_query($sql, $db_hub);
         if($result) {
             if(mysql_num_rows($result) > 0) {
@@ -74,7 +74,7 @@ function get_tool_versions_aliases(&$db_hub, $aliases_x) {
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql.n;
+            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
@@ -95,7 +95,7 @@ function mysql_fetch(&$db_hub, $sql) {
 		$db_hub = db_connect('db_hub');
 
 	if ($debug)
-	    print $sql.n;
+	    print $sql."\n";
 
     $result = mysql_query($sql, $db_hub);
     if($result) {
@@ -105,7 +105,7 @@ function mysql_fetch(&$db_hub, $sql) {
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql.n;
+        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     return $val;
@@ -117,7 +117,7 @@ function mysql_exec($db, $sql) {
 
     $result = mysql_query($sql, $db);
     if(!$result) {
-        $msg = mysql_error($db).' while executing '.$sql.n;
+        $msg = mysql_error($db).' while executing '.$sql."\n";
         clean_exit($msg);
     }
 }
@@ -135,7 +135,7 @@ function get_dates($dthis_, $period) {
 	} else if (preg_match($dt_pattern_2, $dthis_, $matches) <> 0)  {
 		$dates = get_dates_for_period($matches[0], $period);
 	} else {
-    	$msg = 'Invalid Date'.n;
+    	$msg = 'Invalid Date'.t.$dthis_."\n";
         clean_exit($msg);
 	}
 	$dates['dthis'] =  $matches[1]."-".$matches[2].'-00';
@@ -222,7 +222,7 @@ function get_dates_for_period($dthis, $period) {
         break;
 
 	default:
-		$msg = 'Invalid Period '.$period.n;
+		$msg = 'Invalid Period '.$period."\n";
 		clean_exit($msg);
 
     }
@@ -263,7 +263,7 @@ function get_countries(&$db_hub, $sql) {
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql.n;
+        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     $countries = rtrim($countries,',');
@@ -309,7 +309,7 @@ function get_ip_list(&$db_hub, $sql) {
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql.n;
+        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     $login_ips = rtrim($login_ips,',');
@@ -351,7 +351,7 @@ function gen_exclude_list($type) {
         	}
     	}
 	} else {
-        $msg = mysql_error($db_hub).' while executing '.$sql.n;
+        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
 	}
 	return $arr;
@@ -406,14 +406,14 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql.n;
+            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
 	} else {
     	$url = $hubzero_ipgeo_url.'/?&hub_key='.$hub_key.'&n_ip='.$n_ip;
     	$xml = @simplexml_load_file($url);
     	if (!$xml)
-			print 'Warning: Could not connect to remote ip-location lookup webservice on '.$hubzero_ipgeo_url.n;
+			print 'Warning: Could not connect to remote ip-location lookup webservice on '.$hubzero_ipgeo_url."\n";
     	if ( ($xml->status == "_SUCCESS_") && ($n_ip == $xml->ipset->n_ip) ) {
         	$geo_data['n_ip'] = $xml->ipset->n_ip;
         	$geo_data['countrySHORT'] = $xml->ipset->countryCode;
@@ -427,7 +427,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
 				mysql_exec($db_hub, $sql_ins);
 			}
     	} else if ( $xml->status == "_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_" ) {
-        	print 'Warning: HUBzero.org IP-Geo location key is invalid. Please check hubconfiguration.php for "$hubzero_ipgeo_key". Please submit a support ticket on hubzero.org if the problem persists.'.n;
+        	print 'Warning: HUBzero.org IP-Geo location key is invalid. Please check hubconfiguration.php for "$hubzero_ipgeo_key". Please submit a support ticket on hubzero.org if the problem persists.'."\n";
     	}
 	}
     return $geo_data;

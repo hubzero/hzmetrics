@@ -34,19 +34,21 @@ function db_connect($dblink) {
 		case 'db_hub':
 			$db = mysql_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], true);
 			if (!$db) {
-				die('Database Connection Error: '.mysql_error().n.n);
+				die('Database Connection Error: '.mysql_error()."\n\n");
 			}
+			mysql_select_db($GLOBALS['hub_db'], $db);
 			break;
 
 		case 'db_net':
 			$db = mysql_connect($GLOBALS['db_net_host'], $GLOBALS['db_net_user'], $GLOBALS['db_net_pass'], true);
 			if (!$db) {
-				die('Database Connection Error: '.mysql_error().n.n);
+				die('Database Connection Error: '.mysql_error()."\n\n");
 			}
+			mysql_select_db($GLOBALS['net_db'], $db);
 			break;
 
 		default:
-			print 'Unrecognized database link '.$dblink.n;
+			print 'Unrecognized database link '.$dblink."\n";
     		die;
 	}
 

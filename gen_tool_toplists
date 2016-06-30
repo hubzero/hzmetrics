@@ -134,7 +134,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
 			gen_top_tools($db_hub, $sql, $top, $dthis, $period);
 
 		} else {
-			$msg = 'No Tops to compute'.n;
+			$msg = 'No Tops to compute'."\n";
 			clean_exit($msg);
 		}
 	}
@@ -156,7 +156,7 @@ function gen_top_tools($db_hub, $sql, $top, $dthis, $period) {
        		}
    		}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 }

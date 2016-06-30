@@ -50,7 +50,7 @@ require_once(__DIR__."/includes/func_misc.php");
 
 $db_hub = db_connect('db_hub');
 
-$sql = 'INSERT IGNORE INTO '.$metrics_db.'.sessionlog_metrics (sessnum, user, ip, start, appname) SELECT sessnum, username, remoteip, start, appname FROM '.$hub_db.'.sessionlog';
+$sql = 'INSERT IGNORE INTO '.$metrics_db.'.sessionlog_metrics (sessnum, user, ip, start, appname) SELECT sessnum, username, remoteip, start, appname FROM '.$mw_db.'.sessionlog';
 mysql_exec($db_hub, $sql);
 
 $sql = 'DROP TABLE IF EXISTS '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics';

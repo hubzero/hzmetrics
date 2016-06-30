@@ -51,7 +51,7 @@ $db_hub = db_connect('db_hub');
 
 $table = $_SERVER['argv'][1];
 if(!$table) {
-	$msg = 'USAGE: xlogfix_clean <tablename>'.n;
+	$msg = 'USAGE: xlogfix_clean <tablename>'."\n";
 	clean_exit($msg);
 }
 
@@ -65,7 +65,7 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
@@ -79,7 +79,7 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 

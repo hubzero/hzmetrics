@@ -155,7 +155,7 @@ function get_elementids(&$db_hub, $resid_list) {
             }
         }
     } else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
     }
     $elementid_list = rtrim($list,',');

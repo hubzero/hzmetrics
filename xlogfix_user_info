@@ -51,7 +51,7 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'.n;
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
 	clean_exit($msg);
 }
 
@@ -60,7 +60,7 @@ if ($_SERVER['argv'][1] == "hub") {
 } else if ($_SERVER['argv'][1] == "metrics") {
 	$table = $metrics_db.'.'.$_SERVER['argv'][2];
 } else {
-	$msg = 'Invalid database type'.n;
+	$msg = 'Invalid database type'."\n";
 	clean_exit($msg);
 }
 
@@ -95,7 +95,7 @@ function update_tables($db_hub, $param, $table) {
 			}
 		}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
    		clean_exit($msg);
 	}
 	$user_list = rtrim($user_list,",");
@@ -113,7 +113,7 @@ function update_tables($db_hub, $param, $table) {
 				}
 			}
 		} else {
-			$msg = mysql_error($db_hub).' while executing '.$sql.n;
+			$msg = mysql_error($db_hub).' while executing '.$sql."\n";
    			clean_exit($msg);
 		}
 	}

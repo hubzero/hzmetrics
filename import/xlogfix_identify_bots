@@ -51,7 +51,7 @@ $db_hub = db_connect('db_hub');
 $filehandle = fopen($_SERVER['argv'][1], "r");
 
 if (!$filehandle) {
-    $msg = 'Error opening file: '.$_SERVER['argv'][1].n;
+    $msg = 'Error opening file: '.$_SERVER['argv'][1]."\n";
     clean_exit($msg);
 }
 

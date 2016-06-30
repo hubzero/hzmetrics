@@ -31,9 +31,6 @@
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
 
-define('n', "\n");
-define('t', "\t");
-
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
 $inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)$/m','BaseDN="$1"', $inicontents);
@@ -42,7 +39,7 @@ $result = parse_ini_string($inicontents, true);
 
 if (!is_array($result))
 {
-    print date('Y-m-d H:is:s T').' '.$_SERVER['argv'][0].': '.'Hubzero Configuration file /etc/hubzero.conf missing or invalid'.n;
+    print date('Y-m-d H:is:s T').' '.$_SERVER['argv'][0].': '.'Hubzero Configuration file /etc/hubzero.conf missing or invalid'."\n";
     die;
 }
 
@@ -53,29 +50,22 @@ else if (is_array($result[key($result)]))
 else
     $DocumentRoot = $result['DocumentRoot'];
 
-define( '_JEXEC', 1 );
-define('JPATH_BASE', $DocumentRoot);
-define( 'DS', DIRECTORY_SEPARATOR );
+require_once ( $DocumentRoot . '/configuration.php');
+$jconfig = new JConfig();
 
-require_once ( JPATH_BASE .DS.'includes'.DS.'defines.php' );
-require_once ( JPATH_BASE .DS.'includes'.DS.'framework.php' );
-
-$mainframe = JFactory::getApplication('site');
-$mainframe->initialise();
-
-$jconfig    = JFactory::getConfig();
-
-$hub_db = $jconfig->getValue('config.db');
-$hub_dir = JPATH_BASE;
-$db_host = $jconfig->getValue('config.host');
-$db_user = $jconfig->getValue('config.user');
-$db_pass = $jconfig->getValue('config.password');
-$db_prefix = $jconfig->getValue('config.dbprefix');
+$hub_db = $jconfig->db;
+$hub_dir = $DocumentRoot;
+$db_host = $jconfig->host;
+$db_user = $jconfig->user;
+$db_pass = $jconfig->password;
+$db_prefix = $jconfig->dbprefix;
 
 $metrics_db = '`'.$hub_db.'_metrics`';
+$report_db = '`'.$hub_db.'_annualreport`';
 $hub_db = '`'.$hub_db.'`';
+$mw_db = $hub_db; // This should be read dynamically from database
 
-require_once ( JPATH_BASE .DS.'hubconfiguration.php');
+require_once ( $DocumentRoot . '/hubconfiguration.php');
 $hconfig = new HUBConfig();
 
 $hubzero_ipgeo_url = $hconfig->hubzero_ipgeo_url;
@@ -86,4 +76,21 @@ $db_net_user = $hconfig->ipDBUsername;
 $db_net_pass = $hconfig->ipDBPassword;
 $net_db = $hconfig->ipDBDatabase;
 
+if (false) {
+	echo "hub_db = $hub_db\n";
+	echo "hub_dir = $hub_dir\n";
+	echo "db_host = $db_host\n";
+	echo "db_user = $db_user\n";
+	echo "db_pass = $db_pass\n";
+	echo "db_prefix = $db_prefix\n";
+	echo "metrics_db = $metrics_db\n";
+	echo "report_db = $report_db\n";
+	echo "mw_db = $mw_db\n";
+	echo "db_net_host = $db_net_host\n";
+	echo "db_net_user = $db_net_user\n";
+	echo "db_net_pass = $db_net_pass\n";
+	echo "net_db = $net_db\n";
+	echo "hubzero_ipgeo_url = $hubzero_ipgeo_url\n";
+	echo "hub_key = $hub_key\n";
+}
 ?>

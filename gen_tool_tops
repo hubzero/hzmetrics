@@ -98,7 +98,7 @@ foreach ($tops as $top) {
 			}
 		}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 }
@@ -128,7 +128,7 @@ function gen_topdomains($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
        		}
     	}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 }
@@ -156,7 +156,7 @@ function gen_orgtypes($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
         	}
     	}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 }
@@ -184,7 +184,7 @@ function gen_topcountryres($db_hub, $filter, $dstart, $dstop, $id, $users, $top)
         	}
     	}
 	} else {
-		$msg = mysql_error($db_hub).' while executing '.$sql.n;
+		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
 	}
 	if ($rank == 0) {

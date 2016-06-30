@@ -81,7 +81,7 @@ if($result) {
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql.n;
+	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
