@@ -589,7 +589,7 @@ function int_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 	$gov = 0;
 	$ind = 0;
 	$other = 0;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs."\n"ame AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') GROUP BY class ORDER BY class';
+	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') GROUP BY class ORDER BY class';
 	$result = mysql_query($sql, $db_hub);
 	if($result) {
    		if(mysql_num_rows($result) > 0) {
@@ -648,8 +648,8 @@ function int_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 	$gov = 0;
 	$ind = 0;
 	$other = 0;
-	# $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs."\n"ame AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND GROUP BY class ORDER BY class';
-	$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs."\n"ame AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
+	# $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND GROUP BY class ORDER BY class';
+	$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
 	$result = mysql_query($sql, $db_hub);
 	if($result) {
    		if(mysql_num_rows($result) > 0) {
@@ -873,7 +873,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 	$ind = 0;
 	$other = 0;
 	if ($sess_ids) {
-		$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs."\n"ame AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') AND ws.id IN ('.$sess_ids.') GROUP BY class ORDER BY class';
+		$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') AND ws.id IN ('.$sess_ids.') GROUP BY class ORDER BY class';
 		$result = mysql_query($sql, $db_hub);
 		if($result) {
  	  		if(mysql_num_rows($result) > 0) {
@@ -950,7 +950,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 	$ind = 0;
 	$other = 0;
 	if ($sess_ids) {
-		$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs."\n"ame AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.id IN ('.$sess_ids.') AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
+		$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.id IN ('.$sess_ids.') AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
 		$result = mysql_query($sql, $db_hub);
 		if($result) {
    			if(mysql_num_rows($result) > 0) {

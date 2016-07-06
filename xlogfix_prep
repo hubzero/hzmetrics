@@ -44,7 +44,7 @@ if(!defined('__DIR__')) {
 
 require_once(__DIR__."/includes/hub_parameters.php");
 
-$file = __DIR__."/includes/access.cfg";
+$file = "/etc/hubzero-metrics/access.cfg";
 
 $fh = fopen($file, 'w') or die("can't open file");
 $Data = "\$hub_dir = '".$hub_dir."';\n";

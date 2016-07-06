@@ -28,10 +28,9 @@
 # HUBzero is a registered trademark of HUBzero Foundation, LLC.
 #
 
-function get_tool_versions_aliases(&$db_hub, $aliases_x) {
+function get_tool_versions_aliases($db_hub, $aliases_x) {
 
 	global $hub_db, $db_prefix;
-
     if ($aliases_x) {
         $aliases = $aliases_x.',';
         $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.') AND instance NOT LIKE "%\_dev"';
@@ -292,8 +291,8 @@ function get_rappture_tools() {
     	foreach ($apps as $app) 
         	$rappture_tools .= '"'.$app.'",';
 
-    	$rappture_tools = rtrim($rappture_tools, ',');
 	}
+    	$rappture_tools = rtrim($rappture_tools, ',');
     return $rappture_tools;
 
 }

@@ -31,23 +31,29 @@
 
 SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
+METRICSLOGDIR=/var/log/hubzero/metrics
+
+if [ ! -d $METRICSLOGDIR ]
+then
+  mkdir -p $METRICSLOGDIR
+fi
 
 # -----------------------------------------------------------------------------------------------
 # Importing apache logs
 # -----------------------------------------------------------------------------------------------
-if [ -f $SCRIPTPATH/_hub_apache.log ]
+if [ -f $METRICSLOGDIR/_hub_apache.log ]
 then
-	$SCRIPTPATH/xlogimport_webhits $SCRIPTPATH/_hub_apache.log >> $SCRIPTPATH/_apache_webhits.err
-	$SCRIPTPATH/xlogfix_identify_bots $SCRIPTPATH/_hub_apache.log >> $SCRIPTPATH/_apache_bots.err
-	$SCRIPTPATH/xlogimport_apache $SCRIPTPATH/_hub_apache.log >> $SCRIPTPATH/_apache_import.err
-	mv $SCRIPTPATH/_hub_apache.log $SCRIPTPATH/_prev_hub_apache.log
+	$SCRIPTPATH/xlogimport_webhits $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_webhits.err
+	$SCRIPTPATH/xlogfix_identify_bots $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_bots.err
+	$SCRIPTPATH/xlogimport_apache $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_import.err
+	mv $METRICSLOGDIR/_hub_apache.log $METRICSLOGDIR/_prev_hub_apache.log
 fi
 
 # -----------------------------------------------------------------------------------------------
 # Importing CMS logs
 # -----------------------------------------------------------------------------------------------
-if [ -f $SCRIPTPATH/_hub_auth.log ]
+if [ -f $METRICSLOGDIR/_hub_auth.log ]
 then
-	$SCRIPTPATH/xlogimport_authlog $SCRIPTPATH/_hub_auth.log >> $SCRIPTPATH/_cmsauth_import.err
-	mv $SCRIPTPATH/_hub_auth.log $SCRIPTPATH/_prev_hub_auth.log
+	$SCRIPTPATH/xlogimport_authlog $METRICSLOGDIR/_hub_auth.log >> $METRICSLOGDIR/_cmsauth_import.err
+	mv $METRICSLOGDIR/_hub_auth.log $METRICSLOGDIR/_prev_hub_auth.log
 fi

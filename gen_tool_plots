@@ -39,7 +39,7 @@ use DBI;
 use Cwd;
 
 use FindBin '$Bin';
-my $filename = $Bin.'/includes/access.cfg';
+my $filename = '/etc/hubzero-metrics/access.cfg';
 
 our $hub_dir;
 our $hub_db;
@@ -52,12 +52,20 @@ do $filename;
 my $mon;
 my $year;
 my $lmon;
-our $graphdir = $hub_dir."/site/stats/chart_resources";
+
+our $graphdir;
+
+if (-d $hub_dir . '/app') {
+        $graphdir = $hub_dir.'/app/site/stats/chart_resources';
+}
+else {
+        $graphdir = $hub_dir.'/site/stats/chart_resources';
+}
+
 our $logplotgraph = $Bin.'/includes/xlogplotgraph';
+my $dthis;
 
-my $dthis = shift();
-
-if(!$dthis) {
+if(@ARGV < 1) {
 
         ($mon,$year) = (localtime)[4,5];
         $year += 1900;
@@ -68,6 +76,9 @@ if(!$dthis) {
                 $lmon = '12';
         }
         $dthis = $year.'-'.sprintf("%02d", $lmon);
+}
+else {
+        $dthis = shift();
 }
 
 my $metrics_table = $hub_db.".jos_resource_stats_tools";
@@ -91,9 +102,13 @@ $dbquery = $dbhandle->prepare($sql)
 $dbresult = $dbquery->execute
    or die "Error:  can't execute the query ($dbquery->errstr).\n";
 while(@totals = $dbquery->fetchrow_array) {
-   	$dthis = $totals[0];
+   	if (! defined $totals[0]) {
+            $dthis = '1000-01-01';
+        }
+        else {
+            $dthis = $totals[0];
+        }
 }
-
 # Find Title(label) for the plot
 $sql = "SELECT DISTINCT(resid), res.title FROM ".$resource_table." res, ".$metrics_table." res_stats WHERE res.id = res_stats.resid AND restype=7 ORDER BY res.title";
 $dbquery = $dbhandle->prepare($sql)
@@ -105,6 +120,8 @@ while(@totals = $dbquery->fetchrow_array) {
    	$title = $totals[1];
 	gen_plots($dbhandle, $metrics_table, $dthis, $title, $resid);
 }
+
+
 
 sub gen_plots {
 
@@ -153,7 +170,6 @@ sub plot_graph {
 	my $value;
     	
 	($dbhandle, $metrics_table, $dthis, $title, $resid, $label, $label_prefix, $value) = @_;
-
 	my @periods = (0,1,3,12,13,14);
 	foreach (@periods) {
 

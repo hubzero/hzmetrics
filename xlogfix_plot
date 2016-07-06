@@ -39,7 +39,7 @@ use DBI;
 use Cwd;
 
 use FindBin '$Bin';
-my $filename = $Bin.'/includes/access.cfg';
+my $filename = '/etc/hubzero-metrics/access.cfg';
 
 our $hub_dir;
 our $hub_db;
@@ -52,12 +52,20 @@ my $dbname = $hub_db."_metrics";
 my $mon;
 my $year;
 my $lmon;
-our $graphdir = $hub_dir."/site/stats/plots";
+our $graphdir;
+
+if (-d $hub_dir . '/app') {
+        $graphdir = $hub_dir.'/app/site/stats/plots';
+}
+else {
+        $graphdir = $hub_dir.'/site/stats/plots';
+}
+
 our $logplotgraph = $Bin.'/includes/xlogplotgraph';
 
-my $dthis = shift();
+my $dthis;
 
-if(!$dthis) {
+if(@ARGV < 1) {
 
 	($mon,$year) = (localtime)[4,5];
 	$year += 1900;
@@ -68,6 +76,9 @@ if(!$dthis) {
 		$lmon = '12';
 	}
 	$dthis = $year.'-'.sprintf("%02d", $lmon);
+}
+else {
+        $dthis = shift();
 }
 
 #  Open database...
@@ -121,7 +132,12 @@ sub charts_ {
 	$dbresult = $dbquery->execute
    	or die "Error:  can't execute the query ($dbquery->errstr).\n";
 	while(@totals = $dbquery->fetchrow_array) {
-   		$dthis = $totals[0];
+                if (! defined $totals[0]) {
+                    $dthis = '1000-01-01';
+                }
+                else {
+   		    $dthis = $totals[0];
+                }
 	}
 
 	# Find Title(label) for the plot
@@ -196,47 +212,54 @@ sub plot_graph {
 		$dbresult = $dbquery->execute
 			or die "Error:  can't execute the query ($dbquery->errstr).\n";
 
-		open $file, '>', $filename
-			or die "Can't open $file: $!";
 		my @lines;
 		while(@totals = $dbquery->fetchrow_array) {
 			push(@lines, "${totals[0]} ${totals[1]}");
 		}
-		foreach $line (@lines) {
-			print { $file } "$line\n";
-		}
-		close $file;
 
-		$graphname = $graphdir."/".$ddate."-".$period."-".$type.$rowid;
+        if (@lines > 0) {
+			open $file, '>', $filename
+				or die "Can't open $file: $!";
+			foreach $line (@lines) {
+				print { $file } "$line\n";
+			}
+			close $file;
 
-		# getting rid of " in title as gnuplot complains
-		$title =~ s/"/'/g;
-		# getting rid of leading " - " in title
-		$title =~ s/ - //g;
-		my @heading = split("{",$title);
-		$title = $heading[0];
+			$graphname = $graphdir."/".$ddate."-".$period."-".$type.$rowid;
 
-		# gif
+			# getting rid of " in title as gnuplot complains
+			$title =~ s/"/'/g;
+			# getting rid of leading " - " in title
+			$title =~ s/ - //g;
+			my @heading = split("{",$title);
+			$title = $heading[0];
+			# gif
 		$command = $logplotgraph." -xdate -o '" . $graphname . "' -f gif -title \"" . $title . "\" -ylabel 'Number of " . $ylable . "' -xformat '%b%y' -b " . $filename. " 2> /dev/null";
 
-		system($command) == 0
-			or die "Error: couldn't exec logplotgraph: $! $command";
+			system($command) == 0
+				or die "Error: couldn't exec logplotgraph: $! $command";
 
-		# postscript
-		# $command = $logplotgraph." -xdate -o '" . $graphname . "' -f ps -title \"" . $title . "\" -ylabel 'Number of " . $ylable . "' -xformat '%b%y' -b " . $filename. " 2> /dev/null";
+			# postscript
+			# $command = $logplotgraph." -xdate -o '" . $graphname . "' -f ps -title \"" . $title . "\" -ylabel 'Number of " . $ylable . "' -xformat '%b%y' -b " . $filename. " 2> /dev/null";
 
-		# system($command) == 0
-		#	or die "Error: couldn't exec logplotgraph: $! $command";
+			# system($command) == 0
+			#	or die "Error: couldn't exec logplotgraph: $! $command";
 
-		#  Create the thumb of the graph
-    	$graphname = "${graphname}thumb";
+			#  Create the thumb of the graph
+			$graphname = "${graphname}thumb";
     	system("$logplotgraph -xdate -o \"$graphname\" -f gif -thumbnail -b " . $graphdir . "/hub.dat") == 0
-    		or die "Error: couldn't exec logplotgraph: $!";
+    				or die "Error: couldn't exec logplotgraph: $!";
 
-		# delete old plot data file
-		if(-e $graphdir . "/hub.dat") {
-			system("rm -f " . $graphdir . "/hub.dat");
+			# delete old plot data file
+			if(-e $graphdir . "/hub.dat") {
+				system("rm -f " . $graphdir . "/hub.dat");
+			}
+                }
+		else {
+			$graphname = $ddate."-".$period."-".$type.$rowid;
+			print "Skipping generation of $graphname (no data)\n";
 		}
+
 		$dbquery->finish;
 	}
 }

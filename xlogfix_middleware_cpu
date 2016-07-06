@@ -41,7 +41,7 @@ use strict;
 use DBI;
 
 use FindBin '$Bin';
-my $filename = $Bin.'/includes/access.cfg';
+my $filename = '/etc/hubzero-metrics/access.cfg';
 
 our $hub_db;
 our $metrics_db;

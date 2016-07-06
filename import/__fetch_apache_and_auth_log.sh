@@ -33,6 +33,12 @@ SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
 CMSLOGDIR=/var/log/hubzero
 CMSLOGPREFIX=
+METRICSLOGDIR=/var/log/hubzero/metrics
+
+if [ ! -d $METRICSLOGDIR ]
+then
+  mkdir -p $METRICSLOGDIR
+fi
 
 if [ -f /etc/hubzero.conf ]
 then
@@ -47,11 +53,11 @@ fi
 files=$(ls /var/log/apache2/daily/"$site"-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat /var/log/apache2/daily/$site-access*log* > $SCRIPTPATH/_hub_apache.log
+	cat /var/log/apache2/daily/$site-access*log* > $METRICSLOGDIR/_hub_apache.log
 fi
 
 files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* > $SCRIPTPATH/_hub_auth.log
+	cat ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* > $METRICSLOGDIR/_hub_auth.log
 fi
