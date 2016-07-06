@@ -271,7 +271,7 @@ sub gnuplot_exec {
 	# $ENV{'GDFONTPATH'} = "/usr/openwin/lib/X11/fonts/TrueType";
 	$ENV{'GDFONTPATH'} = "/usr/share/fonts/truetype/msttcorefonts";
 	open(GNUPLOT, "| $SYS_PATHS{'gnuplot'}") or die "Error:  Cannot connect to gnuplot ($!)\n";
-	
+
 	#--- Set the output format and filename...
 	if($source eq "jpg") {
 		if($params{'thumbnail'}) {
@@ -333,11 +333,10 @@ sub gnuplot_exec {
 		print GNUPLOT "set xlabel \"$params{'xlabel'}\" font \"Arial,10\"\n";
 		print GNUPLOT "set ylabel \"$params{'ylabel'}\" font \"Arial,10\"\n";
 		print GNUPLOT "set boxwidth 0.5 relative\n";
-
+        }
 	    #--- Set graph axis ranges...
 		if($params{'xdate'}) {
 		    %xrange = get_xrange(\%params);
-
 		    #--- Make x-axis label
 			foreach $plot (@{$params{'plot'}}) {
 				open(FILEHANDLE, $plot->{'file'}) or die "Error opening file.\n";
@@ -427,16 +426,19 @@ sub gnuplot_exec {
 		    print GNUPLOT ")\n";
 
 		}
-	    if($params{'y_max'}) {
+
+		if($params{'y_max'}) {
 			print GNUPLOT "set yrange [0:$params{'y_max'}]\n";
 		}
 		else {
 			print GNUPLOT "set yrange [0:]\n";
 		}
+
+
 		if($params{'y_tic'}) {
 		    print GNUPLOT "set ytics 2, $params{'y_tic'}, $params{'y_max'}\n";
-	    }
-	}
+	    	}
+	
 
 	#--- Issue plot command...
 	$i = 1;
@@ -508,7 +510,6 @@ sub get_xrange {
 			print STDERR "Error:  Data file \"$plot->{'file'}\" could not be read.\n";
 		}
 	}
-
 	#--- Return parsed arguments in a hash/structure...
 	return(%xrange);
 }
