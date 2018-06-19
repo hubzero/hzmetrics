@@ -42,18 +42,27 @@ fi
 
 if [ -f /etc/hubzero.conf ]
 then
-  site=$(grep site= /etc/hubzero.conf | sed 's/site=//')
+  site=$(grep site= /etc/hubzero.conf | sed 's/site= //')
 else
   site=hub
 fi
 
+if [ -d "/etc/httpd" ]; then
+  APACHELOGDIR=/var/log/httpd
+fi
+
+if [ -d "/etc/apache2" ]; then
+  APACHELOGDIR=/var/log/apache2
+fi
+
+
 # -----------------------------------------------------------------------------------------------
 # Fetching apache and CMS logs
 # -----------------------------------------------------------------------------------------------
-files=$(ls /var/log/apache2/daily/"$site"-access*log* 2> /dev/null | wc -l)
+files=$(ls ${APACHELOGDIR}/daily/"$site"-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat /var/log/apache2/daily/$site-access*log* > $METRICSLOGDIR/_hub_apache.log
+	cat ${APACHELOGDIR}/daily/$site-access*log* > $METRICSLOGDIR/_hub_apache.log
 fi
 
 files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)

@@ -36,26 +36,35 @@ CMSLOGPREFIX=
 
 if [ -f /etc/hubzero.conf ]
 then
-  site=$(grep site= /etc/hubzero.conf | sed 's/site=//')
+  site=$(grep site= /etc/hubzero.conf | sed 's/site= //')
 else
   site=hub
 fi
 
+if [ -d "/etc/httpd" ]; then
+  APACHELOGDIR=/var/log/httpd
+fi
+
+if [ -d "/etc/apache2" ]; then
+  APACHELOGDIR=/var/log/apache2
+fi
+
+
 # -----------------------------------------------------------------------------------------------
 # Archiving apache and CMS logs
 # -----------------------------------------------------------------------------------------------
-files=$(ls /var/log/apache2/daily/$site-access*log* 2> /dev/null | wc -l)
+files=$(ls ${APACHELOGDIR}/daily/$site-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/apache2/daily/$site-access*log*
-	mv --backup=numbered /var/log/apache2/daily/$site-access*log* /var/log/apache2/imported/
+	gzip --quiet ${APACHELOGDIR}/daily/$site-access*log*
+	mv --backup=numbered ${APACHELOGDIR}/daily/$site-access*log* ${APACHELOGDIR}/imported/
 fi
 
-files=$(ls /var/log/apache2/daily/new-$site-access*log* 2> /dev/null | wc -l)
+files=$(ls ${APACHELOGDIR}/daily/new-$site-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	gzip --quiet /var/log/apache2/daily/new-$site-access*log*
-	mv --backup=numbered /var/log/apache2/daily/new-$site-access*log* /var/log/apache2/imported/
+	gzip --quiet ${APACHELOGDIR}/daily/new-$site-access*log*
+	mv --backup=numbered ${APACHELOGDIR}/daily/new-$site-access*log* ${APACHELOGDIR}/imported/
 fi
 
 files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)
