@@ -44,11 +44,11 @@ if (!is_array($result))
 }
 
 if (is_array($result['default']))
-    $DocumentRoot = $result[$result['default']['site']]['DocumentRoot'];
+    $DocumentRoot = $result[$result['default']['site']]['documentroot'];
 else if (is_array($result[key($result)]))
-    $DocumentRoot = $result[key($result)]['DocumentRoot'];
+    $DocumentRoot = $result[key($result)]['documentroot'];
 else
-    $DocumentRoot = $result['DocumentRoot'];
+    $DocumentRoot = $result['documentroot'];
 
 require_once ( $DocumentRoot . '/configuration.php');
 $jconfig = new JConfig();
