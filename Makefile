@@ -70,7 +70,7 @@ install:
 	install --mode 0755 -D metrics/import/xlogimport_authlog $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_authlog
 	install --mode 0755 -D metrics/import/xlogimport_webhits $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_webhits
 
-	install --mode 0644 -D conf/hubzero-metrics.cron.d $(USRSHARE)/hubzero-metrics/conf/hubzero-metrics.cron.d
+	install --mode 0644 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/hubzero-metrics
 
 uninstall:
 	@true
