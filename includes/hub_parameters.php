@@ -43,8 +43,13 @@ if (!is_array($result))
     die;
 }
 
+if (array_key_exists($result[$result['default']['site']]['DocumentRoot'], $result))
+    $DocumentRootKey = 'DocumentRoot';
+else if (array_key_exists($result[$result['default']['site']]['documentroot'], $result))
+    $DocumentRootKey = 'documentroot';
+
 if (is_array($result['default']))
-    $DocumentRoot = $result[$result['default']['site']]['documentroot'];
+    $DocumentRoot = $result[$result['default']['site']][$DocumentRootKey];
 else if (is_array($result[key($result)]))
     $DocumentRoot = $result[key($result)]['documentroot'];
 else
