@@ -43,10 +43,17 @@ if (!is_array($result))
     die;
 }
 
-if (array_key_exists($result[$result['default']['site']]['DocumentRoot'], $result))
-    $DocumentRootKey = 'DocumentRoot';
-else if (array_key_exists($result[$result['default']['site']]['documentroot'], $result))
-    $DocumentRootKey = 'documentroot';
+foreach ($result as $key=>$value) {
+	if (!is_array($value)) {
+		continue;
+	}
+	if (array_key_exists('documentroot', $value)) {
+		$DocumentRootKey = 'documentroot';
+	}
+	if (array_key_exists('DocumentRoot', $value)) {
+		$DocumentRootKey = 'DocumentRoot';	
+	}
+}
 
 if (is_array($result['default']))
     $DocumentRoot = $result[$result['default']['site']][$DocumentRootKey];
