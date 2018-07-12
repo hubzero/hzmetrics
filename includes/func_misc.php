@@ -34,15 +34,15 @@ function get_tool_versions_aliases($db_hub, $aliases_x) {
     if ($aliases_x) {
         $aliases = $aliases_x.',';
         $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.') AND instance NOT LIKE "%\_dev"';
-        $result = mysql_query($sql, $db_hub);
+        $result = mysqli_query($db_hub, $sql);
         if($result) {
-            if(mysql_num_rows($result) > 0) {
-                while($row = mysql_fetch_row($result)) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
                     $aliases .= '"'.$row[0].'",';
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
@@ -50,30 +50,30 @@ function get_tool_versions_aliases($db_hub, $aliases_x) {
 	/* not needed as HUBs don't have jos_tool_version_alias tables (?)
     if ($aliases_x) {
         $sql = 'SELECT DISTINCT tva.alias FROM '.$hub_db.'.'.$db_prefix.'tool_version_alias AS tva, '.$hub_db.'.'.$db_prefix.'tool_version AS tv WHERE tva.tool_version_id = tv.id AND tv.toolname IN ('.$aliases_x.') AND tva.alias NOT LIKE "%\_dev"';
-        $result = mysql_query($sql, $db_hub);
+        $result = mysqli_query($db_hub, $sql);
         if($result) {
-            if(mysql_num_rows($result) > 0) {
-                while($row = mysql_fetch_row($result)) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
                     $aliases .= '"'.$row[0].'",';
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
     }
     if ($aliases_x) {
         $sql = 'SELECT DISTINCT instance FROM '.$hub_db.'.'.$db_prefix.'tool_version WHERE toolname IN ('.$aliases_x.') AND instance NOT LIKE "%\_dev"';
-        $result = mysql_query($sql, $db_hub);
+        $result = mysqli_query($db_hub, $sql);
         if($result) {
-            if(mysql_num_rows($result) > 0) {
-                while($row = mysql_fetch_row($result)) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
                     $aliases .= '"'.$row[0].'",';
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
         $aliases_x = rtrim ($aliases,',');
@@ -85,26 +85,26 @@ function get_tool_versions_aliases($db_hub, $aliases_x) {
 
 # --------------------------------------------------------------------------------------------
 # Execute sql function used for SELECT statements with single returns (for $db_hub only)
-function mysql_fetch(&$db_hub, $sql) {
+function db_fetch(&$db_hub, $sql) {
 
 	global $debug;
 
 	$val = '';
-	if (!mysql_ping($db_hub))
+	if (!mysqli_ping($db_hub))
 		$db_hub = db_connect('db_hub');
 
 	if ($debug)
 	    print $sql."\n";
 
-    $result = mysql_query($sql, $db_hub);
+    $result = mysqli_query($db_hub, $sql);
     if($result) {
-        if(mysql_num_rows($result) > 0) {
-            while($row = mysql_fetch_row($result)) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
                 $val = $row[0];
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     return $val;
@@ -112,11 +112,11 @@ function mysql_fetch(&$db_hub, $sql) {
 
 # --------------------------------------------------------------------------------------------
 # Execute sql function used for INSERTs, DELETEs and UPDATEs
-function mysql_exec($db, $sql) {
+function db_exec($db, $sql) {
 
-    $result = mysql_query($sql, $db);
+    $result = mysqli_query($db, $sql);
     if(!$result) {
-        $msg = mysql_error($db).' while executing '.$sql."\n";
+        $msg = mysqli_error($db).' while executing '.$sql."\n";
         clean_exit($msg);
     }
 }
@@ -244,25 +244,25 @@ function xgethostbyaddr($ip, $timeout = 1)
 function dbquote($str) {
 
 	global $db_hub;
-	return '"' . mysql_real_escape_string($str, $db_hub) . '"';
+	return '"' . mysqli_real_escape_string($str, $db_hub) . '"';
 
 }
 
 function get_countries(&$db_hub, $sql) {
 
-	if (!mysql_ping($db_hub))
+	if (!mysqli_ping($db_hub))
 		$db_hub = db_connect('db_hub');
 
     $countries = "";
-    $result = mysql_query($sql, $db_hub);
+    $result = mysqli_query($db_hub, $sql);
     if($result) {
-        if(mysql_num_rows($result) > 0) {
-            while($row = mysql_fetch_row($result)) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
                 $countries .= '"'.$row[0].'",';
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     $countries = rtrim($countries,',');
@@ -300,15 +300,15 @@ function get_rappture_tools() {
 function get_ip_list(&$db_hub, $sql) {
 
     $login_ips = '"127.0.0.1",';
-    $result = mysql_query($sql, $db_hub);
+    $result = mysqli_query($db_hub, $sql);
     if($result) {
-        if(mysql_num_rows($result) > 0) {
-            while($row = mysql_fetch_row($result)) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
                 $login_ips .= '"'.$row[0].'",';
             }
         }
     } else {
-        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
     }
     $login_ips = rtrim($login_ips,',');
@@ -342,15 +342,15 @@ function gen_exclude_list($type) {
 	$arr = array();
 
 	$sql = 'SELECT filter FROM '.$metrics_db.'.exclude_list WHERE type = '.dbquote($type);
-	$result = mysql_query($sql, $db_hub);
+    $result = mysqli_query($db_hub, $sql);
 	if($result) {
-    	if(mysql_num_rows($result) > 0) {
-        	while($row = mysql_fetch_row($result)) {
+    	if(mysqli_num_rows($result) > 0) {
+        	while($row = mysqli_fetch_row($result)) {
             	array_push($arr, $row[0]);
         	}
     	}
 	} else {
-        $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
         clean_exit($msg);
 	}
 	return $arr;
@@ -364,7 +364,7 @@ function checkbot (&$db_hub, $useragent) {
     $bot = 0;
 
     $sql = 'SELECT COUNT(*) FROM '.$metrics_db.'.bot_useragents WHERE useragent = '.dbquote($useragent);
-    $bot = mysql_fetch($db_hub, $sql);
+    $bot = db_fetch($db_hub, $sql);
 
     return $bot;
 }
@@ -387,13 +387,13 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
 		return $geo_data;
 
     $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
-	$local_exists = mysql_fetch($db_hub, $sql);
+	$local_exists = db_fetch($db_hub, $sql);
 	if ($local_exists) {
     	$sql = 'SELECT * FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
-        $result = mysql_query($sql, $db_hub);
+        $result = mysqli_query($db_hub, $sql);
         if($result) {
-            if(mysql_num_rows($result) > 0) {
-                while($row = mysql_fetch_assoc($result)) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_assoc($result)) {
         			$geo_data['n_ip'] = $xml->ipset->n_ip;
         			$geo_data['countrySHORT'] = $xml->ipset->countryCode;
         			$geo_data['countryLONG'] = $xml->ipset->countryName;
@@ -405,7 +405,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
                 }
             }
         } else {
-            $msg = mysql_error($db_hub).' while executing '.$sql."\n";
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
 	} else {
@@ -423,7 +423,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
         	$geo_data['ipLONGITUDE'] = $xml->ipset->long;
 			if ($geo_data['countrySHORT'] <> '-') {
 				$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache (ip, countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE) VALUES ('.dbquote($geo_data['n_ip']).','.dbquote($geo_data['countrySHORT']).','.dbquote($geo_data['countryLONG']).','.dbquote($geo_data['ipREGION']).','.dbquote($geo_data['ipCITY']).','.dbquote($geo_data['ipLATITUDE']).','.dbquote($geo_data['ipLONGITUDE']).') ON DUPLICATE KEY UPDATE countrySHORT = '.dbquote($geo_data['countrySHORT']).', countryLONG = '.dbquote($geo_data['countryLONG']).', ipREGION = '.dbquote($geo_data['ipREGION']).', ipCITY = '.dbquote($geo_data['ipCITY']).', ipLATITUDE = '.dbquote($geo_data['ipLATITUDE']).', ipLONGITUDE = '.dbquote($geo_data['ipLONGITUDE']);
-				mysql_exec($db_hub, $sql_ins);
+				db_exec($db_hub, $sql_ins);
 			}
     	} else if ( $xml->status == "_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_" ) {
         	print 'Warning: HUBzero.org IP-Geo location key is invalid. Please check hubconfiguration.php for "$hubzero_ipgeo_key". Please submit a support ticket on hubzero.org if the problem persists.'."\n";
@@ -439,7 +439,7 @@ function clean_exit($msg="") {
 
 	print $msg;
 
-	if (isset($db_hub) && mysql_ping($db_hub))
+	if (isset($db_hub) && mysqli_ping($db_hub))
 		db_close($db_hub);
 
 	die;

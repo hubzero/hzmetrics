@@ -32,19 +32,17 @@ function db_connect($dblink) {
 	switch($dblink) {
 
 		case 'db_hub':
-			$db = mysql_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], true);
+			$db = mysqli_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], $GLOBALS['hub_db']);
 			if (!$db) {
-				die('Database Connection Error: '.mysql_error()."\n\n");
+				die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
 			}
-			mysql_select_db($GLOBALS['hub_db'], $db);
 			break;
 
 		case 'db_net':
-			$db = mysql_connect($GLOBALS['db_net_host'], $GLOBALS['db_net_user'], $GLOBALS['db_net_pass'], true);
+			$db = mysqli_connect($GLOBALS['db_net_host'], $GLOBALS['db_net_user'], $GLOBALS['db_net_pass'], $GLOBALS['net_db']);
 			if (!$db) {
-				die('Database Connection Error: '.mysql_error()."\n\n");
+				die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
 			}
-			mysql_select_db($GLOBALS['net_db'], $db);
 			break;
 
 		default:
@@ -58,7 +56,7 @@ function db_connect($dblink) {
 
 function db_close($db) {
 
-	mysql_close($db);
+	mysqli_close($db);
 
 }
 

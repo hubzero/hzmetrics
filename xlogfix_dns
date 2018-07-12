@@ -71,20 +71,20 @@ if ($database == 'hub') {
 }
 	
 $sql = 'SELECT DISTINCT ip FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND (host = "" OR host = "?" OR host IS NULL) ORDER BY ip DESC';
-$result = mysql_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
-    if(mysql_num_rows($result) > 0) {
-        while($row = mysql_fetch_row($result)) {
+    if(mysqli_num_rows($result) > 0) {
+        while($row = mysqli_fetch_row($result)) {
 			$host = xgethostbyaddr($row[0], $timeout);
 			if ($host == $row[0])
 				$host = "?";
 			# Update table record...
 			$sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
-			mysql_exec($db_hub, $sql_updt);
+			db_exec($db_hub, $sql_updt);
         }
     }
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
+	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 

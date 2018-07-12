@@ -98,7 +98,7 @@ while (1) {
 
 	if ($user <> "hubstatus" && $user <> "hubadmin" && (!search_array($ip, $filtered_ips))) {
 		$sql_ins = 'INSERT IGNORE INTO '.$metrics_db.'.userlogin (datetime, uidNumber, user, ip, action) VALUES ('.dbquote($datetime).','.dbquote($uidNumber).','.dbquote($user).','.dbquote($ip).','.dbquote($action).')';
-		mysql_exec($db_hub, $sql_ins);
+		db_exec($db_hub, $sql_ins);
 	}
 }
 
@@ -106,6 +106,6 @@ if ($unrec)
 	print $unrec;
 
 fclose($filehandle);
-mysql_close($db_hub);
+mysqli_close($db_hub);
 
 ?>

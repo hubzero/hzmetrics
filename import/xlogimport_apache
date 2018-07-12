@@ -191,7 +191,7 @@ while(1)
 		    if ($cnt > 1000) {
               	$cnt = 0;
               	$sql_ins = rtrim($sql_ins, ', ');
-              	mysql_exec($db_hub, $sql_ins); // Insert new record in database...
+              	db_exec($db_hub, $sql_ins); // Insert new record in database...
 				$sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
    			}
 		}
@@ -200,7 +200,7 @@ while(1)
 // taking care of remaining inserts
 if ($cnt) {
 	$sql_ins = rtrim($sql_ins, ', ');
-	mysql_exec($db_hub, $sql_ins); // Insert new record in database...
+	db_exec($db_hub, $sql_ins); // Insert new record in database...
 }
 
 if($unrec)

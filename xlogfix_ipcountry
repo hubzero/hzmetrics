@@ -67,21 +67,21 @@ if ($database == 'hub') {
 }
 
 $sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE (ipcountry = "" OR ipcountry IS NULL) GROUP BY n_ip ORDER by hits desc;';
-$result = mysql_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
-	if(mysql_num_rows($result) > 0) {
-  		while($row = mysql_fetch_assoc($result)) {
+	if(mysqli_num_rows($result) > 0) {
+  		while($row = mysqli_fetch_assoc($result)) {
 			$country = '';
 			$n_ip = $row['n_ip'];
 			$ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
 			if($ip_geodata['countrySHORT'] <> '') {
 				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
-				mysql_exec($db_hub, $sql_updt);
+				db_exec($db_hub, $sql_updt);
 			}
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
+	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 

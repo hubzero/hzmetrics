@@ -34,10 +34,10 @@ function get_paths(&$db_hub, $resid_list) {
 
 	$match_string = '';
 	$sql = 'SELECT path, id FROM '.$hub_db.'.'.$db_prefix.'resources WHERE path <> "" AND id IN ('.$resid_list.') AND path NOT LIKE "http%"';
-	$result = mysql_query($sql, $db_hub);
+	$result = mysqli_query($db_hub, $sql);
 	if($result) {
-   		if(mysql_num_rows($result) > 0) {
-       		while($row = mysql_fetch_assoc($result)) {
+   		if(mysqli_num_rows($result) > 0) {
+       		while($row = mysqli_fetch_assoc($result)) {
 				$path = $row['path'];
 				$path = str_replace(' ','%20', $path);
 				# print $path."\n";
@@ -94,7 +94,7 @@ function get_paths(&$db_hub, $resid_list) {
 			}
 		}
 	} else {
-		echo mysql_error($db_hub)." while executing ".$sql."\n";
+		echo mysqli_error($db_hub)." while executing ".$sql."\n";
 		die;
 	}
 
@@ -122,17 +122,17 @@ function get_child_resources(&$db_hub, $resid, &$child_resid_list) {
     # $sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.')';
 	# Fix for segmentation fault problem
     $sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.') AND child_id NOT IN ('.$already_a_child.')';
-    $result = mysql_query($sql, $db_hub);
+	$result = mysqli_query($db_hub, $sql);
     if($result) {
-        if(mysql_num_rows($result) > 0) {
-            while($row = mysql_fetch_assoc($result)) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_assoc($result)) {
                 $count++;
                 $child_resids .= $row['child_id'].',';
                 array_push($child_resid_list, $row['child_id']);
             }
         }
     } else {
-        echo mysql_error($db_hub)." while executing ".$sql."\n";
+        echo mysqli_error($db_hub)." while executing ".$sql."\n";
         die;
     }
     if ($count) {
@@ -147,15 +147,15 @@ function get_elementids(&$db_hub, $resid_list) {
 
     $list = '';
     $sql = 'SELECT id FROM '.$metrics_db.'.elements WHERE resourceid IN ('.$resid_list.')';
-    $result = mysql_query($sql, $db_hub);
+	$result = mysqli_query($db_hub, $sql);
     if($result) {
-        if(mysql_num_rows($result) > 0) {
-            while($row = mysql_fetch_assoc($result)) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_assoc($result)) {
                 $list .= dbquote($row['id']).',';
             }
         }
     } else {
-		$msg = mysql_error($db_hub).' while executing '.$sql."\n";
+		$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
     }
     $elementid_list = rtrim($list,',');

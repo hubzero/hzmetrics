@@ -56,30 +56,30 @@ if(!$table) {
 }
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "domain"';
-$result = mysql_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
-	if(mysql_num_rows($result) > 0) {
-  		while($row = mysql_fetch_row($result)) {
+	if(mysqli_num_rows($result) > 0) {
+  		while($row = mysqli_fetch_row($result)) {
 			$sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
-			mysql_exec($db_hub, $sql_del);
+			db_exec($db_hub, $sql_del);
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
+	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "host"';
-$result = mysql_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
-	if(mysql_num_rows($result) > 0) {
-  		while($row = mysql_fetch_row($result)) {
+	if(mysqli_num_rows($result) > 0) {
+  		while($row = mysqli_fetch_row($result)) {
 			$sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE host LIKE '.dbquote($row[0]);
-			mysql_exec($db_hub, $sql_);
+			db_exec($db_hub, $sql_);
 		}
 	}
 } else {
-	$msg = mysql_error($db_hub).' while executing '.$sql."\n";
+	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 	clean_exit($msg);
 }
 

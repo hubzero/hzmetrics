@@ -147,13 +147,13 @@ foreach($useragent_strings as $agent) {
     foreach ($filters as $filter) {
         if (stripos($agent, $filter) !== false) {
             $sql_ins = 'INSERT IGNORE INTO '.$metrics_db.'.bot_useragents (useragent) VALUES ('.dbquote($agent).')';
-            mysql_exec($db_hub, $sql_ins);
+            db_exec($db_hub, $sql_ins);
         }
     }
 }
 
 $sql = 'DELETE FROM '.$metrics_db.'.bot_useragents WHERE (useragent LIKE "%searchtool%" OR useragent LIKE "% feed/%")';
-mysql_exec($db_hub, $sql);
+db_exec($db_hub, $sql);
 
 if ($unrec)
 	print $unrec;

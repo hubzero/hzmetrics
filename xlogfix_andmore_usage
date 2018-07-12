@@ -64,10 +64,10 @@ $periods  = array(12, 14, 1);
 
 # --------------------------------------------------------------------------------------------
 $sql = 'SELECT DISTINCT id, type FROM '.$hub_db.'.'.$db_prefix.'resources WHERE published = 1 AND standalone = 1 AND type <> 7 ORDER BY publish_up DESC';
-$result = mysql_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
-   	if(mysql_num_rows($result) > 0) {
-       	while($row = mysql_fetch_assoc($result)) {
+   	if(mysqli_num_rows($result) > 0) {
+       	while($row = mysqli_fetch_assoc($result)) {
 			$resid = $row['id'];
 			$restype = $row['type'];
 			$child_resid_list = array();
@@ -88,33 +88,33 @@ if($result) {
     				$dstart = $dates['start'];
     				$dstop = $dates['stop'];
 			
-					if (!mysql_ping($db_hub))
+					if (!mysqli_ping($db_hub))
 						$db_hub = db_connect('db_hub');
 					$id_ = 0;
 					$sql = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats WHERE resid = '.dbquote($resid).' AND datetime = '.dbquote($processed_on).' AND period = '.dbquote($period);
-					$id_  = mysql_fetch($db_hub, $sql);
+					$id_  = db_fetch($db_hub, $sql);
 					if ($id_) {
 						if ($overwrite) {
 							$users = get_usage($db_hub, $match_string, $dstart, $dstop);
-							if (!mysql_ping($db_hub))
+							if (!mysqli_ping($db_hub))
 								$db_hub = db_connect('db_hub');
 							$sql_updt = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET users = '.dbquote($users).' WHERE id = '.dbquote($id_);
 							if ($dbug) {
 								print $sql_updt.';'."\n";
 							} else {
-								mysql_exec($db_hub,$sql_updt);
+								db_exec($db_hub,$sql_updt);
 							}
 						
 						}
 					} else {
 						$users = get_usage($db_hub, $match_string,  $dstart, $dstop);
-						if (!mysql_ping($db_hub))
+						if (!mysqli_ping($db_hub))
 							$db_hub = db_connect('db_hub');
 						$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, datetime, period) VALUES ('.dbquote($resid).','.dbquote($restype).','.dbquote($users).','.dbquote($processed_on).','.dbquote($period).')';
 						if ($dbug) {
 							print $sql_ins.';'."\n";
 						} else {
-							mysql_exec($db_hub,$sql_ins);
+							db_exec($db_hub,$sql_ins);
 						}
 					}
 				}
@@ -122,7 +122,7 @@ if($result) {
 		}
 	}
 } else {
-	echo mysql_error($db_hub)." while executing ".$sql."\n";
+	echo mysqli_error($db_hub)." while executing ".$sql."\n";
 	die;
 }
 
@@ -140,17 +140,17 @@ function get_usage($db_hub, $match_string, $dstart, $dstop) {
         print "something is horribly wrong\n\n\n";
     }
     $sql .=  ' AND datetime >= '.dbquote($dstart).' and datetime < '.dbquote($dstop);
-	if (!mysql_ping($db_hub))
+	if (!mysqli_ping($db_hub))
 	$db_hub = db_connect('db_hub');
-	$result = mysql_query($sql, $db_hub);
+	$result = mysqli_query($db_hub, $sql);
 	if($result) {
-   		if(mysql_num_rows($result) > 0) {
-       		while($row = mysql_fetch_row($result)) {
+   		if(mysqli_num_rows($result) > 0) {
+       		while($row = mysqli_fetch_row($result)) {
 				$users = $row['0'];
 			}
 		}
 	} else {
-		echo mysql_error($db_hub)." while executing ".$sql."\n";
+		echo mysqli_error($db_hub)." while executing ".$sql."\n";
 		die;
 	}
 

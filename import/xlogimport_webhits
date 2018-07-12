@@ -79,7 +79,7 @@ function update_webhits($db_hub, $datestamp, $hits)
 	global $metrics_db;
 
 	$sql_ins = 'INSERT INTO '.$metrics_db.'.webhits (datetime, hits) VALUES(' . dbquote($datestamp) . ', ' . dbquote($hits) . ')';
-	$result = mysql_exec($db_hub, $sql_ins);
+	$result = db_exec($db_hub, $sql_ins);
 }
 	
 while(1)

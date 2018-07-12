@@ -51,16 +51,16 @@ require_once(__DIR__."/includes/func_misc.php");
 $db_hub = db_connect('db_hub');
 
 $sql = 'INSERT IGNORE INTO '.$metrics_db.'.sessionlog_metrics (sessnum, user, ip, start, appname) SELECT sessnum, username, remoteip, start, appname FROM '.$mw_db.'.sessionlog';
-mysql_exec($db_hub, $sql);
+db_exec($db_hub, $sql);
 
 $sql = 'DROP TABLE IF EXISTS '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics';
-mysql_exec($db_hub, $sql);
+db_exec($db_hub, $sql);
 
 $sql = 'CREATE TABLE '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics LIKE '.$hub_db.'.jos_xprofiles';
-mysql_exec($db_hub, $sql);
+db_exec($db_hub, $sql);
 
 $sql = 'INSERT INTO '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics SELECT * FROM '.$hub_db.'.'.$db_prefix.'xprofiles WHERE emailConfirmed > 0';
-mysql_exec($db_hub, $sql);
+db_exec($db_hub, $sql);
 
 db_close($db_hub);
 
