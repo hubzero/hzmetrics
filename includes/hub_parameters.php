@@ -33,7 +33,10 @@ error_reporting(E_ALL & ~E_NOTICE);
 
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
-$inicontents = preg_replace('/^\s*BaseDN\s*=\s*(.*)$/m','BaseDN="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*basedn\s*=\s*(.*)$/mi','basedn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*syncuserdn\s*=\s*(.*)$/mi','syncuserdn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*searchuserdn\s*=\s*(.*)$/mi','searchuserdn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*adminuserdn\s*=\s*(.*)$/mi','adminuserdn="$1"', $inicontents);
 $inicontents = preg_replace('/^\s*Org\s*=\s*(.*)$/m','Org="$1"', $inicontents);
 $result = parse_ini_string($inicontents, true);
 
