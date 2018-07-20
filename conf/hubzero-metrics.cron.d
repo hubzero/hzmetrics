@@ -1,10 +1,3 @@
-# Metrics cron jobs
-# Format is:
-# min hour day-of-month month day-of-week user command...
-#
-# Use only on hosted HUBs
-#MAILTO=hubmetrics@hubzero.org
-
 */15 * * * *	www-data	/usr/share/hubzero-metrics/scripts/xlogfix_whoisonline
 10 0 * * *	www-data	/usr/share/hubzero-metrics/scripts/import/__fetch_apache_and_auth_log.sh
 15 0 * * *	www-data	/usr/share/hubzero-metrics/scripts/import/__import_apache_and_auth_log.sh
