@@ -1,5 +1,5 @@
 #!/usr/bin/php
-<?
+<?php
 # @package      hubzero-metrics
 # @file         xlogimport_identify_bots
 # @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>

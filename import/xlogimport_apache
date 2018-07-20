@@ -1,5 +1,5 @@
 #!/usr/bin/php
-<?
+<?php
 # @package      hubzero-metrics
 # @file         xlogimport_apache
 # @author       Nicholas J. Kisseberth <nkissebe@purdue.edu>
