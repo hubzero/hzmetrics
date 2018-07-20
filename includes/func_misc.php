@@ -244,7 +244,7 @@ function xgethostbyaddr($ip, $timeout = 1)
 function dbquote($str) {
 
 	global $db_hub;
-	return '"' . mysqli_real_escape_string($str, $db_hub) . '"';
+	return '"' . mysqli_real_escape_string($db_hub, $str) . '"';
 
 }
 
