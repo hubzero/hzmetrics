@@ -32,7 +32,7 @@ function db_connect($dblink) {
 	switch($dblink) {
 
 		case 'db_hub':
-			$db = mysqli_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], $GLOBALS['hub_db']);
+			$db = mysqli_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], trim($GLOBALS['hub_db'],'`'));
 			if (!$db) {
 				die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
 			}
