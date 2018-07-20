@@ -42,7 +42,7 @@ fi
 
 if [ -f /etc/hubzero.conf ]
 then
-  site=$(grep site= /etc/hubzero.conf | sed 's/site= //')
+  site=$(grep -E "site\s*=" /etc/hubzero.conf | sed 's/site[ ]*=[ ]*//')
 else
   site=hub
 fi
