@@ -31,6 +31,12 @@
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
 
+if(!ini_get('date.timezone'))
+{
+	exec("date +%Z",$output);
+	date_default_timezone_set($output[0]);
+}
+
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
 $inicontents = preg_replace('/^\s*basedn\s*=\s*(.*)$/mi','basedn="$1"', $inicontents);
