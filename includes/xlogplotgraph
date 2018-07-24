@@ -272,10 +272,10 @@ sub gnuplot_exec {
 	#--- Open gnuplot and interact with it...
 	# $ENV{'GDFONTPATH'} = "/usr/openwin/lib/X11/fonts/TrueType";
 
-	if (-d /usr/share/fonts/truetype/msttcorefonts) {
+	if (-d "/usr/share/fonts/truetype/msttcorefonts") {
 		$ENV{'GDFONTPATH'} = "/usr/share/fonts/truetype/msttcorefonts";
 	}
-	elsif (-d /usr/share/fonts/msttcore) {
+	elsif (-d "/usr/share/fonts/msttcore") {
                 $ENV{'GDFONTPATH'} = "/usr/share/fonts/msttcore";
         }
 
