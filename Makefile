@@ -71,7 +71,7 @@ install:
 	install --mode 0755 -D metrics/import/xlogimport_webhits $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_webhits
 
 	install --mode 0644 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/hubzero-metrics
-	if [ -d /etc/httpd ] ; then sed -i 's/www-data/apache/g' $(ETC)/cron.d/hubzero-metrics; fi
+	if id -u apache &>/dev/null; then  sed -i 's/www-data/apache/g' $(ETC)/cron.d/hubzero-metrics; fi
 
 uninstall:
 	@true
