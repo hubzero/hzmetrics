@@ -1,6 +1,6 @@
 # @package      hubzero-metrics
 # @file         Makefile
-# @author       Nicholas J. Kisseberth <nkissebe@purdue.edu>
+# @author       Nicholas J. Kisseberth <nkisseberth@ucsd.edu>
 # @copyright    Copyright (c) 2010-2018 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

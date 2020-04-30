@@ -2,7 +2,7 @@
 <?php
 # @package      hubzero-metrics
 # @file         xlogimport_webhits
-# @author       Nicholas J. Kisseberth <nkissebe@purdue.edu>
+# @author       Nicholas J. Kisseberth <nkisseberth@ucsd.edu>
 # @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
 # @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
