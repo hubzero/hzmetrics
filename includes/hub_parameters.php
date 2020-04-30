@@ -1,7 +1,6 @@
 <?php
 # @package      hubzero-metrics
 # @file         hub_parameters.php
-# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
 # @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

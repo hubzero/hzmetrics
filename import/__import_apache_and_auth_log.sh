@@ -2,7 +2,6 @@
 #
 # @package      hubzero-metrics
 # @file         _import_apache_and_auth_log.sh
-# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
 # @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

@@ -2,7 +2,6 @@
 # 
 # @package      hubzero-metrics
 # @file         _process_tool_metrics.sh
-# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
 # @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

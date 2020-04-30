@@ -2,8 +2,6 @@
 <?php
 # @package      hubzero-metrics
 # @file         xlogfix_dns
-# @author       Swaroop Shivarajapura Samek <swaroop@purdue.edu>
-# @author       Nicholas J. Kisseberth <nkisseberth@ucsd.edu>
 # @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
