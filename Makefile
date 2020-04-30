@@ -1,10 +1,10 @@
 # @package      hubzero-metrics
 # @file         Makefile
 # @author       Nicholas J. Kisseberth <nkissebe@purdue.edu>
-# @copyright    Copyright (c) 2010-2018 HUBzero Foundation, LLC.
+# @copyright    Copyright (c) 2010-2018 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
-# Copyright (c) 2010-2018 HUBzero Foundation, LLC.
+# Copyright (c) 2010-2018 The Regents of the University of California.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# HUBzero is a registered trademark of HUBzero Foundation, LLC.
+# HUBzero is a registered trademark of The Regents of the University of California.
 #
 
 ETC=$(DESTDIR)/etc
