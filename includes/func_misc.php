@@ -1,10 +1,10 @@
 <?php
 # @package      hubzero-metrics
 # @file         func_misc.php
-# @copyright    Copyright (c) 2011-2015 The Regents of the University of California.
+# @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
-# Copyright (c) 2011-2015 The Regents of the University of California.
+# Copyright (c) 2011-2020 The Regents of the University of California.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
