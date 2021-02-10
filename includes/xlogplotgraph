@@ -303,13 +303,13 @@ sub gnuplot_exec {
 				print GNUPLOT "set terminal jpeg small size 320, 250 background '#ffffff'\n";
 				print GNUPLOT "set linetype 1 lc rgb '#5884bb'\n";
 			}
-			# print GNUPLOT "set terminal jpeg small size 640,500 xffffff x000000 x000000 x5884bb font Arial 8\n";
-			# print GNUPLOT "set terminal jpeg small size 1280,1000 xffffff x000000 x000000 x5884bb font Arial 8\n";
+			# print GNUPLOT "set terminal jpeg small size 640,500 xffffff x000000 x000000 x5884bb font arial 8\n";
+			# print GNUPLOT "set terminal jpeg small size 1280,1000 xffffff x000000 x000000 x5884bb font arial 8\n";
 		}
 		print GNUPLOT "set output \"$params{'output_file'}.jpg\"\n";
 	}
 	else {
-		print GNUPLOT "set terminal postscript eps color \"Arial\" 12\n";
+		print GNUPLOT "set terminal postscript eps color \"arial\" 12\n";
 		print GNUPLOT "set output \"$params{'output_file'}.ps\"\n";
 	}
 	
@@ -323,7 +323,7 @@ sub gnuplot_exec {
 	
 	#--- Set plot title...
 	if($params{'title'}) {
-		print GNUPLOT "set title \"$params{'title'}\" font \"Arial,13\"\n";
+		print GNUPLOT "set title \"$params{'title'}\" font \"arial,13\"\n";
 	}
 	
 	#--- Set gnuplot options...
@@ -352,13 +352,14 @@ sub gnuplot_exec {
 		print GNUPLOT "set format \"\"\n";
 	}
 	else {
-		print GNUPLOT "set xlabel \"$params{'xlabel'}\" font \"Arial,10\"\n";
-		print GNUPLOT "set ylabel \"$params{'ylabel'}\" font \"Arial,10\"\n";
+		print GNUPLOT "set xlabel \"$params{'xlabel'}\" font \"arial,10\"\n";
+		print GNUPLOT "set ylabel \"$params{'ylabel'}\" font \"arial,10\"\n";
 		print GNUPLOT "set boxwidth 0.5 relative\n";
         }
 	    #--- Set graph axis ranges...
 		if($params{'xdate'}) {
 		    %xrange = get_xrange(\%params);
+
 		    #--- Make x-axis label
 			foreach $plot (@{$params{'plot'}}) {
 				open(FILEHANDLE, $plot->{'file'}) or die "Error opening file.\n";
@@ -448,18 +449,15 @@ sub gnuplot_exec {
 		    print GNUPLOT ")\n";
 
 		}
-
-		if($params{'y_max'}) {
+	    if($params{'y_max'}) {
 			print GNUPLOT "set yrange [0:$params{'y_max'}]\n";
 		}
 		else {
 			print GNUPLOT "set yrange [0:]\n";
 		}
-
-
 		if($params{'y_tic'}) {
 		    print GNUPLOT "set ytics 2, $params{'y_tic'}, $params{'y_max'}\n";
-	    	}
+	    }
 	
 
 	#--- Issue plot command...
@@ -532,6 +530,7 @@ sub get_xrange {
 			print STDERR "Error:  Data file \"$plot->{'file'}\" could not be read.\n";
 		}
 	}
+
 	#--- Return parsed arguments in a hash/structure...
 	return(%xrange);
 }
