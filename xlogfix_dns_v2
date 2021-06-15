@@ -1,0 +1,24 @@
+#!/usr/bin/bash
+# @package      hubzero-metrics
+# @file         xlogfix_dns_v2
+# @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
+# @license      http://opensource.org/licenses/MIT MIT
+# @trademark    HUBzero is a registered trademark of The Regents of the University of California.
+
+limitdate=`date '+%C%y-%m-%d' -d "$end_date-7 days"`
+begdate=`date '+%C%y-%m-%d' -d "$end_date-1 days"`
+enddate=`date '+%C%y-%m-%d'`
+while [ $begdate != $limitdate ]
+do
+  ./xlogfix_dns_worker $1 $2 $begdate $enddate&
+  enddate=$begdate
+  begdate=`date '+%C%y-%m-%d' --date="$begdate -1 days"` 
+done
+
+ps aux |grep "xlogfix_dns_worker"|grep -qv grep
+while [ $? = 0 ]
+do
+  sleep 1
+  ps aux |grep "xlogfix_dns_worker"|grep -qv grep
+done
+

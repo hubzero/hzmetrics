@@ -1,7 +1,7 @@
 #!/bin/bash 
 # 
 # @package      hubzero-metrics
-# @file         _process_usage_metrics_summary.sh
+# @file         __process_usage_metrics_summary.sh
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

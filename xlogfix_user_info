@@ -1,32 +1,10 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_user_info
-# @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
+# @file         xlogfix_clean
+# @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
-#
-# Copyright (c) 2011-2020 The Regents of the University of California.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-#
-# HUBzero is a registered trademark of The Regents of the University of California.
-#
+# @trademark    HUBzero is a registered trademark of The Regents of the University of California.
 # =========================================================================
 # This Script assigns countryresident, countrycitizen and orgtype to each 
 # user in toolstart table
@@ -85,8 +63,11 @@ function update_tables($db_hub, $param, $table) {
 		$r_param = $param;
 	}
 	$user_list = '';
-	$sql = 'SELECT DISTINCT user FROM '.$table.' WHERE ('.$param.' = "" OR '.$param.' IS NULL)';
-	$result = mysqli_query($db_hub, $sql);
+	$queryDate = new DateTime();
+	$queryDate->modify('-7 days');
+
+	$sql = 'SELECT DISTINCT user FROM '.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
+	$result = mysqli_query($sql, $db_hub);
 	if($result) {
 		if(mysqli_num_rows($result) > 0) {
   			while($row = mysqli_fetch_assoc($result)) {
@@ -100,14 +81,14 @@ function update_tables($db_hub, $param, $table) {
 	$user_list = rtrim($user_list,",");
 	if ($user_list) {
 		$sql = 'SELECT username, countryresident, countryorigin, orgtype FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE username IN ('.$user_list.')'; 
-		$result = mysqli_query($db_hub, $sql);
+		$result = mysqli_query($sql, $db_hub);
 		if($result) {
 			if(mysqli_num_rows($result) > 0) {
   				while($row = mysqli_fetch_assoc($result)) {
 					if ($row[$r_param]) {
 						$value = strtoupper($row[$r_param]);
 						$sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
-						db_exec($db_hub, $sql_updt);
+						mysqli_exec($db_hub, $sql_updt);
 					}
 				}
 			}

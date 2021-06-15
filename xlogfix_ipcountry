@@ -1,32 +1,11 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_ipcountry
-# @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
+# @file         xlogfix_clean
+# @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
-#
-# Copyright (c) 2011-2020 The Regents of the University of California.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-#
-# HUBzero is a registered trademark of The Regents of the University of California.
-#
+# @trademark    HUBzero is a registered trademark of The Regents of the University of California.
+
 # ------------------------------------------------------------------------- 
 # This script assigns assigns a country to IP addresses 
 #
@@ -40,7 +19,6 @@ if(!defined('__DIR__')) {
     $fPos = strrpos(__FILE__, "/");
     define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
 }
-
 require_once(__DIR__."/includes/hub_parameters.php");
 require_once(__DIR__."/includes/db_connect.php");
 require_once(__DIR__."/includes/func_misc.php");
@@ -49,7 +27,7 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
+	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."/n";
 	clean_exit($msg);
 } else {
 	$database = $_SERVER['argv'][1];
@@ -65,17 +43,21 @@ if ($database == 'hub') {
 	clean_exit($msg);
 }
 
-$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE (ipcountry = "" OR ipcountry IS NULL) GROUP BY n_ip ORDER by hits desc;';
-$result = mysqli_query($db_hub, $sql);
+$queryDate = new DateTime();
+$queryDate->modify('-7 days');
+$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND (countryip = "" OR countryip IS NULL) GROUP BY n_ip ORDER by hits desc;';
+$result = mysqli_query($sql, $db_hub);
+$hubzero_ipgeo_url="http://hubzero.org/ipinfo/v1";
+$hub_key="_HUBZERO_OPNSRC_V1_";
 if($result) {
 	if(mysqli_num_rows($result) > 0) {
   		while($row = mysqli_fetch_assoc($result)) {
 			$country = '';
 			$n_ip = $row['n_ip'];
-			$ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
+			$ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key,$n_ip);
 			if($ip_geodata['countrySHORT'] <> '') {
-				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
-				db_exec($db_hub, $sql_updt);
+				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET countryip= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (countryip = "" OR countryip IS NULL)';
+				mysqli_exec($db_hub, $sql_updt);
 			}
 		}
 	}
@@ -86,4 +68,3 @@ if($result) {
 
 db_close($db_hub);
 
-?>
