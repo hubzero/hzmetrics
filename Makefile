@@ -27,50 +27,51 @@
 #
 
 ETC=$(DESTDIR)/etc
-USRSHARE=$(DESTDIR)/usr/share
+INSTALLDIR=$(DESTDIR)/opt/hubzero/bin
 
 all:
 	@true
 
 install:
-	install --mode 0755 -D metrics/gen_tool_plots $(USRSHARE)/hubzero-metrics/scripts/gen_tool_plots
-	install --mode 0755 -D metrics/gen_tool_stats $(USRSHARE)/hubzero-metrics/scripts/gen_tool_stats
-	install --mode 0755 -D metrics/gen_tool_toplists $(USRSHARE)/hubzero-metrics/scripts/gen_tool_toplists
-	install --mode 0755 -D metrics/gen_tool_tops $(USRSHARE)/hubzero-metrics/scripts/gen_tool_tops
-	install --mode 0755 -D metrics/logfix_session $(USRSHARE)/hubzero-metrics/scripts/logfix_session
-	install --mode 0755 -D metrics/__process_tool_metrics.sh $(USRSHARE)/hubzero-metrics/scripts/__process_tool_metrics.sh
-	install --mode 0755 -D metrics/__process_usage_metrics.sh $(USRSHARE)/hubzero-metrics/scripts/__process_usage_metrics.sh
-	install --mode 0755 -D metrics/__process_usage_metrics_summary.sh $(USRSHARE)/hubzero-metrics/scripts/__process_usage_metrics_summary.sh
-	install --mode 0755 -D metrics/xlogfix_andmore_usage $(USRSHARE)/hubzero-metrics/scripts/xlogfix_andmore_usage
-	install --mode 0755 -D metrics/xlogfix_clean $(USRSHARE)/hubzero-metrics/scripts/xlogfix_clean
-	install --mode 0755 -D metrics/xlogfix_dns $(USRSHARE)/hubzero-metrics/scripts/xlogfix_dns
-	install --mode 0755 -D metrics/xlogfix_domain $(USRSHARE)/hubzero-metrics/scripts/xlogfix_domain
-	install --mode 0755 -D metrics/xlogfix_ipcountry $(USRSHARE)/hubzero-metrics/scripts/xlogfix_ipcountry
-	install --mode 0755 -D metrics/xlogfix_middleware_cpu $(USRSHARE)/hubzero-metrics/scripts/xlogfix_middleware_cpu
-	install --mode 0755 -D metrics/xlogfix_middleware_wall $(USRSHARE)/hubzero-metrics/scripts/xlogfix_middleware_wall
-	install --mode 0755 -D metrics/xlogfix_plot $(USRSHARE)/hubzero-metrics/scripts/xlogfix_plot
-	install --mode 0755 -D metrics/xlogfix_prep $(USRSHARE)/hubzero-metrics/scripts/xlogfix_prep
-	install --mode 0755 -D metrics/xlogfix_summary $(USRSHARE)/hubzero-metrics/scripts/xlogfix_summary
-	install --mode 0755 -D metrics/xlogfix_user_info $(USRSHARE)/hubzero-metrics/scripts/xlogfix_user_info
-	install --mode 0755 -D metrics/xlogfix_whoisonline $(USRSHARE)/hubzero-metrics/scripts/xlogfix_whoisonline
-	install --mode 0755 -D metrics/xlogimport_tool_and_reg_user_data $(USRSHARE)/hubzero-metrics/scripts/xlogimport_tool_and_reg_user_data
+	install --owner apache --group apache --mode 0750 -D metrics/gen_tool_plots $(INSTALLDIR)/metrics/gen_tool_plots
+	install --owner apache --group apache --mode 0750 -D metrics/gen_tool_stats $(INSTALLDIR)/metrics/gen_tool_stats
+	install --owner apache --group apache --mode 0750 -D metrics/gen_tool_toplists $(INSTALLDIR)/metrics/gen_tool_toplists
+	install --owner apache --group apache --mode 0750 -D metrics/gen_tool_tops $(INSTALLDIR)/metrics/gen_tool_tops
+	install --owner apache --group apache --mode 0750 -D metrics/logfix_session $(INSTALLDIR)/metrics/logfix_session
+	install --owner apache --group apache --mode 0750 -D metrics/__process_tool_metrics.sh $(INSTALLDIR)/metrics/__process_tool_metrics.sh
+	install --owner apache --group apache --mode 0750 -D metrics/__process_usage_metrics.sh $(INSTALLDIR)/metrics/__process_usage_metrics.sh
+	install --owner apache --group apache --mode 0750 -D metrics/__process_usage_metrics_summary.sh $(INSTALLDIR)/metrics/__process_usage_metrics_summary.sh
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_andmore_usage $(INSTALLDIR)/metrics/xlogfix_andmore_usage
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_clean $(INSTALLDIR)/metrics/xlogfix_clean
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns $(INSTALLDIR)/metrics/xlogfix_dns
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns $(INSTALLDIR)/metrics/xlogfix_dns2
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns $(INSTALLDIR)/metrics/xlogfix_dns_worker
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_domain $(INSTALLDIR)/metrics/xlogfix_domain
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_ipcountry $(INSTALLDIR)/metrics/xlogfix_ipcountry
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_middleware_cpu $(INSTALLDIR)/metrics/xlogfix_middleware_cpu
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_middleware_wall $(INSTALLDIR)/metrics/xlogfix_middleware_wall
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_plot $(INSTALLDIR)/metrics/xlogfix_plot
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_prep $(INSTALLDIR)/metrics/xlogfix_prep
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_summary $(INSTALLDIR)/metrics/xlogfix_summary
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_user_info $(INSTALLDIR)/metrics/xlogfix_user_info
+	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_whoisonline $(INSTALLDIR)/metrics/xlogfix_whoisonline
+	install --owner apache --group apache --mode 0750 -D metrics/xlogimport_tool_and_reg_user_data $(INSTALLDIR)/metrics/xlogimport_tool_and_reg_user_data
 
-	install --mode 0644 -D metrics/includes/db_connect.php $(USRSHARE)/hubzero-metrics/scripts/includes/db_connect.php
-	install --mode 0644 -D metrics/includes/func_andmore.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_andmore.php
-	install --mode 0644 -D metrics/includes/func_misc.php $(USRSHARE)/hubzero-metrics/scripts/includes/func_misc.php
-	install --mode 0644 -D metrics/includes/hub_parameters.php $(USRSHARE)/hubzero-metrics/scripts/includes/hub_parameters.php
-	install --mode 0755 -D metrics/includes/xlogplotgraph $(USRSHARE)/hubzero-metrics/scripts/includes/xlogplotgraph
+	install --owner apache --group apache --mode 0750 -D metrics/includes/db_connect.php $(INSTALLDIR)/metrics/includes/db_connect.php
+	install --owner apache --group apache --mode 0750 -D metrics/includes/func_andmore.php $(INSTALLDIR)/metrics/includes/func_andmore.php
+	install --owner apache --group apache --mode 0750 -D metrics/includes/func_misc.php $(INSTALLDIR)/metrics/includes/func_misc.php
+	install --owner apache --group apache --mode 0750 -D metrics/includes/hub_parameters.php $(INSTALLDIR)/metrics/includes/hub_parameters.php
+	install --owner apache --group apache --mode 0750 -D metrics/includes/xlogplotgraph $(INSTALLDIR)/metrics/includes/xlogplotgraph
 
-	install --mode 0755 -D metrics/import/__archive_apache_and_auth_log.sh $(USRSHARE)/hubzero-metrics/scripts/import/__archive_apache_and_auth_log.sh
-	install --mode 0755 -D metrics/import/__fetch_apache_and_auth_log.sh $(USRSHARE)/hubzero-metrics/scripts/import/__fetch_apache_and_auth_log.sh
-	install --mode 0755 -D metrics/import/__import_apache_and_auth_log.sh $(USRSHARE)/hubzero-metrics/scripts/import/__import_apache_and_auth_log.sh
-	install --mode 0755 -D metrics/import/xlogfix_identify_bots $(USRSHARE)/hubzero-metrics/scripts/import/xlogfix_identify_bots
-	install --mode 0755 -D metrics/import/xlogimport_apache $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_apache
-	install --mode 0755 -D metrics/import/xlogimport_authlog $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_authlog
-	install --mode 0755 -D metrics/import/xlogimport_webhits $(USRSHARE)/hubzero-metrics/scripts/import/xlogimport_webhits
+	install --owner apache --group apache --mode 0750 -D metrics/import/__archive_apache_and_auth_log.sh $(INSTALLDIR)/metrics/import/__archive_apache_and_auth_log.sh
+	install --owner apache --group apache --mode 0750 -D metrics/import/__fetch_apache_and_auth_log.sh $(INSTALLDIR)/metrics/import/__fetch_apache_and_auth_log.sh
+	install --owner apache --group apache --mode 0750 -D metrics/import/__import_apache_and_auth_log.sh $(INSTALLDIR)/metrics/import/__import_apache_and_auth_log.sh
+	install --owner apache --group apache --mode 0750 -D metrics/import/xlogfix_identify_bots $(INSTALLDIR)/metrics/import/xlogfix_identify_bots
+	install --owner apache --group apache --mode 0750 -D metrics/import/xlogimport_apache $(INSTALLDIR)/metrics/import/xlogimport_apache
+	install --owner apache --group apache --mode 0750 -D metrics/import/xlogimport_authlog $(INSTALLDIR)/metrics/import/xlogimport_authlog
+	install --owner apache --group apache --mode 0750 -D metrics/import/xlogimport_webhits $(INSTALLDIR)/metrics/import/xlogimport_webhits
 
-	install --mode 0644 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/hubzero-metrics
-	if id -u apache &>/dev/null; then  sed -i 's/www-data/apache/g' $(ETC)/cron.d/hubzero-metrics; fi
+	install --mode 0644 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/metrics
 
 uninstall:
 	@true
