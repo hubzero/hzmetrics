@@ -70,6 +70,13 @@ else if (is_array($result[key($result)]))
 else
     $DocumentRoot = $result['documentroot'];
 
+// check for existence of additional config files:
+if (!file_exists($DocumentRoot . '/configuration.php'))
+{
+    print date('Y-m-d H:is:s T').' '.$_SERVER['argv'][0].': '.'Hubzero Configuration file configuration.php missing from '.$DocumentRoot."\n";
+    die;
+}
+
 require_once ( $DocumentRoot . '/configuration.php');
 $jconfig = new JConfig();
 
@@ -85,6 +92,12 @@ $report_db = '`'.$hub_db.'_annualreport`';
 $hub_db = '`'.$hub_db.'`';
 $mw_db = $hub_db; // This should be read dynamically from database
 
+// check for existence of additional config files:
+if (!file_exists($DocumentRoot . '/hubconfiguration.php'))
+{
+    print date('Y-m-d H:is:s T').' '.$_SERVER['argv'][0].': '.'Hubzero Configuration file hubconfiguration.php missing from '.$DocumentRoot."\n";
+    die;
+}
 require_once ( $DocumentRoot . '/hubconfiguration.php');
 $hconfig = new HUBConfig();
 

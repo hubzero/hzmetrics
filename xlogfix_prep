@@ -55,4 +55,5 @@ $Data .= "\$db_pass = '".$db_pass."';\n";
 $Data .= "\$db_prefix = '".$db_prefix."';\n";
 fwrite($fh, $Data); 
 fclose($fh);
+chmod($file,0640);
 ?>
