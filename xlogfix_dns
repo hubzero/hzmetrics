@@ -52,38 +52,38 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
-	clean_exit($msg);
+    $msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
+    clean_exit($msg);
 } else {
-	$database = $_SERVER['argv'][1];
-	$table = $_SERVER['argv'][2];
+    $database = $_SERVER['argv'][1];
+    $table = $_SERVER['argv'][2];
 }
 
 if ($database == 'hub') {
-	$database = $hub_db;
+    $database = $hub_db;
 } else if ($database == 'metrics') {
-	$database = $metrics_db;
+    $database = $metrics_db;
 } else {
-	$msg = 'Invalid database type'."\n";
-	clean_exit($msg);
+    $msg = 'Invalid database type'."\n";
+    clean_exit($msg);
 }
-	
+    
 $sql = 'SELECT DISTINCT ip FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND (host = "" OR host = "?" OR host IS NULL) ORDER BY ip DESC';
 $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
-			$host = xgethostbyaddr($row[0], $timeout);
-			if ($host == $row[0])
-				$host = "?";
-			# Update table record...
-			$sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
-			db_exec($db_hub, $sql_updt);
+            $host = xgethostbyaddr($row[0], $timeout);
+            if ($host == $row[0])
+                $host = "?";
+            # Update table record...
+            $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
+            db_exec($db_hub, $sql_updt);
         }
     }
 } else {
-	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	clean_exit($msg);
+    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+    clean_exit($msg);
 }
 
 db_close($db_hub);

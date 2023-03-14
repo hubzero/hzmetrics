@@ -35,17 +35,17 @@ CMSLOGPREFIX=
 
 if [ -f /etc/hubzero.conf ]
 then
-  site=$(grep -E "site\s*=" /etc/hubzero.conf | sed 's/site[ ]*=[ ]*//')
+	site=$(grep -E "site\s*=" /etc/hubzero.conf | sed 's/site[ ]*=[ ]*//')
 else
-  site=hub
+	site=hub
 fi
 
 if [ -d "/etc/httpd" ]; then
-  APACHELOGDIR=/var/log/httpd
+	APACHELOGDIR=/var/log/httpd
 fi
 
 if [ -d "/etc/apache2" ]; then
-  APACHELOGDIR=/var/log/apache2
+	APACHELOGDIR=/var/log/apache2
 fi
 
 

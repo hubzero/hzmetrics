@@ -82,77 +82,77 @@ $dbhandle = DBI->connect("DBI:mysql:$metrics_db:$db_host", $db_user, $db_pass);
 #print "Finding all Middleware records...\n";
 $statement = "SELECT joblog.start, sessionlog.username, sessionlog.remoteip, sessionlog.appname, sessionlog.exechost, joblog.cputime FROM joblog, sessionlog WHERE joblog.sessnum = sessionlog.sessnum AND sessionlog.username NOT IN (".$exclude_users.") AND sessionlog.username NOT LIKE 'hctest%' ORDER BY joblog.start, sessionlog.username, sessionlog.remoteip";
 $mw_sthandle = $mw_handle->prepare($statement)
-  or die "Error:  can't prepare statement \"$statement\" ($mw_handle->errstr).\n";
+    or die "Error:  can't prepare statement \"$statement\" ($mw_handle->errstr).\n";
 $mw_rowvalues = $mw_sthandle->execute
-  or die "Error:  can't execute the query ($mw_sthandle->errstr).\n";
+    or die "Error:  can't execute the query ($mw_sthandle->errstr).\n";
 
 #  Select all toolstart records already imported from Middleware...
 #----------------------------------------------------------------
 #print "Finding all toolstart records already imported from Middleware...\n";
 $statement = "SELECT id, datetime, user, ip, tool, execunit, cputime FROM toolstart ORDER BY datetime, user, ip";
 $dbsthandle = $dbhandle->prepare($statement)
-  or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
+    or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
 $dbrowvalues = $dbsthandle->execute
-  or die "Error:  can't execute the query ($dbsthandle->errstr).\n";
+    or die "Error:  can't execute the query ($dbsthandle->errstr).\n";
 
 #print "Importing Middleware records into usage database...\n";
 @dbrow = $dbsthandle->fetchrow_array;
 while(@mw_row = $mw_sthandle->fetchrow_array) {
-	$dt = $mw_row[0];
-	$user = $mw_row[1];
-	$ip = $mw_row[2];
-	$tool = $mw_row[3];
-	$execunit = $mw_row[4];
-	$cputime = $mw_row[5];
+    $dt = $mw_row[0];
+    $user = $mw_row[1];
+    $ip = $mw_row[2];
+    $tool = $mw_row[3];
+    $execunit = $mw_row[4];
+    $cputime = $mw_row[5];
 
-	#  If no ending datetime, mark cputime as unknown...
-	#-----------------------------------------------------
-	if($cputime && $cputime < 0) {
-		$cputime = -1;
-	}
-	else {
-		$cputime = int($cputime + .5);
-	}
+    #  If no ending datetime, mark cputime as unknown...
+    #-----------------------------------------------------
+    if($cputime && $cputime < 0) {
+        $cputime = -1;
+    }
+    else {
+        $cputime = int($cputime + .5);
+    }
 
-	#  Advance toolstart pointer up to Middleware ponter...
-	#----------------------------------------------------
-	while( @dbrow
-	   && ($dbrow[1] lt $dt
-	   || ($dbrow[1] eq $dt && $dbrow[2] lt $user)
-	   || ($dbrow[1] eq $dt && $dbrow[2] eq $user && $dbrow[3] lt $ip)) ) {
-		@dbrow = $dbsthandle->fetchrow_array;
-	}
+    #  Advance toolstart pointer up to Middleware ponter...
+    #----------------------------------------------------
+    while( @dbrow
+         && ($dbrow[1] lt $dt
+         || ($dbrow[1] eq $dt && $dbrow[2] lt $user)
+         || ($dbrow[1] eq $dt && $dbrow[2] eq $user && $dbrow[3] lt $ip)) ) {
+        @dbrow = $dbsthandle->fetchrow_array;
+    }
 
-	#  Check for an existing toolstart record...
-	#--------------------------------------------
-	if(@dbrow && $dbrow[1] eq $dt && $dbrow[2] eq $user && $dbrow[3] eq $ip) {
+    #  Check for an existing toolstart record...
+    #--------------------------------------------
+    if(@dbrow && $dbrow[1] eq $dt && $dbrow[2] eq $user && $dbrow[3] eq $ip) {
 
-		#  If toolstart record is incomplete, check Middleware record for an update...
-		#---------------------------------------------------------------------------
-		if($dbrow[6] <= 0 && $cputime > 0) {
-			$statement = "UPDATE toolstart SET cputime = " . $dbhandle->quote($cputime)
-			   . " WHERE id = " . $dbhandle->quote($dbrow[0])
-		}
-		else {
-			$statement = "";
-		}
-		@dbrow = $dbsthandle->fetchrow_array;
-	}
-	else {
+        #  If toolstart record is incomplete, check Middleware record for an update...
+        #---------------------------------------------------------------------------
+        if($dbrow[6] <= 0 && $cputime > 0) {
+            $statement = "UPDATE toolstart SET cputime = " . $dbhandle->quote($cputime)
+                 . " WHERE id = " . $dbhandle->quote($dbrow[0])
+        }
+        else {
+            $statement = "";
+        }
+        @dbrow = $dbsthandle->fetchrow_array;
+    }
+    else {
 
-		#  If no existing toolstart record,
-		#  Do nothing as are just importing CPUtimes
-		#-------------------------------------------------------
-	}
-	if($statement) {
-		if($debug > 1) {
-			print $statement . "\n";
-		}
-		elsif(!$debug) {
-			$dbhandle->do($statement)
-			  or die "Error:  can't execute statement \"$statement\" ($dbhandle->errstr).\n";
-		}
-	}
+        #  If no existing toolstart record,
+        #  Do nothing as are just importing CPUtimes
+        #-------------------------------------------------------
+    }
+    if($statement) {
+        if($debug > 1) {
+            print $statement . "\n";
+        }
+        elsif(!$debug) {
+            $dbhandle->do($statement)
+                or die "Error:  can't execute statement \"$statement\" ($dbhandle->errstr).\n";
+        }
+    }
 }
 
 

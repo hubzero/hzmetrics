@@ -29,19 +29,19 @@
 
 function get_paths(&$db_hub, $resid_list) {
 
-    global $hub_db, $db_prefix;
+	global $hub_db, $db_prefix;
 
 	$match_string = '';
 	$sql = 'SELECT path, id FROM '.$hub_db.'.'.$db_prefix.'resources WHERE path <> "" AND id IN ('.$resid_list.') AND path NOT LIKE "http%"';
 	$result = mysqli_query($db_hub, $sql);
 	if($result) {
-   		if(mysqli_num_rows($result) > 0) {
-       		while($row = mysqli_fetch_assoc($result)) {
+		if(mysqli_num_rows($result) > 0) {
+			while($row = mysqli_fetch_assoc($result)) {
 				$path = $row['path'];
 				$path = str_replace(' ','%20', $path);
 				# print $path."\n";
 				$resid = $row['id'];
-	            if (preg_match('/^([0-9]+)(.+)$/', $path)) {
+				if (preg_match('/^([0-9]+)(.+)$/', $path)) {
 					$path_ = explode("/",$path);
 					if ($path_[sizeof($path_)-1] == "viewer.swf") {
 
@@ -68,20 +68,20 @@ function get_paths(&$db_hub, $resid_list) {
 
 						$match_string .= 'content = "'.$path1.'" OR content = "'.$path2.'" OR ';
 					}
-			    } else {
-	            	 if ( (preg_match('/^\/resources\/(.+)$/', $path)) || (preg_match('/^\/site\/resources\/(.+)$/', $path)) || (preg_match('/^\/local\/(.+)$/', $path)) || (preg_match('/^\/site\/(.+)$/', $path)) ) {
+				} else {
+					if ( (preg_match('/^\/resources\/(.+)$/', $path)) || (preg_match('/^\/site\/resources\/(.+)$/', $path)) || (preg_match('/^\/local\/(.+)$/', $path)) || (preg_match('/^\/site\/(.+)$/', $path)) ) {
 						$match_string .= 'content = "'.$path.'" OR ';
 
-			    	} else if ( preg_match('/^\/topics\/(.+)$/', $path) ) {
+					} else if ( preg_match('/^\/topics\/(.+)$/', $path) ) {
 
 						$match_string .= 'content LIKE "'.$path.'%" OR ';
 
-			    	} else if ( preg_match('/^lm\/(.+)$/', $path) ) {
+					} else if ( preg_match('/^lm\/(.+)$/', $path) ) {
 
 						if ( preg_match('/^lm\/(.+)\/(.+)\.(.+)$/', $path) ) {
-						    $match_string .= 'content LIKE "'.substr($path, 0, strrpos($path, '/')).'/%" OR ';
+							$match_string .= 'content LIKE "'.substr($path, 0, strrpos($path, '/')).'/%" OR ';
 						} else {
-						    $match_string .= 'content = "/site/resources/'.$path.'" OR ';
+							$match_string .= 'content = "/site/resources/'.$path.'" OR ';
 						}
 
 					} else {
@@ -104,10 +104,10 @@ function get_paths(&$db_hub, $resid_list) {
 
 function get_child_resources(&$db_hub, $resid, &$child_resid_list) {
 
-    global $hub_db, $db_prefix;
+	global $hub_db, $db_prefix;
 
-    $count = 0;
-    $child_resids = '';
+	$count = 0;
+	$child_resids = '';
 	
 	// todo remove this below line outside of this method
 	#array_push($child_resid_list, $resid);
@@ -118,47 +118,47 @@ function get_child_resources(&$db_hub, $resid, &$child_resid_list) {
 	}
 	$already_a_child = rtrim($already_a_child,',');
 
-    # $sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.')';
+	# $sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.')';
 	# Fix for segmentation fault problem
-    $sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.') AND child_id NOT IN ('.$already_a_child.')';
+	$sql = 'SELECT DISTINCT child_id FROM '.$hub_db.'.'.$db_prefix.'resource_assoc WHERE parent_id IN ('.$resid.') AND child_id NOT IN ('.$already_a_child.')';
 	$result = mysqli_query($db_hub, $sql);
-    if($result) {
-        if(mysqli_num_rows($result) > 0) {
-            while($row = mysqli_fetch_assoc($result)) {
-                $count++;
-                $child_resids .= $row['child_id'].',';
-                array_push($child_resid_list, $row['child_id']);
-            }
-        }
-    } else {
-        echo mysqli_error($db_hub)." while executing ".$sql."\n";
-        die;
-    }
-    if ($count) {
-        $child_resids = rtrim($child_resids,',');
-        get_child_resources($db_hub, $child_resids, $child_resid_list);
-    }
+	if($result) {
+		if(mysqli_num_rows($result) > 0) {
+			while($row = mysqli_fetch_assoc($result)) {
+				$count++;
+				$child_resids .= $row['child_id'].',';
+				array_push($child_resid_list, $row['child_id']);
+			}
+		}
+	} else {
+		echo mysqli_error($db_hub)." while executing ".$sql."\n";
+		die;
+	}
+	if ($count) {
+		$child_resids = rtrim($child_resids,',');
+		get_child_resources($db_hub, $child_resids, $child_resid_list);
+	}
 }
 
 function get_elementids(&$db_hub, $resid_list) {
 
 	global $metrics_db;
 
-    $list = '';
-    $sql = 'SELECT id FROM '.$metrics_db.'.elements WHERE resourceid IN ('.$resid_list.')';
+	$list = '';
+	$sql = 'SELECT id FROM '.$metrics_db.'.elements WHERE resourceid IN ('.$resid_list.')';
 	$result = mysqli_query($db_hub, $sql);
-    if($result) {
-        if(mysqli_num_rows($result) > 0) {
-            while($row = mysqli_fetch_assoc($result)) {
-                $list .= dbquote($row['id']).',';
-            }
-        }
-    } else {
+	if($result) {
+		if(mysqli_num_rows($result) > 0) {
+			while($row = mysqli_fetch_assoc($result)) {
+				$list .= dbquote($row['id']).',';
+			}
+		}
+	} else {
 		$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
 		clean_exit($msg);
-    }
-    $elementid_list = rtrim($list,',');
-    return $elementid_list;
+	}
+	$elementid_list = rtrim($list,',');
+	return $elementid_list;
 
 }
 

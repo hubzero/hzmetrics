@@ -48,15 +48,15 @@ require_once(__DIR__."/includes/func_misc.php");
 $db_hub = db_connect('db_hub');
 
 if ($_SERVER['argc'] < 2) {
-	$year = date('Y');
-	$lastmonth = sprintf("%02d", date('m')-1);
-	if (date('m') == "1") {
-		$lastmonth = 12;
-		$year = $year-1;
-	}
-	$dthis_ = $year.'-'.$lastmonth.'-01';
+    $year = date('Y');
+    $lastmonth = sprintf("%02d", date('m')-1);
+    if (date('m') == "1") {
+        $lastmonth = 12;
+        $year = $year-1;
+    }
+    $dthis_ = $year.'-'.$lastmonth.'-01';
 } else {
-	$dthis_ = $_SERVER['argv'][1].'-01';
+    $dthis_ = $_SERVER['argv'][1].'-01';
 }
 
 $dbug = 0;
@@ -84,20 +84,20 @@ if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
             $parts = pathinfo($row[0]);
-			if (!empty($parts['extension']))
-            	array_push($file_exts, $parts['extension']);
+            if (!empty($parts['extension']))
+                array_push($file_exts, $parts['extension']);
             if (!empty($parts['basename']))
-            	array_push($file_names, $parts['basename']);
+                array_push($file_names, $parts['basename']);
         }
     }
 } else {
-	 $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 clean_exit($msg);
+     $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+     clean_exit($msg);
 }
 
 $download_files = ' w.content LIKE "/resources/%/download/%" OR w.dnload = 1 OR ';
 foreach (array_unique($file_names) as $file_name) {
-	$file_name = '/resources/%'.$file_name.'%';
+    $file_name = '/resources/%'.$file_name.'%';
     $download_files .= ' w.content LIKE '.dbquote($file_name).' OR ';
 }
 $download_files = rtrim($download_files," OR ");
@@ -120,7 +120,7 @@ foreach ($periods as $period) {
     # --------------------------------------------------------------------------------------------
     # Forming list of all IPs where users logged in from
     $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.userlogin_lite WHERE action IN ("login","simulation") AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-	$login_ips = get_ip_list($db_hub, $sql);
+    $login_ips = get_ip_list($db_hub, $sql);
 
     compute_all($db_hub, $dthis, $dstart, $dstop, $period, $login_ips);
 
@@ -132,46 +132,46 @@ db_close($db_hub);
 # Function Compute_all
 function compute_all(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 
-	global $dbug;
+    global $dbug;
 
-	if ($dbug) {
-    	print n.'Generating summary page data for month='.$dthis.'. Period='.$period;
-    	print ' ('.$dstart.' to '.$dstop.')'."\n";
-	}
-	reg_users($db_hub, $dthis, $dstart, $dstop, $period);
-	int_users($db_hub, $dthis, $dstart, $dstop, $period, $login_ips);
-	download_users($db_hub, $dthis, $dstart, $dstop, $period, $login_ips);
-	total_users($db_hub, $dthis, $dstart, $dstop, $period);
+    if ($dbug) {
+        print n.'Generating summary page data for month='.$dthis.'. Period='.$period;
+        print ' ('.$dstart.' to '.$dstop.')'."\n";
+    }
+    reg_users($db_hub, $dthis, $dstart, $dstop, $period);
+    int_users($db_hub, $dthis, $dstart, $dstop, $period, $login_ips);
+    download_users($db_hub, $dthis, $dstart, $dstop, $period, $login_ips);
+    total_users($db_hub, $dthis, $dstart, $dstop, $period);
 
-	sim_users($db_hub, $dthis, $dstart, $dstop, $period);
-	sim_usage($db_hub, $dthis, $dstart, $dstop, $period);
-	misc_usage($db_hub, $dthis, $dstart, $dstop, $period);
+    sim_users($db_hub, $dthis, $dstart, $dstop, $period);
+    sim_usage($db_hub, $dthis, $dstart, $dstop, $period);
+    misc_usage($db_hub, $dthis, $dstart, $dstop, $period);
 }
 
 # --------------------------------------------------------------------------------------------
 # Total Users
 function total_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
 
-	global $metrics_db;
+    global $metrics_db;
 
-	$table = $metrics_db.'.summary_user_vals';
-	$rowid = 1;
-	$colid = 1;
+    $table = $metrics_db.'.summary_user_vals';
+    $rowid = 1;
+    $colid = 1;
 
-	while ($colid < 12) {
+    while ($colid < 12) {
 
-		$valfmt = 2;
-		if ($colid == "1" || $colid == "2" || $colid == "7")
-			$valfmt = 1;
+        $valfmt = 2;
+        if ($colid == "1" || $colid == "2" || $colid == "7")
+            $valfmt = 1;
 
-		// Calculating totals from rows 6, 7 and 8
-		$sql = 'SELECT SUM(value) FROM '.$table.' WHERE valfmt = '.dbquote($valfmt).' AND colid = '.dbquote($colid).' AND period = '.dbquote($period).' AND datetime = '.dbquote($dthis).' AND rowid IN (6,7,8)'; 
-		$value = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $value, $valfmt, $table);
+        // Calculating totals from rows 6, 7 and 8
+        $sql = 'SELECT SUM(value) FROM '.$table.' WHERE valfmt = '.dbquote($valfmt).' AND colid = '.dbquote($colid).' AND period = '.dbquote($period).' AND datetime = '.dbquote($dthis).' AND rowid IN (6,7,8)'; 
+        $value = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $value, $valfmt, $table);
 
-		$colid++;
-	}
+        $colid++;
+    }
 
 }
 
@@ -179,260 +179,260 @@ function total_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
 # --------------------------------------------------------------------------------------------
 # Registered Users 
 function reg_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
-	
-	global $hub_db, $metrics_db, $db_prefix;
+    
+    global $hub_db, $metrics_db, $db_prefix;
 
-	$table = $metrics_db.".summary_user_vals";
-	$rowid = 6;
+    $table = $metrics_db.".summary_user_vals";
+    $rowid = 6;
 
-	# -------------------------- 
-	# Registered Users "Total"
-	$colid = 1;
-	$valfmt = 1;
+    # -------------------------- 
+    # Registered Users "Total"
+    $colid = 1;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND action IN ("login","simulation")';
-	$reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND action IN ("login","simulation")';
+    $reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Identified
-	$colid = 2;
-	$valfmt = 1;
+    # -------------------------- 
+    # Residence Identified
+    $colid = 2;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident <> ""';
-	$res_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident <> ""';
+    $res_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence US 
-	$colid = 3;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence US 
+    $colid = 3;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident = "US"';
-	$us_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident = "US"';
+    $us_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Asia 
-	$colid = 4;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Asia 
+    $colid = 4;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident IN ('.$country_list.')';
-	$asia_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident IN ('.$country_list.')';
+    $asia_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Europe
-	$colid = 5;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Europe
+    $colid = 5;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident IN ('.$country_list.')';
-	$europe_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident IN ('.$country_list.')';
+    $europe_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Other
-	$colid = 6;
-	$valfmt = 2;
-	
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
-	$country_list = get_countries($db_hub, $country_sql);
+    # -------------------------- 
+    # Residence Other
+    $colid = 6;
+    $valfmt = 2;
+    
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident <> "" AND u.countryresident IN ('.$country_list.') AND u.countryresident <> "US"';
-	$res_other_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.countryresident <> "" AND u.countryresident IN ('.$country_list.') AND u.countryresident <> "US"';
+    $res_other_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization Identified
-	$colid = 7;
-	$valfmt = 1;
+    # -------------------------- 
+    # Organization Identified
+    $colid = 7;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype <> ""';
-	$org_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_identified, $valfmt, $table);
-	
-	# -------------------------- 
-	# Organization  - Educational
-	$colid = 8;
-	$valfmt = 2;
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype <> ""';
+    $org_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_identified, $valfmt, $table);
+    
+    # -------------------------- 
+    # Organization  - Educational
+    $colid = 8;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege")';
-	$edu_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $edu_reg_users, $valfmt, $table);
-	
-	# -------------------------- 
-	# Organization  - Industry
-	$colid = 9;
-	$valfmt = 2;
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege")';
+    $edu_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $edu_reg_users, $valfmt, $table);
+    
+    # -------------------------- 
+    # Organization  - Industry
+    $colid = 9;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype = "industry"';
-	$ind_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $ind_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype = "industry"';
+    $ind_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $ind_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization  - Government
-	$colid = 10;
-	$valfmt = 2;
+    # -------------------------- 
+    # Organization  - Government
+    $colid = 10;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype = "government"';
-	$gov_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $gov_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype = "government"';
+    $gov_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $gov_reg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization  - Other
-	$colid = 11;
-	$valfmt = 2;
+    # -------------------------- 
+    # Organization  - Other
+    $colid = 11;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype NOT IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege","government","industry") AND u.orgtype <> ""';
-	$org_other_reg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_other_reg_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT ul.user) FROM '.$metrics_db.'.userlogin_lite AS ul, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS u WHERE u.username=ul.user AND ul.datetime > '.dbquote($dstart).' AND ul.datetime < '.dbquote($dstop).' AND ul.action IN ("login","simulation") AND u.orgtype NOT IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege","government","industry") AND u.orgtype <> ""';
+    $org_other_reg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_other_reg_users, $valfmt, $table);
 
 }
 
 # --------------------------------------------------------------------------------------------
 # Simulation Users 
 function sim_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
-	
-	global $hub_db, $metrics_db;
+    
+    global $hub_db, $metrics_db;
 
-	$table = $metrics_db.".summary_user_vals";
-	$rowid = 2;
+    $table = $metrics_db.".summary_user_vals";
+    $rowid = 2;
 
-	# -------------------------- 
-	# Simulation Users "Total"
-	$colid = 1;
-	$valfmt = 1;
+    # -------------------------- 
+    # Simulation Users "Total"
+    $colid = 1;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-	$sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+    $sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Identified
-	$colid = 2;
-	$valfmt = 1;
+    # -------------------------- 
+    # Residence Identified
+    $colid = 2;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident <> ""';
-	$res_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident <> ""';
+    $res_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence US 
-	$colid = 3;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence US 
+    $colid = 3;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident = "US"';
-	$us_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident = "US"';
+    $us_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Asia 
-	$colid = 4;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Asia 
+    $colid = 4;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident IN ('.$country_list.')';
-	$asia_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident IN ('.$country_list.')';
+    $asia_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Europe
-	$colid = 5;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Europe
+    $colid = 5;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident IN ('.$country_list.')';
-	$europe_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident IN ('.$country_list.')';
+    $europe_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Other
-	$colid = 6;
-	$valfmt = 2;
-	
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
-	$country_list = get_countries($db_hub, $country_sql);
+    # -------------------------- 
+    # Residence Other
+    $colid = 6;
+    $valfmt = 2;
+    
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident <> "" AND countryresident IN ('.$country_list.') AND countryresident <> "US"';
-	$res_other_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND countryresident <> "" AND countryresident IN ('.$country_list.') AND countryresident <> "US"';
+    $res_other_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization Identified
-	$colid = 7;
-	$valfmt = 1;
+    # -------------------------- 
+    # Organization Identified
+    $colid = 7;
+    $valfmt = 1;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype <> ""';
-	$org_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_identified, $valfmt, $table);
-	
-	# -------------------------- 
-	# Organization  - Educational
-	$colid = 8;
-	$valfmt = 2;
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype <> ""';
+    $org_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_identified, $valfmt, $table);
+    
+    # -------------------------- 
+    # Organization  - Educational
+    $colid = 8;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege")';
-	$edu_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $edu_sim_users, $valfmt, $table);
-	
-	# -------------------------- 
-	# Organization  - Industry 
-	$colid = 9;
-	$valfmt = 2;
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege")';
+    $edu_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $edu_sim_users, $valfmt, $table);
+    
+    # -------------------------- 
+    # Organization  - Industry 
+    $colid = 9;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype  = "industry"';
-	$ind_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $ind_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype  = "industry"';
+    $ind_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $ind_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization  - Governmenet
-	$colid = 10;
-	$valfmt = 2;
+    # -------------------------- 
+    # Organization  - Governmenet
+    $colid = 10;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype  = "government"';
-	$gov_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $gov_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype  = "government"';
+    $gov_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $gov_sim_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization  - Other
-	$colid = 11;
-	$valfmt = 2;
+    # -------------------------- 
+    # Organization  - Other
+    $colid = 11;
+    $valfmt = 2;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype NOT IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege","government","industry") AND orgtype <> ""';
-	$org_other_sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_other_sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND orgtype NOT IN ("universityundergraduate","universitygraduate","universityfaculty","universitystaff","precollegestudent","precollegefacultystaff","university","educational","precollege","government","industry") AND orgtype <> ""';
+    $org_other_sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $org_other_sim_users, $valfmt, $table);
 
 }
 
@@ -440,264 +440,264 @@ function sim_users(&$db_hub, $dthis, $dstart, $dstop, $period) {
 # UnRegistered Users Unique
 function int_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 
-	global $hub_db, $metrics_db;
+    global $hub_db, $metrics_db;
 
-	$table = $metrics_db.".summary_user_vals";
-	$rowid = 7;
+    $table = $metrics_db.".summary_user_vals";
+    $rowid = 7;
 
-	# -------------------------- 
-	# UnRegistered Users "Total"
-	$colid = 1;
-	$valfmt = 1;
+    # -------------------------- 
+    # UnRegistered Users "Total"
+    $colid = 1;
+    $valfmt = 1;
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.')';
-	$unreg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $unreg_users, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.')';
+    $unreg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $unreg_users, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900"';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$unreg_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $unreg_users, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900"';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $unreg_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $unreg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Identified
-	$colid = 2;
-	$valfmt = 1;
+    # -------------------------- 
+    # Residence Identified
+    $colid = 2;
+    $valfmt = 1;
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry <> "" AND ipcountry <> "-"';
-	$res_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry <> "" AND ipcountry <> "-"';
+    $res_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry <> "" AND ipcountry <> "-"';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$res_identified += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry <> "" AND ipcountry <> "-"';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $res_identified += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence US 
-	$colid = 3;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence US 
+    $colid = 3;
+    $valfmt = 2;
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry = "US"';
-	$us_unreg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_unreg_users, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry = "US"';
+    $us_unreg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_unreg_users, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry = "US"';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$us_unreg_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_unreg_users, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry = "US"';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $us_unreg_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_unreg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Asia 
-	$colid = 4;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Asia 
+    $colid = 4;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.')';
-	$asia_unreg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_unreg_users, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.')';
+    $asia_unreg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_unreg_users, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.')';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$asia_unreg_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_unreg_users, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.')';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $asia_unreg_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_unreg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Europe
-	$colid = 5;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Europe
+    $colid = 5;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.')';
-	$europe_unreg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_unreg_users, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.')';
+    $europe_unreg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_unreg_users, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.')';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$europe_unreg_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_unreg_users, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.')';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $europe_unreg_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_unreg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Other
-	$colid = 6;
-	$valfmt = 2;
-	
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
-	$country_list = get_countries($db_hub, $country_sql);
+    # -------------------------- 
+    # Residence Other
+    $colid = 6;
+    $valfmt = 2;
+    
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("EU","AS")';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 7;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.') AND ipcountry <> "US"';
-	$res_other_unreg_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_unreg_users, $valfmt, $table);
+    $rowid = 7;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS users FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND duration >= "900" AND jobs = "0" AND ip NOT IN ('.$login_ips.') AND ipcountry IN ('.$country_list.') AND ipcountry <> "US"';
+    $res_other_unreg_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_unreg_users, $valfmt, $table);
 
-	$rowid = 3;
-	$sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.') AND ipcountry <> "US"';
-	$int_user_ips = get_ip_list($db_hub, $sql);
-	if ($int_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
-		$res_other_unreg_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_unreg_users, $valfmt, $table);
+    $rowid = 3;
+    $sql = 'SELECT DISTINCT ip FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND jobs  = "0" AND duration >= "900" AND ipcountry IN ('.$country_list.') AND ipcountry <> "US"';
+    $int_user_ips = get_ip_list($db_hub, $sql);
+    if ($int_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$int_user_ips.')';
+        $res_other_unreg_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_unreg_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization all
-	$rowid = 7;
-	$identified = 0;
-	$edu = 0;
-	$gov = 0;
-	$ind = 0;
-	$other = 0;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') GROUP BY class ORDER BY class';
-	$result = mysqli_query($db_hub, $sql);
-	if($result) {
-   		if(mysqli_num_rows($result) > 0) {
-       		while($row = mysqli_fetch_row($result)) {
-				if ($row[1] == '1') {
-					$edu = $row[0];
-				} elseif ($row[1] == '2') {
-					$ind = $row[0];
-				} elseif ($row[1] == '3') {
-					$gov = $row[0];
-				} elseif ($row[1] == '6') {
-					$other = $row[0];
-				}
-				$identified = $identified + $row[0];
-       		}
-   		}
-	} else {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
+    # -------------------------- 
+    # Organization all
+    $rowid = 7;
+    $identified = 0;
+    $edu = 0;
+    $gov = 0;
+    $ind = 0;
+    $other = 0;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') GROUP BY class ORDER BY class';
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                if ($row[1] == '1') {
+                    $edu = $row[0];
+                } elseif ($row[1] == '2') {
+                    $ind = $row[0];
+                } elseif ($row[1] == '3') {
+                    $gov = $row[0];
+                } elseif ($row[1] == '6') {
+                    $other = $row[0];
+                }
+                $identified = $identified + $row[0];
+            }
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
 
-	$colid = 7;
-	$valfmt = 1;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
-	
-	$colid = 8;
-	$valfmt = 2;
-	$val = $edu;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 9;
-	$valfmt = 2;
-	$val = $ind;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 10;
-	$valfmt = 2;
-	$val = $gov;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 11;
-	$valfmt = 2;
-	$val = $other;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    $colid = 7;
+    $valfmt = 1;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
+    
+    $colid = 8;
+    $valfmt = 2;
+    $val = $edu;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 9;
+    $valfmt = 2;
+    $val = $ind;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 10;
+    $valfmt = 2;
+    $val = $gov;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 11;
+    $valfmt = 2;
+    $val = $other;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization all
-	$rowid = 3;
-	$identified = 0;
-	$edu = 0;
-	$gov = 0;
-	$ind = 0;
-	$other = 0;
-	# $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND GROUP BY class ORDER BY class';
-	$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
-	$result = mysqli_query($db_hub, $sql);
-	if($result) {
-   		if(mysqli_num_rows($result) > 0) {
-       		while($row = mysqli_fetch_row($result)) {
-				if ($row[1] == '1') {
-					$edu = $row[0];
-				} elseif ($row[1] == '2') {
-					$ind = $row[0];
-				} elseif ($row[1] == '3') {
-					$gov = $row[0];
-				} elseif ($row[1] == '6') {
-					$other = $row[0];
-				}
-				$identified = $identified + $row[0];
-       		}
-   		}
-	} else {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
+    # -------------------------- 
+    # Organization all
+    $rowid = 3;
+    $identified = 0;
+    $edu = 0;
+    $gov = 0;
+    $ind = 0;
+    $other = 0;
+    # $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND GROUP BY class ORDER BY class';
+    $sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "900" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                if ($row[1] == '1') {
+                    $edu = $row[0];
+                } elseif ($row[1] == '2') {
+                    $ind = $row[0];
+                } elseif ($row[1] == '3') {
+                    $gov = $row[0];
+                } elseif ($row[1] == '6') {
+                    $other = $row[0];
+                }
+                $identified = $identified + $row[0];
+            }
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
 
-	$colid = 7;
-	$valfmt = 1;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
-	
-	$colid = 8;
-	$valfmt = 2;
-	$val = $edu;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 9;
-	$valfmt = 2;
-	$val = $ind;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 10;
-	$valfmt = 2;
-	$val = $gov;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 11;
-	$valfmt = 2;
-	$val = $other;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    $colid = 7;
+    $valfmt = 1;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
+    
+    $colid = 8;
+    $valfmt = 2;
+    $val = $edu;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 9;
+    $valfmt = 2;
+    $val = $ind;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 10;
+    $valfmt = 2;
+    $val = $gov;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 11;
+    $valfmt = 2;
+    $val = $other;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
 
 }
 
@@ -705,302 +705,302 @@ function int_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 # Download Users Unique
 function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 
-	global $hub_db, $metrics_db, $download_files;
+    global $hub_db, $metrics_db, $download_files;
 
-	$table = $metrics_db.".summary_user_vals";
+    $table = $metrics_db.".summary_user_vals";
 
-	if ($download_files) {
+    if ($download_files) {
 
-	# -------------------------- 
-	# Download Users "Total"
-	$colid = 1;
-	$valfmt = 1;
+    # -------------------------- 
+    # Download Users "Total"
+    $colid = 1;
+    $valfmt = 1;
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.')';
-	$dl_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $dl_users, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.')';
+    $dl_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $dl_users, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.')';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$dl_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $dl_users, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.')';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $dl_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $dl_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Identified
-	$colid = 2;
-	$valfmt = 1;
+    # -------------------------- 
+    # Residence Identified
+    $colid = 2;
+    $valfmt = 1;
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry <> "" AND ws.ipcountry <> "-"';
-	$res_identified = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry <> "" AND ws.ipcountry <> "-"';
+    $res_identified = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).'  AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry <> "" AND ws.ipcountry <> "-"';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$res_identified += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).'  AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry <> "" AND ws.ipcountry <> "-"';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $res_identified += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_identified, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence US 
-	$colid = 3;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence US 
+    $colid = 3;
+    $valfmt = 2;
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry = "US"';
-	$us_dl_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_dl_users, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry = "US"';
+    $us_dl_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_dl_users, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry = "US"';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$us_dl_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_dl_users, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry = "US"';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $us_dl_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $us_dl_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Asia 
-	$colid = 4;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Asia 
+    $colid = 4;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="AS"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
-	$asia_dl_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_dl_users, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
+    $asia_dl_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_dl_users, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$asia_dl_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_dl_users, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $asia_dl_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $asia_dl_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Europe
-	$colid = 5;
-	$valfmt = 2;
+    # -------------------------- 
+    # Residence Europe
+    $colid = 5;
+    $valfmt = 2;
 
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
-	$country_list = get_countries($db_hub, $country_sql);
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent="EU"';
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
-	$europe_dl_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_dl_users, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
+    $europe_dl_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_dl_users, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$europe_dl_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_dl_users, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.')';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $europe_dl_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $europe_dl_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Residence Other
-	$colid = 6;
-	$valfmt = 2;
-	
-	$country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("AS","EU")';	
-	$country_list = get_countries($db_hub, $country_sql);
+    # -------------------------- 
+    # Residence Other
+    $colid = 6;
+    $valfmt = 2;
+    
+    $country_sql = 'SELECT country FROM '.$metrics_db.'.country_continent WHERE continent NOT IN ("AS","EU")';  
+    $country_list = get_countries($db_hub, $country_sql);
 
-	$rowid = 8;
-	$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.') AND ws.ipcountry <> "US"';
-	$res_other_dl_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_dl_users, $valfmt, $table);
+    $rowid = 8;
+    $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.ip NOT IN ('.$login_ips.') AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.') AND ws.ipcountry <> "US"';
+    $res_other_dl_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_dl_users, $valfmt, $table);
 
-	$rowid = 4;
-	$sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.') AND ws.ipcountry <> "US"';
-	$download_user_ips = get_ip_list($db_hub, $sql);
-	if ($download_user_ips) {
-		$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
-		$res_other_dl_users += db_fetch($db_hub, $sql);
-	}
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_dl_users, $valfmt, $table);
+    $rowid = 4;
+    $sql = 'SELECT DISTINCT ws.ip FROM '.$metrics_db.'.websessions AS ws, '.$metrics_db.'.web AS w WHERE w.sessionid=ws.id AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND ws.jobs = "0" AND ws.duration >= "0" AND ('.$download_files.') AND ws.ipcountry IN ('.$country_list.') AND ws.ipcountry <> "US"';
+    $download_user_ips = get_ip_list($db_hub, $sql);
+    if ($download_user_ips) {
+        $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.userlogin_lite AS ul WHERE (ul.action = "login" OR ul.action = "simulation") AND ul.ip IN ('.$download_user_ips.')';
+        $res_other_dl_users += db_fetch($db_hub, $sql);
+    }
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $res_other_dl_users, $valfmt, $table);
 
-	# -------------------------- 
-	# Organization all
-	$rowid = 8;
+    # -------------------------- 
+    # Organization all
+    $rowid = 8;
     $sess_ids = '';
-	$sql = 'SELECT DISTINCT(sessionid) FROM '.$metrics_db.'.web AS w WHERE ('.$download_files.') AND w.datetime >'.dbquote($dstart).' AND w.datetime < '.dbquote($dstop);
-	$result = mysqli_query($db_hub, $sql);
-	if($result) {
-   		if(mysqli_num_rows($result) > 0) {
-       		while($row = mysqli_fetch_row($result)) {
-				$sess_ids .= "'".$row[0]."',";
-			}
-		} else {
+    $sql = 'SELECT DISTINCT(sessionid) FROM '.$metrics_db.'.web AS w WHERE ('.$download_files.') AND w.datetime >'.dbquote($dstart).' AND w.datetime < '.dbquote($dstop);
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                $sess_ids .= "'".$row[0]."',";
+            }
+        } else {
             $sess_ids = '';
-   		}
-	} else {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
-	$sess_ids = rtrim($sess_ids,",");
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
+    $sess_ids = rtrim($sess_ids,",");
 
-	$identified = 0;
-	$edu = 0;
-	$gov = 0;
-	$ind = 0;
-	$other = 0;
-	if ($sess_ids) {
-		$sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') AND ws.id IN ('.$sess_ids.') GROUP BY class ORDER BY class';
-		$result = mysqli_query($db_hub, $sql);
-		if($result) {
- 	  		if(mysqli_num_rows($result) > 0) {
-       			while($row = mysqli_fetch_row($result)) {
-					if ($row[1] == '1') {
-						$edu = $row[0];
-					} elseif ($row[1] == '2') {
-						$ind = $row[0];
-					} elseif ($row[1] == '3') {
-						$gov = $row[0];
-					} elseif ($row[1] == '6') {
-						$other = $row[0];
-					}
-					$identified = $identified + $row[0];
-       			}
-   			}
-		} else {
-	 		$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 		clean_exit($msg);
-		}
-	}
-	$colid = 7;
-	$valfmt = 1;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
-	
-	$colid = 8;
-	$valfmt = 2;
-	$val = $edu;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 9;
-	$valfmt = 2;
-	$val = $ind;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 10;
-	$valfmt = 2;
-	$val = $gov;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 11;
-	$valfmt = 2;
-	$val = $other;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	# -------------------------- 
-	# Organization all
-	$rowid = 4;
+    $identified = 0;
+    $edu = 0;
+    $gov = 0;
+    $ind = 0;
+    $other = 0;
+    if ($sess_ids) {
+        $sql = 'SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.websessions AS ws LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.ip NOT IN ('.$login_ips.') AND ws.id IN ('.$sess_ids.') GROUP BY class ORDER BY class';
+        $result = mysqli_query($db_hub, $sql);
+        if($result) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
+                    if ($row[1] == '1') {
+                        $edu = $row[0];
+                    } elseif ($row[1] == '2') {
+                        $ind = $row[0];
+                    } elseif ($row[1] == '3') {
+                        $gov = $row[0];
+                    } elseif ($row[1] == '6') {
+                        $other = $row[0];
+                    }
+                    $identified = $identified + $row[0];
+                }
+            }
+        } else {
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+            clean_exit($msg);
+        }
+    }
+    $colid = 7;
+    $valfmt = 1;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
+    
+    $colid = 8;
+    $valfmt = 2;
+    $val = $edu;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 9;
+    $valfmt = 2;
+    $val = $ind;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 10;
+    $valfmt = 2;
+    $val = $gov;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 11;
+    $valfmt = 2;
+    $val = $other;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    # -------------------------- 
+    # Organization all
+    $rowid = 4;
     $sess_ids = '';
-	$sql = 'SELECT DISTINCT(sessionid) FROM '.$metrics_db.'.web AS w WHERE ('.$download_files.') AND w.datetime >'.dbquote($dstart).' AND w.datetime < '.dbquote($dstop);
-	$result = mysqli_query($db_hub, $sql);
-	if($result) {
-   		if(mysqli_num_rows($result) > 0) {
-       		while($row = mysqli_fetch_row($result)) {
-				$sess_ids .= "'".$row[0]."',";
-			}
-		} else {
+    $sql = 'SELECT DISTINCT(sessionid) FROM '.$metrics_db.'.web AS w WHERE ('.$download_files.') AND w.datetime >'.dbquote($dstart).' AND w.datetime < '.dbquote($dstop);
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                $sess_ids .= "'".$row[0]."',";
+            }
+        } else {
             $sess_ids = '';
-   		}
-	} else {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
-	$sess_ids = rtrim($sess_ids,",");
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
+    $sess_ids = rtrim($sess_ids,",");
 
-	$identified = 0;
-	$edu = 0;
-	$gov = 0;
-	$ind = 0;
-	$other = 0;
-	if ($sess_ids) {
-		$sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.id IN ('.$sess_ids.') AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
-		$result = mysqli_query($db_hub, $sql);
-		if($result) {
-   			if(mysqli_num_rows($result) > 0) {
-       			while($row = mysqli_fetch_row($result)) {
-					if ($row[1] == '1') {
-						$edu = $row[0];
-					} elseif ($row[1] == '2') {
-						$ind = $row[0];
-					} elseif ($row[1] == '3') {
-						$gov = $row[0];
-					} elseif ($row[1] == '6') {
-						$other = $row[0];
-					}
-					$identified = $identified + $row[0];
-       			}
-   			}
-		} else {
-	 		$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 		clean_exit($msg);
-		}
-	}
-	$colid = 7;
-	$valfmt = 1;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
-	
-	$colid = 8;
-	$valfmt = 2;
-	$val = $edu;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 9;
-	$valfmt = 2;
-	$val = $ind;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 10;
-	$valfmt = 2;
-	$val = $gov;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
-	
-	$colid = 11;
-	$valfmt = 2;
-	$val = $other;
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    $identified = 0;
+    $edu = 0;
+    $gov = 0;
+    $ind = 0;
+    $other = 0;
+    if ($sess_ids) {
+        $sql = 'SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class, dcs.name AS name FROM '.$metrics_db.'.userlogin_lite AS ul LEFT OUTER JOIN '.$metrics_db.'.websessions AS ws ON ul.ip = ws.ip LEFT OUTER JOIN '.$metrics_db.'.domainclass AS dc ON ws.domain = dc.domain LEFT OUTER JOIN '.$metrics_db.'.domainclasses AS dcs ON dc.class = dcs.class WHERE ws.jobs = "0" AND ws.duration >= "0" AND ws.datetime > '.dbquote($dstart).' AND ws.datetime < '.dbquote($dstop).' AND dc.class > "0" AND dc.class <> "4" AND ws.id IN ('.$sess_ids.') AND (ul.action = "login" OR ul.action = "simulation") GROUP BY class ORDER BY class';
+        $result = mysqli_query($db_hub, $sql);
+        if($result) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
+                    if ($row[1] == '1') {
+                        $edu = $row[0];
+                    } elseif ($row[1] == '2') {
+                        $ind = $row[0];
+                    } elseif ($row[1] == '3') {
+                        $gov = $row[0];
+                    } elseif ($row[1] == '6') {
+                        $other = $row[0];
+                    }
+                    $identified = $identified + $row[0];
+                }
+            }
+        } else {
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+            clean_exit($msg);
+        }
+    }
+    $colid = 7;
+    $valfmt = 1;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $identified, $valfmt, $table);
+    
+    $colid = 8;
+    $valfmt = 2;
+    $val = $edu;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 9;
+    $valfmt = 2;
+    $val = $ind;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 10;
+    $valfmt = 2;
+    $val = $gov;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
+    
+    $colid = 11;
+    $valfmt = 2;
+    $val = $other;
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $val, $valfmt, $table);
 
-	}
+    }
 
 }
 
@@ -1008,254 +1008,254 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 # Simulation usage - Reading all data from Narwhal database
 function sim_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 
-	global $hub_db, $metrics_db, $rappture_tools;
+    global $hub_db, $metrics_db, $rappture_tools;
 
-	$table = $metrics_db.".summary_simusage_vals";
-	$colid = 1;
+    $table = $metrics_db.".summary_simusage_vals";
+    $colid = 1;
 
-	# -------------------------- 
-	# Simulation Users
-	$rowid = 1;
-	$valfmt = 3;
+    # -------------------------- 
+    # Simulation Users
+    $rowid = 1;
+    $valfmt = 3;
 
-	$sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-	$sim_users = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_users, $valfmt, $table);
+    $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+    $sim_users = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_users, $valfmt, $table);
 
-	if ($sim_users) {
-		# -------------------------- 
-		# Simulation Jobs
-		$rowid = 2;
-		$valfmt = 4;
+    if ($sim_users) {
+        # -------------------------- 
+        # Simulation Jobs
+        $rowid = 2;
+        $valfmt = 4;
 
-		$sql = 'SELECT COUNT(user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-		$sim_jobs = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_jobs, $valfmt, $table);
-	
-		# -------------------------- 
-		# CPU Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
-		$rowid = 3;
-		$valfmt = 5;
-	
-		# CPU Time for Non-Rappture tools
-		$sql = 'SELECT COALESCE(SUM(cputime),0) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND appname NOT IN ('.$rappture_tools.')';
-		$cputime_non_rappture = db_fetch($db_hub, $sql);
+        $sql = 'SELECT COUNT(user) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+        $sim_jobs = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $sim_jobs, $valfmt, $table);
+    
+        # -------------------------- 
+        # CPU Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
+        $rowid = 3;
+        $valfmt = 5;
+    
+        # CPU Time for Non-Rappture tools
+        $sql = 'SELECT COALESCE(SUM(cputime),0) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND appname NOT IN ('.$rappture_tools.')';
+        $cputime_non_rappture = db_fetch($db_hub, $sql);
 
-		# CPU Time for Rappture Tools
-    	$sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog j, '.$hub_db.'.sessionlog s WHERE s.sessnum = j.sessnum AND s.start > '.dbquote($dstart).' AND s.start < '.dbquote($dstop).' AND j.event <> "[waiting]" AND j.job > 0 AND s.username <> "gridstat" AND s.username NOT LIKE "hctest%" AND s.appname IN ('.$rappture_tools.')';
-		$cputime_rappture = db_fetch($db_hub, $sql);
+        # CPU Time for Rappture Tools
+        $sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog j, '.$hub_db.'.sessionlog s WHERE s.sessnum = j.sessnum AND s.start > '.dbquote($dstart).' AND s.start < '.dbquote($dstop).' AND j.event <> "[waiting]" AND j.job > 0 AND s.username <> "gridstat" AND s.username NOT LIKE "hctest%" AND s.appname IN ('.$rappture_tools.')';
+        $cputime_rappture = db_fetch($db_hub, $sql);
 
-		$cputime = $cputime_non_rappture + $cputime_rappture;
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $cputime, $valfmt, $table);
+        $cputime = $cputime_non_rappture + $cputime_rappture;
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $cputime, $valfmt, $table);
 
-		# -------------------------- 
-		# WALL Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
-		$rowid = 4;
-		$valfmt = 5;
+        # -------------------------- 
+        # WALL Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
+        $rowid = 4;
+        $valfmt = 5;
 
-		$sql = 'SELECT SUM(walltime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
-		$walltime = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $walltime, $valfmt, $table);
+        $sql = 'SELECT SUM(walltime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
+        $walltime = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $walltime, $valfmt, $table);
 
-		# -------------------------- 
-		# VIEW Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
-		$rowid = 5;
-		$valfmt = 5;
+        # -------------------------- 
+        # VIEW Time = only looking for protocol=7 (narwhal/maxwhen/invigolite)
+        $rowid = 5;
+        $valfmt = 5;
 
-		$sql = 'SELECT SUM(viewtime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
-		$viewtime = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $viewtime, $valfmt, $table);
-	
-		# -------------------------- 
-		# Users with >= 10mins of CPU Time (narwhal/maxwhen/invigolite)
-		$rowid = 6;
-		$valfmt = 3;
+        $sql = 'SELECT SUM(viewtime) FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' AND username <> "gridstat" AND username NOT LIKE "hctest%"';
+        $viewtime = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $viewtime, $valfmt, $table);
+    
+        # -------------------------- 
+        # Users with >= 10mins of CPU Time (narwhal/maxwhen/invigolite)
+        $rowid = 6;
+        $valfmt = 3;
 
-		$sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT username AS users, SUM(cputime) AS total_cputime FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY users HAVING total_cputime >="600" AND username <> "gridstat" AND username NOT LIKE "hctest%") AS SUBTABLE';
-		$cputime = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $cputime, $valfmt, $table);
+        $sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT username AS users, SUM(cputime) AS total_cputime FROM '.$hub_db.'.sessionlog WHERE start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY users HAVING total_cputime >="600" AND username <> "gridstat" AND username NOT LIKE "hctest%") AS SUBTABLE';
+        $cputime = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $cputime, $valfmt, $table);
 
-		# -------------------------- 
-		# Average number of simulation jobs
-		$rowid = 7;
-		$valfmt = 4;
-	
-		$avg_jobs = $sim_jobs/$sim_users;
-	
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $avg_jobs, $valfmt, $table);
-	
-		# Average Time between first and last simulation
-		$rowid = 8;
-		$valfmt = 5;
-		$total = 0;
+        # -------------------------- 
+        # Average number of simulation jobs
+        $rowid = 7;
+        $valfmt = 4;
+    
+        $avg_jobs = $sim_jobs/$sim_users;
+    
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $avg_jobs, $valfmt, $table);
+    
+        # Average Time between first and last simulation
+        $rowid = 8;
+        $valfmt = 5;
+        $total = 0;
 
-		$sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime),count(*) AS jobs FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime > "1995-01-01" AND datetime < '.dbquote($dstop).' GROUP BY users HAVING jobs > 1';
-		$result1 = mysqli_query($db_hub, $sql1);
-    	if ($result1) {
-			if(mysqli_num_rows($result1) > 0) {
-        		while($row1 = mysqli_fetch_row($result1)) {
-               		$user = $row1[0];
-                	$max_date = $row1[1];
-                	$sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > "1995-01-01" AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
-					$result2 = mysqli_query($db_hub, $sql2);
-                	if($result2) {
-                  		if (mysqli_num_rows($result2) > 0) {
-           	    			while($row3 = mysqli_fetch_row($result2)) {
-                           		$days = $max_date - $row3[0];
-                           		$total = $total + $days;
-                        	}
-           	        	} 
-					}
-				}
-			}
-		}
+        $sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime),count(*) AS jobs FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime > "1995-01-01" AND datetime < '.dbquote($dstop).' GROUP BY users HAVING jobs > 1';
+        $result1 = mysqli_query($db_hub, $sql1);
+        if ($result1) {
+            if(mysqli_num_rows($result1) > 0) {
+                while($row1 = mysqli_fetch_row($result1)) {
+                    $user = $row1[0];
+                    $max_date = $row1[1];
+                    $sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > "1995-01-01" AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
+                    $result2 = mysqli_query($db_hub, $sql2);
+                    if($result2) {
+                        if (mysqli_num_rows($result2) > 0) {
+                            while($row3 = mysqli_fetch_row($result2)) {
+                                $days = $max_date - $row3[0];
+                                $total = $total + $days;
+                            }
+                        } 
+                    }
+                }
+            }
+        }
 
-		$avg_days = ($total/$sim_users)*86400;
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $avg_days, $valfmt, $table);
-	
-		# -------------------------- 
-		# Repeat Users with > 10 Simulation Jobs
-		$rowid = 9;
-		$valfmt = 3;
+        $avg_days = ($total/$sim_users)*86400;
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $avg_days, $valfmt, $table);
+    
+        # -------------------------- 
+        # Repeat Users with > 10 Simulation Jobs
+        $rowid = 9;
+        $valfmt = 3;
 
-		$sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT user AS USERS, COUNT(*) AS sims FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' GROUP BY users HAVING sims >=10 ) AS SUBTABLE';
-		$repeat_10jobs = db_fetch($db_hub, $sql);
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $repeat_10jobs, $valfmt, $table);
+        $sql = 'SELECT COUNT(*) FROM (SELECT DISTINCT user AS USERS, COUNT(*) AS sims FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' GROUP BY users HAVING sims >=10 ) AS SUBTABLE';
+        $repeat_10jobs = db_fetch($db_hub, $sql);
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $repeat_10jobs, $valfmt, $table);
 
 
-		# -------------------------- 
-		# Repeat Users with > 3 months
-		$rowid = 10;
-		$valfmt = 3;
-		$query = 90; // 3 months
-		
-		$repeat_3months = 0;	
-		$sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' GROUP BY users';
-		$result1 = mysqli_query($db_hub, $sql1);
-    	if ($result1) {
-			if(mysqli_num_rows($result1) > 0) {
-        		while($row1 = mysqli_fetch_row($result1)) {
-               		$user = $row1[0];
-                	$max_date = $row1[1];
-                	$sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
-					$result2 = mysqli_query($db_hub, $sql2);
-                	if($result2) {
-                  		if (mysqli_num_rows($result2) > 0) {
-           	    			while($row3 = mysqli_fetch_row($result2)) {
-                           		$days = $max_date - $row3[0];
-                            	// checking to see users with no MIN(datetime): If it was their first simulation this period
-                            	if (($days >= $query) && ($row3[0])) {
-                                	$repeat_3months++;
-                            	}
-                        	}
-           	        	}	 
-					}
-				}
-			}
-		}
-		delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-		insert_record($db_hub, $rowid, $colid, $dthis, $period, $repeat_3months, $valfmt, $table);
-	}
+        # -------------------------- 
+        # Repeat Users with > 3 months
+        $rowid = 10;
+        $valfmt = 3;
+        $query = 90; // 3 months
+        
+        $repeat_3months = 0;    
+        $sql1 = 'SELECT DISTINCT(user) AS users, TO_DAYS(MAX(datetime)),MAX(datetime) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' GROUP BY users';
+        $result1 = mysqli_query($db_hub, $sql1);
+        if ($result1) {
+            if(mysqli_num_rows($result1) > 0) {
+                while($row1 = mysqli_fetch_row($result1)) {
+                    $user = $row1[0];
+                    $max_date = $row1[1];
+                    $sql2 = 'SELECT TO_DAYS(MIN(datetime)) FROM '.$metrics_db.'.toolstart WHERE success=1 AND datetime < '.dbquote($row1[2]).' AND user = '.dbquote($user);
+                    $result2 = mysqli_query($db_hub, $sql2);
+                    if($result2) {
+                        if (mysqli_num_rows($result2) > 0) {
+                            while($row3 = mysqli_fetch_row($result2)) {
+                                $days = $max_date - $row3[0];
+                                // checking to see users with no MIN(datetime): If it was their first simulation this period
+                                if (($days >= $query) && ($row3[0])) {
+                                    $repeat_3months++;
+                                }
+                            }
+                        }    
+                    }
+                }
+            }
+        }
+        delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+        insert_record($db_hub, $rowid, $colid, $dthis, $period, $repeat_3months, $valfmt, $table);
+    }
 }
 
 # Miscellaneous Usage
 function misc_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 
-	global $hub_db, $metrics_db, $db_prefix;
+    global $hub_db, $metrics_db, $db_prefix;
 
-	$table = $metrics_db.".summary_misc_vals";
-	$colid = 1;
+    $table = $metrics_db.".summary_misc_vals";
+    $colid = 1;
 
-	# -------------------------- 
-	# domains served
-	$rowid = 1;
-	$valfmt = 1;
-	$sql = 'SELECT COUNT(DISTINCT domain) FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-	$domains = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $domains, $valfmt, $table);
+    # -------------------------- 
+    # domains served
+    $rowid = 1;
+    $valfmt = 1;
+    $sql = 'SELECT COUNT(DISTINCT domain) FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+    $domains = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $domains, $valfmt, $table);
 
-	# -------------------------- 
-	# cummulative User Sessions
-	$rowid = 2;
-	$valfmt = 1;
-	$sql = 'SELECT COUNT(datetime) AS sessions FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "900" OR jobs > "0")';
-	$cum_sessions = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $cum_sessions, $valfmt, $table);
+    # -------------------------- 
+    # cummulative User Sessions
+    $rowid = 2;
+    $valfmt = 1;
+    $sql = 'SELECT COUNT(datetime) AS sessions FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "900" OR jobs > "0")';
+    $cum_sessions = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $cum_sessions, $valfmt, $table);
 
-	# -------------------------- 
-	# cummulative session time
-	$rowid = 3;
-	$valfmt = 5;
-	$sql = 'SELECT SUM(duration) AS sessiontime FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "900" OR jobs > "0")';
-	$cum_session_time = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $cum_session_time, $valfmt, $table);
+    # -------------------------- 
+    # cummulative session time
+    $rowid = 3;
+    $valfmt = 5;
+    $sql = 'SELECT SUM(duration) AS sessiontime FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "900" OR jobs > "0")';
+    $cum_session_time = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $cum_session_time, $valfmt, $table);
 
 
-	# -------------------------- 
-	# visitors:
-	$rowid = 4;
-	$valfmt = 1;
-	$sql = 'SELECT COUNT(DISTINCT ip, host) AS visitors FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "0" OR jobs > "0")';
-	$visitors = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $visitors, $valfmt, $table);
+    # -------------------------- 
+    # visitors:
+    $rowid = 4;
+    $valfmt = 1;
+    $sql = 'SELECT COUNT(DISTINCT ip, host) AS visitors FROM '.$metrics_db.'.websessions WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "0" OR jobs > "0")';
+    $visitors = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $visitors, $valfmt, $table);
 
-	# -------------------------- 
-	# visit:
-	$rowid = 5;
-	$valfmt = 1;
-	$sql = 'SELECT COUNT(datetime) AS visits FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "0" OR jobs > "0")';
-	$visits = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $visits, $valfmt, $table);
+    # -------------------------- 
+    # visit:
+    $rowid = 5;
+    $valfmt = 1;
+    $sql = 'SELECT COUNT(datetime) AS visits FROM '.$metrics_db.'.websessions WHERE datetime  > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND (duration >= "0" OR jobs > "0")';
+    $visits = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $visits, $valfmt, $table);
 
-	# -------------------------- 
-	# new user accounts
-	$rowid = 6;
-	$valfmt = 1;
-	$sql = 'SELECT COUNT(DISTINCT uidNumber) FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE registerDate > '.dbquote($dstart).' AND registerDate < '.dbquote($dstop);
-	$new_accounts = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $new_accounts, $valfmt, $table);
+    # -------------------------- 
+    # new user accounts
+    $rowid = 6;
+    $valfmt = 1;
+    $sql = 'SELECT COUNT(DISTINCT uidNumber) FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE registerDate > '.dbquote($dstart).' AND registerDate < '.dbquote($dstop);
+    $new_accounts = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $new_accounts, $valfmt, $table);
 
-	# -------------------------- 
-	# max user logins on date
-	$sql = 'SELECT LEFT(datetime,10) AS day, COUNT(DISTINCT user) AS logins FROM '.$metrics_db.'.userlogin_lite WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND action IN ("login","simulation") GROUP BY day ORDER BY logins DESC LIMIT 1';
+    # -------------------------- 
+    # max user logins on date
+    $sql = 'SELECT LEFT(datetime,10) AS day, COUNT(DISTINCT user) AS logins FROM '.$metrics_db.'.userlogin_lite WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop).' AND action IN ("login","simulation") GROUP BY day ORDER BY logins DESC LIMIT 1';
     $result = mysqli_query($db_hub, $sql);
     if ($result) {
-		if(mysqli_num_rows($result) > 0) {
-        	while($row = mysqli_fetch_row($result)) {
-               	$ondate = $row[0];
-               	$maxusers = $row[1];
-			}
-		}
-	}
-	$rowid = 7;
-	$valfmt = 6;
- 	$data = $maxusers." users on ".$ondate;	
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $data, $valfmt, $table);
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                $ondate = $row[0];
+                $maxusers = $row[1];
+            }
+        }
+    }
+    $rowid = 7;
+    $valfmt = 6;
+    $data = $maxusers." users on ".$ondate; 
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $data, $valfmt, $table);
 
-	# -------------------------- 
-	# web server hits
-	$rowid = 8;
-	$valfmt = 1;
-	$sql = 'SELECT SUM(hits) AS hits FROM '.$metrics_db.'.webhits WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
-	$hits = db_fetch($db_hub, $sql);
-	delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
-	insert_record($db_hub, $rowid, $colid, $dthis, $period, $hits, $valfmt, $table);
+    # -------------------------- 
+    # web server hits
+    $rowid = 8;
+    $valfmt = 1;
+    $sql = 'SELECT SUM(hits) AS hits FROM '.$metrics_db.'.webhits WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+    $hits = db_fetch($db_hub, $sql);
+    delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
+    insert_record($db_hub, $rowid, $colid, $dthis, $period, $hits, $valfmt, $table);
 
 }
 
@@ -1263,12 +1263,12 @@ function misc_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 # Delete the already present record in database
 function delete_record($db_hub, $rowid, $colid, $dthis, $period, $table) {
 
-	$sql = 'DELETE FROM '.$table.' WHERE rowid = '.dbquote($rowid).' AND colid = '.dbquote($colid).' AND datetime = '.dbquote($dthis).' AND period = '.dbquote($period);
-	$result = mysqli_query($db_hub, $sql);
-	if(!$result) {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
+    $sql = 'DELETE FROM '.$table.' WHERE rowid = '.dbquote($rowid).' AND colid = '.dbquote($colid).' AND datetime = '.dbquote($dthis).' AND period = '.dbquote($period);
+    $result = mysqli_query($db_hub, $sql);
+    if(!$result) {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
 
 }
 
@@ -1276,12 +1276,12 @@ function delete_record($db_hub, $rowid, $colid, $dthis, $period, $table) {
 # Insert a new record
 function insert_record($db_hub, $rowid, $colid, $dthis, $period, $value, $valfmt, $table) {
 
-	$sql = 'INSERT INTO '.$table.' VALUES ('.dbquote($rowid).','.dbquote($colid).','.dbquote($dthis).','.dbquote($period).','.dbquote($value).','.dbquote($valfmt).')';
-	$result = mysqli_query($db_hub, $sql);
-	if(!$result) {
-	 	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	 	clean_exit($msg);
-	}
+    $sql = 'INSERT INTO '.$table.' VALUES ('.dbquote($rowid).','.dbquote($colid).','.dbquote($dthis).','.dbquote($period).','.dbquote($value).','.dbquote($valfmt).')';
+    $result = mysqli_query($db_hub, $sql);
+    if(!$result) {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
 }
 
 ?>

@@ -28,75 +28,75 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
-	clean_exit($msg);
+    $msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."\n";
+    clean_exit($msg);
 }
 
 if ($_SERVER['argv'][1] == "hub") {
-	$table = $hub_db.'.'.$_SERVER['argv'][2];
+    $table = $hub_db.'.'.$_SERVER['argv'][2];
 } else if ($_SERVER['argv'][1] == "metrics") {
-	$table = $metrics_db.'.'.$_SERVER['argv'][2];
+    $table = $metrics_db.'.'.$_SERVER['argv'][2];
 } else {
-	$msg = 'Invalid database type'."\n";
-	clean_exit($msg);
+    $msg = 'Invalid database type'."\n";
+    clean_exit($msg);
 }
 
 $debug = 0;
 $fix_params = array('countrycitizen','countryresident','orgtype');
 
 foreach ($fix_params as $param) {
-	update_tables($db_hub, $param, $table);
+    update_tables($db_hub, $param, $table);
 }
 
 db_close($db_hub);
 
 function update_tables($db_hub, $param, $table) {
 
-	global $metrics_db, $db_prefix, $debug;	
-	
-	if ($debug)
-		print "\n".'Finding all '.$table.' records lacking '.$param.'....'."\n";
+    global $metrics_db, $db_prefix, $debug; 
+    
+    if ($debug)
+        print "\n".'Finding all '.$table.' records lacking '.$param.'....'."\n";
 
-	if ($param == "countrycitizen") {
-		$r_param = "countryorigin";
-	} else {
-		$r_param = $param;
-	}
-	$user_list = '';
-	$queryDate = new DateTime();
-	$queryDate->modify('-7 days');
+    if ($param == "countrycitizen") {
+        $r_param = "countryorigin";
+    } else {
+        $r_param = $param;
+    }
+    $user_list = '';
+    $queryDate = new DateTime();
+    $queryDate->modify('-7 days');
 
-	$sql = 'SELECT DISTINCT user FROM '.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
-	$result = mysqli_query($sql, $db_hub);
-	if($result) {
-		if(mysqli_num_rows($result) > 0) {
-  			while($row = mysqli_fetch_assoc($result)) {
-				$user_list .= '"'.$row['user'].'",';
-			}
-		}
-	} else {
-		$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-   		clean_exit($msg);
-	}
-	$user_list = rtrim($user_list,",");
-	if ($user_list) {
-		$sql = 'SELECT username, countryresident, countryorigin, orgtype FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE username IN ('.$user_list.')'; 
-		$result = mysqli_query($sql, $db_hub);
-		if($result) {
-			if(mysqli_num_rows($result) > 0) {
-  				while($row = mysqli_fetch_assoc($result)) {
-					if ($row[$r_param]) {
-						$value = strtoupper($row[$r_param]);
-						$sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
-						mysqli_exec($db_hub, $sql_updt);
-					}
-				}
-			}
-		} else {
-			$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-   			clean_exit($msg);
-		}
-	}
+    $sql = 'SELECT DISTINCT user FROM '.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
+    $result = mysqli_query($sql, $db_hub);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_assoc($result)) {
+                $user_list .= '"'.$row['user'].'",';
+            }
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
+    $user_list = rtrim($user_list,",");
+    if ($user_list) {
+        $sql = 'SELECT username, countryresident, countryorigin, orgtype FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE username IN ('.$user_list.')'; 
+        $result = mysqli_query($sql, $db_hub);
+        if($result) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_assoc($result)) {
+                    if ($row[$r_param]) {
+                        $value = strtoupper($row[$r_param]);
+                        $sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
+                        mysqli_exec($db_hub, $sql_updt);
+                    }
+                }
+            }
+        } else {
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+            clean_exit($msg);
+        }
+    }
 }
 
 ?>

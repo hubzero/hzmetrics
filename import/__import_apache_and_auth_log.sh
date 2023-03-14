@@ -34,7 +34,7 @@ METRICSLOGDIR=/var/log/hubzero/metrics
 
 if [ ! -d $METRICSLOGDIR ]
 then
-  mkdir -p $METRICSLOGDIR
+    mkdir -p $METRICSLOGDIR
 fi
 
 # -----------------------------------------------------------------------------------------------
@@ -42,10 +42,10 @@ fi
 # -----------------------------------------------------------------------------------------------
 if [ -f $METRICSLOGDIR/_hub_apache.log ]
 then
-	$SCRIPTPATH/xlogimport_webhits $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_webhits.err
-	$SCRIPTPATH/xlogfix_identify_bots $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_bots.err
-	$SCRIPTPATH/xlogimport_apache $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_import.err
-	mv $METRICSLOGDIR/_hub_apache.log $METRICSLOGDIR/_prev_hub_apache.log
+    $SCRIPTPATH/xlogimport_webhits $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_webhits.err
+    $SCRIPTPATH/xlogfix_identify_bots $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_bots.err
+    $SCRIPTPATH/xlogimport_apache $METRICSLOGDIR/_hub_apache.log >> $METRICSLOGDIR/_apache_import.err
+    mv $METRICSLOGDIR/_hub_apache.log $METRICSLOGDIR/_prev_hub_apache.log
 fi
 
 # -----------------------------------------------------------------------------------------------
@@ -53,6 +53,6 @@ fi
 # -----------------------------------------------------------------------------------------------
 if [ -f $METRICSLOGDIR/_hub_auth.log ]
 then
-	$SCRIPTPATH/xlogimport_authlog $METRICSLOGDIR/_hub_auth.log >> $METRICSLOGDIR/_cmsauth_import.err
-	mv $METRICSLOGDIR/_hub_auth.log $METRICSLOGDIR/_prev_hub_auth.log
+    $SCRIPTPATH/xlogimport_authlog $METRICSLOGDIR/_hub_auth.log >> $METRICSLOGDIR/_cmsauth_import.err
+    mv $METRICSLOGDIR/_hub_auth.log $METRICSLOGDIR/_prev_hub_auth.log
 fi

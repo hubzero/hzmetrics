@@ -36,22 +36,22 @@ METRICSLOGDIR=/var/log/hubzero/metrics
 
 if [ ! -d $METRICSLOGDIR ]
 then
-  mkdir -p $METRICSLOGDIR
+    mkdir -p $METRICSLOGDIR
 fi
 
 if [ -f /etc/hubzero.conf ]
 then
-  site=$(grep -E "site\s*=" /etc/hubzero.conf | sed 's/site[ ]*=[ ]*//')
+    site=$(grep -E "site\s*=" /etc/hubzero.conf | sed 's/site[ ]*=[ ]*//')
 else
-  site=hub
+    site=hub
 fi
 
 if [ -d "/etc/httpd" ]; then
-  APACHELOGDIR=/var/log/httpd
+    APACHELOGDIR=/var/log/httpd
 fi
 
 if [ -d "/etc/apache2" ]; then
-  APACHELOGDIR=/var/log/apache2
+    APACHELOGDIR=/var/log/apache2
 fi
 
 
@@ -61,11 +61,11 @@ fi
 files=$(ls ${APACHELOGDIR}/daily/"$site"-access*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat ${APACHELOGDIR}/daily/$site-access*log* > $METRICSLOGDIR/_hub_apache.log
+    cat ${APACHELOGDIR}/daily/$site-access*log* > $METRICSLOGDIR/_hub_apache.log
 fi
 
 files=$(ls ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* 2> /dev/null | wc -l)
 if [ "$files" != "0" ]
 then
-	cat ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* > $METRICSLOGDIR/_hub_auth.log
+    cat ${CMSLOGDIR}/daily/${CMSLOGPREFIX}cmsauth*log* > $METRICSLOGDIR/_hub_auth.log
 fi

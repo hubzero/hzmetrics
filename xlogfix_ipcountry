@@ -27,20 +27,20 @@ $db_hub = db_connect('db_hub');
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
-	$msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."/n";
-	clean_exit($msg);
+    $msg = 'Usage: ' . $_SERVER['argv'][0] . '<database>.<table>'."/n";
+    clean_exit($msg);
 } else {
-	$database = $_SERVER['argv'][1];
-	$table = $_SERVER['argv'][2];
+    $database = $_SERVER['argv'][1];
+    $table = $_SERVER['argv'][2];
 }
 
 if ($database == 'hub') {
-	$database = $hub_db;
+    $database = $hub_db;
 } else if ($database == 'metrics') {
-	$database = $metrics_db;
+    $database = $metrics_db;
 } else {
-	$msg = 'Invalid database type'."\n";
-	clean_exit($msg);
+    $msg = 'Invalid database type'."\n";
+    clean_exit($msg);
 }
 
 $queryDate = new DateTime();
@@ -50,20 +50,20 @@ $result = mysqli_query($sql, $db_hub);
 $hubzero_ipgeo_url="http://hubzero.org/ipinfo/v1";
 $hub_key="_HUBZERO_OPNSRC_V1_";
 if($result) {
-	if(mysqli_num_rows($result) > 0) {
-  		while($row = mysqli_fetch_assoc($result)) {
-			$country = '';
-			$n_ip = $row['n_ip'];
-			$ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key,$n_ip);
-			if($ip_geodata['countrySHORT'] <> '') {
-				$sql_updt = 'UPDATE '.$database.'.'.$table.' SET countryip= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (countryip = "" OR countryip IS NULL)';
-				mysqli_exec($db_hub, $sql_updt);
-			}
-		}
-	}
+    if(mysqli_num_rows($result) > 0) {
+        while($row = mysqli_fetch_assoc($result)) {
+            $country = '';
+            $n_ip = $row['n_ip'];
+            $ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key,$n_ip);
+            if($ip_geodata['countrySHORT'] <> '') {
+                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET countryip= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (countryip = "" OR countryip IS NULL)';
+                mysqli_exec($db_hub, $sql_updt);
+            }
+        }
+    }
 } else {
-	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	clean_exit($msg);
+    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+    clean_exit($msg);
 }
 
 db_close($db_hub);

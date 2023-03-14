@@ -52,7 +52,7 @@ $filehandle = fopen($_SERVER['argv'][1], "r");
 
 if (!$filehandle) {
     $msg = "Error opening file: ".$_SERVER['argv'][1]."\n";
-	clean_exit($msg);
+    clean_exit($msg);
 }
 
 $unrec = '';
@@ -74,112 +74,112 @@ $hits      = 0;
 
 function update_webhits($db_hub, $datestamp, $hits)
 {
-	global $metrics_db;
+    global $metrics_db;
 
-	$sql_ins = 'INSERT INTO '.$metrics_db.'.webhits (datetime, hits) VALUES(' . dbquote($datestamp) . ', ' . dbquote($hits) . ')';
-	$result = db_exec($db_hub, $sql_ins);
+    $sql_ins = 'INSERT INTO '.$metrics_db.'.webhits (datetime, hits) VALUES(' . dbquote($datestamp) . ', ' . dbquote($hits) . ')';
+    $result = db_exec($db_hub, $sql_ins);
 }
-	
+    
 while(1)
 {
-	$line = fgets($filehandle);
+    $line = fgets($filehandle);
 
-   	if (feof($filehandle))
-   		break;
+    if (feof($filehandle))
+        break;
 
-   	if (preg_match($log_pattern_new, $line, $matches)) {
+    if (preg_match($log_pattern_new, $line, $matches)) {
 
-		$datestamp = $matches[1];
-    	$timestamp = $matches[2];
- 	    $timezone  = $matches[3];
-		$pid       = $matches[4];
-	    $user      = $matches[5];
-	    $firstline = $matches[6];
-	    $return    = $matches[7];
-	    $bytes     = $matches[8];
-	    $ip		   = $matches[9];
-	    $referrer  = $matches[10];
-	    $useragent = $matches[11];
-	    $sslport   = $matches[12];
-	    $ts        = $matches[13];
-	    $tms       = $matches[14];
-	    $uidNumber = $matches[15];
-	    $joomla_id = $matches[16];
-	    $st_cookie = $matches[17];
-	    $auth_type = $matches[18];
-	    $comp_name = $matches[19];
-	    $view_name = $matches[20];
-	    $task_name = $matches[21];
-	    $actn_name = $matches[22];
-	    $item_name = $matches[23];
+        $datestamp = $matches[1];
+        $timestamp = $matches[2];
+        $timezone  = $matches[3];
+        $pid       = $matches[4];
+        $user      = $matches[5];
+        $firstline = $matches[6];
+        $return    = $matches[7];
+        $bytes     = $matches[8];
+        $ip        = $matches[9];
+        $referrer  = $matches[10];
+        $useragent = $matches[11];
+        $sslport   = $matches[12];
+        $ts        = $matches[13];
+        $tms       = $matches[14];
+        $uidNumber = $matches[15];
+        $joomla_id = $matches[16];
+        $st_cookie = $matches[17];
+        $auth_type = $matches[18];
+        $comp_name = $matches[19];
+        $view_name = $matches[20];
+        $task_name = $matches[21];
+        $actn_name = $matches[22];
+        $item_name = $matches[23];
 
-	} else if (preg_match($log_pattern_old, $line, $matches)) {
+    } else if (preg_match($log_pattern_old, $line, $matches)) {
 
-    	$datestamp = $matches[1];
-		$timestamp = $matches[2];
-		$timezone  = $matches[3];
-    	$pid       = '';
-		$user      = $matches[4];
-		$firstline = $matches[5];
-		$return    = $matches[6];
-		$bytes     = $matches[7];
-		$ip        = $matches[8];
-		$referrer  = $matches[9];
-		$useragent = $matches[10];
-		$sslport   = $matches[11];
-		$ts        = $matches[12];
-		$tms       = $matches[13];
-    	$uidNumber = '';
-    	$joomla_id = '';
-		$st_cookie = $matches[14];
-    	$auth_type = '';
-    	$comp_name = '';
-    	$view_name = '';
-    	$task_name = '';
-    	$actn_name = '';
-    	$item_name = '';
+        $datestamp = $matches[1];
+        $timestamp = $matches[2];
+        $timezone  = $matches[3];
+        $pid       = '';
+        $user      = $matches[4];
+        $firstline = $matches[5];
+        $return    = $matches[6];
+        $bytes     = $matches[7];
+        $ip        = $matches[8];
+        $referrer  = $matches[9];
+        $useragent = $matches[10];
+        $sslport   = $matches[11];
+        $ts        = $matches[12];
+        $tms       = $matches[13];
+        $uidNumber = '';
+        $joomla_id = '';
+        $st_cookie = $matches[14];
+        $auth_type = '';
+        $comp_name = '';
+        $view_name = '';
+        $task_name = '';
+        $actn_name = '';
+        $item_name = '';
 
-	} else {
+    } else {
 
-		$unrec .= 'Unrecognized log format: '.$line;
-		continue;
+        $unrec .= 'Unrecognized log format: '.$line;
+        continue;
 
-	}
+    }
 
-	@list($method, $url, $protocol) = preg_split("/[ ]+/", $firstline);
+    @list($method, $url, $protocol) = preg_split("/[ ]+/", $firstline);
 
-	if (empty($url))
-	{
-		$url = $method;
-		$method = 'GET';
-		$protocol = 'HTTP/1.1';
-	}
-	else if (empty($protocol))
-		$protocol = 'HTTP/1.1';
+    if (empty($url))
+    {
+        $url = $method;
+        $method = 'GET';
+        $protocol = 'HTTP/1.1';
+    }
+    else if (empty($protocol))
+        $protocol = 'HTTP/1.1';
      
-	$url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
+    $url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
 
-	if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") )
-	{
-		$hits++;
-	
-		# Insert total hit-count for previous day into database...
-		if ($prevdatestamp != $datestamp)
-		{
-			if (!empty($prevdatestamp))
-				update_webhits($db_hub, $prevdatestamp, $hits-1);
+    if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") )
+    {
+        $hits++;
+    
+        # Insert total hit-count for previous day into database...
+        if ($prevdatestamp != $datestamp)
+        {
+            if (!empty($prevdatestamp))
+                update_webhits($db_hub, $prevdatestamp, $hits-1);
 
-			$prevdatestamp = $datestamp;
-			$hits = 1;
-		}
-	}
+            $prevdatestamp = $datestamp;
+            $hits = 1;
+        }
+    }
 }
 
 # Insert total hit-count for final day into database...
 update_webhits($db_hub, $prevdatestamp, $hits);
 
 if($unrec)
-	print $unrec;
+    print $unrec;
 
 fclose($filehandle);
 db_close($db_hub);

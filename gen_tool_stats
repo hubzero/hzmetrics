@@ -48,149 +48,149 @@ require_once(__DIR__."/includes/func_misc.php");
 $db_hub = db_connect('db_hub');
 
 if ($_SERVER['argc'] < 2) {
-	$dthis_ = date('Y').'-'.date('m').'-'.date('d');
+    $dthis_ = date('Y').'-'.date('m').'-'.date('d');
 } else {
-	$dthis_ = $_SERVER['argv'][1];
+    $dthis_ = $_SERVER['argv'][1];
 }
 
 $sql = 'SELECT id, alias FROM '.$hub_db.'.'.$db_prefix.'resources WHERE type="7" AND alias <> "" ORDER by title';
 $result = mysqli_query($db_hub, $sql);
 if($result) {
-	if(mysqli_num_rows($result) > 0) {
-    	while($row = mysqli_fetch_row($result)) {
-			$resid = $row[0];
-			$filter = '';
-			$tool = '"'.$row[1].'"';
-			$filter = get_tool_versions_aliases($db_hub, $tool);
+    if(mysqli_num_rows($result) > 0) {
+        while($row = mysqli_fetch_row($result)) {
+            $resid = $row[0];
+            $filter = '';
+            $tool = '"'.$row[1].'"';
+            $filter = get_tool_versions_aliases($db_hub, $tool);
 
-			$periods  = array(0, 1, 3, 12, 13, 14);
-			foreach ($periods as $period) {
-				$id = '0';
-		    	$dates = get_dates($dthis_, $period);
-			   	$period = dbquote($period);
-			   	$dstart = dbquote($dates['start']);
-			   	$dstop = dbquote($dates['stop']);
-				$dthis = dbquote($dates['dthis']);
+            $periods  = array(0, 1, 3, 12, 13, 14);
+            foreach ($periods as $period) {
+                $id = '0';
+                $dates = get_dates($dthis_, $period);
+                $period = dbquote($period);
+                $dstart = dbquote($dates['start']);
+                $dstop = dbquote($dates['stop']);
+                $dthis = dbquote($dates['dthis']);
 
-				$sql_ = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE restype = "7" AND datetime = '.$dthis.' AND resid = '.dbquote($resid).' AND period = '.$period;
-				$id = db_fetch($db_hub, $sql_);
-				compute_data($db_hub, $dthis, $dstart, $dstop, $period, $resid, $filter, $id);
-				update_stats($db_hub, $dthis, $period, $resid);
-			}
-		}
-	}
+                $sql_ = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE restype = "7" AND datetime = '.$dthis.' AND resid = '.dbquote($resid).' AND period = '.$period;
+                $id = db_fetch($db_hub, $sql_);
+                compute_data($db_hub, $dthis, $dstart, $dstop, $period, $resid, $filter, $id);
+                update_stats($db_hub, $dthis, $period, $resid);
+            }
+        }
+    }
 } else {
-	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	clean_exit($msg);
+    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+    clean_exit($msg);
 }
 
 db_close($db_hub);
 
 function compute_data($db_hub, $dthis, $dstart, $dstop, $period, $resid, $filter, $id) {
 
-	global $debug, $db_prefix, $hub_db;
+    global $debug, $db_prefix, $hub_db;
 
-	$users = 0;
-	$sessions = 0;
-	$simulations = 0;
-	$jobs = 0;
-	$avg_wall = 0;
-	$tot_wall = 0;
-	$avg_cpu = 0;
-	$tot_cpu = 0;
-	$avg_view = 0;
-	$tot_view = 0;
-	$avg_wait = 0;
-	$tot_wait = 0;
-	$tot_cpus = 0;
-	$avg_cpus = 0;
+    $users = 0;
+    $sessions = 0;
+    $simulations = 0;
+    $jobs = 0;
+    $avg_wall = 0;
+    $tot_wall = 0;
+    $avg_cpu = 0;
+    $tot_cpu = 0;
+    $avg_view = 0;
+    $tot_view = 0;
+    $avg_wait = 0;
+    $tot_wait = 0;
+    $tot_cpus = 0;
+    $avg_cpus = 0;
 
-	$sql = 'SELECT COUNT(DISTINCT username) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
-	$users = db_fetch($db_hub, $sql);
+    $sql = 'SELECT COUNT(DISTINCT username) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
+    $users = db_fetch($db_hub, $sql);
 
-	if ($users) {
+    if ($users) {
 
-		//  Narwhal Jobs - Counting everything including job 0. Use job > 0 otherwise
-		$sql = 'SELECT COUNT(*) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "[waiting]" AND j.job > 0';
-		$jobs = db_fetch($db_hub, $sql);
+        //  Narwhal Jobs - Counting everything including job 0. Use job > 0 otherwise
+        $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "[waiting]" AND j.job > 0';
+        $jobs = db_fetch($db_hub, $sql);
 
-		$sql = 'SELECT COUNT(*) FROM '.$hub_db.'.sessionlog WHERE appname in ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
-		$sessions = db_fetch($db_hub, $sql);
+        $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.sessionlog WHERE appname in ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
+        $sessions = db_fetch($db_hub, $sql);
 
-		$sql = 'SELECT COUNT(*) FROM '.$hub_db.'.sessionlog AS s, '.$hub_db.'.joblog AS j WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "application" AND j.superjob = 0';
-		$simulations = db_fetch($db_hub, $sql);
-	
-		$sql = 'SELECT COALESCE(SUM(walltime),0) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
-		$tot_wall = db_fetch($db_hub, $sql);
-		if ($tot_wall && $simulations) {
-			$avg_wall = $tot_wall/$simulations;
-		}
+        $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.sessionlog AS s, '.$hub_db.'.joblog AS j WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "application" AND j.superjob = 0';
+        $simulations = db_fetch($db_hub, $sql);
+    
+        $sql = 'SELECT COALESCE(SUM(walltime),0) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
+        $tot_wall = db_fetch($db_hub, $sql);
+        if ($tot_wall && $simulations) {
+            $avg_wall = $tot_wall/$simulations;
+        }
 
-		// Job > 0 as job 0 contains cputime of all childprocesses
-		$sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "[waiting]" AND j.job > 0';
-		$tot_cpu = db_fetch($db_hub, $sql);
-		if ($tot_cpu && $simulations) {
-			$avg_cpu = $tot_cpu/$simulations;
-		}
-		
-		$sql = 'SELECT COALESCE(SUM(viewtime),0) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
-		$tot_view = db_fetch($db_hub, $sql);
-		if ($tot_view && $simulations) {
-			$avg_view = $tot_view/$simulations;
-		}
+        // Job > 0 as job 0 contains cputime of all childprocesses
+        $sql = 'SELECT COALESCE(SUM(j.cputime),0) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event <> "[waiting]" AND j.job > 0';
+        $tot_cpu = db_fetch($db_hub, $sql);
+        if ($tot_cpu && $simulations) {
+            $avg_cpu = $tot_cpu/$simulations;
+        }
+        
+        $sql = 'SELECT COALESCE(SUM(viewtime),0) FROM '.$hub_db.'.sessionlog WHERE appname IN ('.$filter.') AND start > '.$dstart.' AND start < '.$dstop;
+        $tot_view = db_fetch($db_hub, $sql);
+        if ($tot_view && $simulations) {
+            $avg_view = $tot_view/$simulations;
+        }
 
-		$sql = 'SELECT COALESCE(SUM(j.walltime),0) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event = "[waiting]" AND j.job > 0';
-		$tot_wait = db_fetch($db_hub, $sql);
-		if ($tot_wait && $simulations) {
-			$avg_wait = $tot_wait/$simulations;
-		}
+        $sql = 'SELECT COALESCE(SUM(j.walltime),0) FROM '.$hub_db.'.joblog AS j, '.$hub_db.'.sessionlog AS s WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop.' AND j.event = "[waiting]" AND j.job > 0';
+        $tot_wait = db_fetch($db_hub, $sql);
+        if ($tot_wait && $simulations) {
+            $avg_wait = $tot_wait/$simulations;
+        }
 
-		$sql = 'SELECT SUM(j.ncpus) FROM '.$hub_db.'.sessionlog AS s, '.$hub_db.'.joblog AS j WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop;
-		$tot_cpus = db_fetch($db_hub, $sql);
-		if ($tot_cpus && $simulations) {
-		 	$avg_cpus = round($tot_cpus/$simulations);
-		}
-	}
+        $sql = 'SELECT SUM(j.ncpus) FROM '.$hub_db.'.sessionlog AS s, '.$hub_db.'.joblog AS j WHERE s.sessnum = j.sessnum AND s.appname IN ('.$filter.') AND s.start > '.$dstart.' AND s.start < '.$dstop;
+        $tot_cpus = db_fetch($db_hub, $sql);
+        if ($tot_cpus && $simulations) {
+            $avg_cpus = round($tot_cpus/$simulations);
+        }
+    }
 
-	$sql_ins='';
+    $sql_ins='';
 
-	if (!$id) {
-		$sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools (resid, restype, users, sessions, simulations, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, avg_view, tot_view, avg_wait, tot_wait, avg_cpus, tot_cpus, datetime, period) VALUES ('.dbquote($resid).',"7",'.dbquote($users).','.dbquote($sessions).','.dbquote($simulations).','.dbquote($jobs).','.dbquote($avg_wall).','.dbquote($tot_wall).','.dbquote($avg_cpu).','.dbquote($tot_cpu).','.dbquote($avg_view).','.dbquote($tot_view).','.dbquote($avg_wait).','.dbquote($tot_wait).','.dbquote($avg_cpus).','.dbquote($tot_cpus).','.$dthis.', '.$period.')';
-	} else {
-		$sql_ins = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats_tools SET users = '.dbquote($users).', sessions = '.dbquote($sessions).', simulations = '.dbquote($simulations).', jobs = '.dbquote($jobs).' , avg_wall = '.dbquote($avg_wall).', tot_wall = '.dbquote($tot_wall).', avg_cpu = '.dbquote($avg_cpu).', tot_cpu = '.dbquote($tot_cpu).', avg_view = '.dbquote($avg_view).', tot_view = '.dbquote($tot_view).', avg_wait = '.dbquote($avg_wait).', tot_wait = '.dbquote($tot_wait).', avg_cpus = '.dbquote($avg_cpus).', tot_cpus = '.dbquote($tot_cpus).' WHERE id = '.dbquote($id);
-	}
-	db_exec($db_hub, $sql_ins);
+    if (!$id) {
+        $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools (resid, restype, users, sessions, simulations, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, avg_view, tot_view, avg_wait, tot_wait, avg_cpus, tot_cpus, datetime, period) VALUES ('.dbquote($resid).',"7",'.dbquote($users).','.dbquote($sessions).','.dbquote($simulations).','.dbquote($jobs).','.dbquote($avg_wall).','.dbquote($tot_wall).','.dbquote($avg_cpu).','.dbquote($tot_cpu).','.dbquote($avg_view).','.dbquote($tot_view).','.dbquote($avg_wait).','.dbquote($tot_wait).','.dbquote($avg_cpus).','.dbquote($tot_cpus).','.$dthis.', '.$period.')';
+    } else {
+        $sql_ins = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats_tools SET users = '.dbquote($users).', sessions = '.dbquote($sessions).', simulations = '.dbquote($simulations).', jobs = '.dbquote($jobs).' , avg_wall = '.dbquote($avg_wall).', tot_wall = '.dbquote($tot_wall).', avg_cpu = '.dbquote($avg_cpu).', tot_cpu = '.dbquote($tot_cpu).', avg_view = '.dbquote($avg_view).', tot_view = '.dbquote($tot_view).', avg_wait = '.dbquote($avg_wait).', tot_wait = '.dbquote($tot_wait).', avg_cpus = '.dbquote($avg_cpus).', tot_cpus = '.dbquote($tot_cpus).' WHERE id = '.dbquote($id);
+    }
+    db_exec($db_hub, $sql_ins);
 }
 
 function update_stats($db_hub, $dthis, $period, $resid) {
 
-	global $db_prefix, $hub_db;
+    global $db_prefix, $hub_db;
 
-	$sql = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats WHERE restype = "7" AND DATETIME = '.$dthis.' AND period = '.$period.' AND resid = '.dbquote($resid);
-	$id = db_fetch($db_hub, $sql);
+    $sql = 'SELECT id FROM '.$hub_db.'.'.$db_prefix.'resource_stats WHERE restype = "7" AND DATETIME = '.$dthis.' AND period = '.$period.' AND resid = '.dbquote($resid);
+    $id = db_fetch($db_hub, $sql);
 
-	$sql = 'SELECT resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE datetime = '.$dthis.' AND period = '.$period.' AND resid = '.dbquote($resid);
-	$result = mysqli_query($db_hub, $sql);
-	if($result) {
-		if(mysqli_num_rows($result) > 0) {
-    		while($row = mysqli_fetch_row($result)) {
-				$resid = dbquote($row[0]);
-				$restype = dbquote($row[1]);
-				$users = dbquote($row[2]);
-				$jobs = dbquote($row[3]);
-				$avg_wall = dbquote($row[4]);
-				$tot_wall = dbquote($row[5]);
-				$avg_cpu = dbquote($row[6]);
-				$tot_cpu = dbquote($row[7]);
-				if (!$id) {
-				$sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, datetime, period) VALUES ('.$resid.','.$restype.','.$users.','.$jobs.','.$avg_wall.','.$tot_wall.','.$avg_cpu.','.$tot_cpu.','.$dthis.','.$period.')';
-				} else {
-				$sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET resid = '.$resid.', restype = '.$restype.', users = '.$users.', jobs = '.$jobs.', avg_wall = '.$avg_wall.', tot_wall = '.$tot_wall.', avg_cpu = '.$avg_cpu.', tot_cpu = '.$tot_cpu.' WHERE id = '.dbquote($id);
-				}
-				db_exec($db_hub, $sql_);
-			}
-		}
-	}
+    $sql = 'SELECT resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE datetime = '.$dthis.' AND period = '.$period.' AND resid = '.dbquote($resid);
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                $resid = dbquote($row[0]);
+                $restype = dbquote($row[1]);
+                $users = dbquote($row[2]);
+                $jobs = dbquote($row[3]);
+                $avg_wall = dbquote($row[4]);
+                $tot_wall = dbquote($row[5]);
+                $avg_cpu = dbquote($row[6]);
+                $tot_cpu = dbquote($row[7]);
+                if (!$id) {
+                $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, datetime, period) VALUES ('.$resid.','.$restype.','.$users.','.$jobs.','.$avg_wall.','.$tot_wall.','.$avg_cpu.','.$tot_cpu.','.$dthis.','.$period.')';
+                } else {
+                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET resid = '.$resid.', restype = '.$restype.', users = '.$users.', jobs = '.$jobs.', avg_wall = '.$avg_wall.', tot_wall = '.$tot_wall.', avg_cpu = '.$avg_cpu.', tot_cpu = '.$tot_cpu.' WHERE id = '.dbquote($id);
+                }
+                db_exec($db_hub, $sql_);
+            }
+        }
+    }
 }
 
 ?>

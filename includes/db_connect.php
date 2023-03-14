@@ -28,34 +28,34 @@
 #
 function db_connect($dblink) {
 
-	switch($dblink) {
+    switch($dblink) {
 
-		case 'db_hub':
-			$db = mysqli_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], trim($GLOBALS['hub_db'],'`'));
-			if (!$db) {
-				die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
-			}
-			break;
+        case 'db_hub':
+            $db = mysqli_connect($GLOBALS['db_host'], $GLOBALS['db_user'], $GLOBALS['db_pass'], trim($GLOBALS['hub_db'],'`'));
+            if (!$db) {
+                die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
+            }
+            break;
 
-		case 'db_net':
-			$db = mysqli_connect($GLOBALS['db_net_host'], $GLOBALS['db_net_user'], $GLOBALS['db_net_pass'], $GLOBALS['net_db']);
-			if (!$db) {
-				die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
-			}
-			break;
+        case 'db_net':
+            $db = mysqli_connect($GLOBALS['db_net_host'], $GLOBALS['db_net_user'], $GLOBALS['db_net_pass'], $GLOBALS['net_db']);
+            if (!$db) {
+                die('Database Connection Error: ' . mysqli_connect_error() . "\n\n");
+            }
+            break;
 
-		default:
-			print 'Unrecognized database link '.$dblink."\n";
-    		die;
-	}
+        default:
+            print 'Unrecognized database link '.$dblink."\n";
+            die;
+    }
 
-	return $db;
+    return $db;
 
 }
 
 function db_close($db) {
 
-	mysqli_close($db);
+    mysqli_close($db);
 
 }
 

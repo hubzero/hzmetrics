@@ -17,8 +17,8 @@ error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
 
 if(!defined('__DIR__')) {
-	$fPos = strrpos(__FILE__, "/");
-	define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
+    $fPos = strrpos(__FILE__, "/");
+    define("__DIR__", substr(__FILE__, 0, $fPos) . "/");
 }
 
 require_once(__DIR__."/includes/hub_parameters.php");
@@ -29,22 +29,22 @@ $db_hub = db_connect('db_hub');
 
 $table = $_SERVER['argv'][1];
 if(!$table) {
-	$msg = 'USAGE: xlogfix_clean <tablename>'."\n";
-	clean_exit($msg);
+    $msg = 'USAGE: xlogfix_clean <tablename>'."\n";
+    clean_exit($msg);
 }
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "domain"';
 $result = mysqli_query($sql, $db_hub);
 if($result) {
-	if(mysqli_num_rows($result) > 0) {
-  		while($row = mysqli_fetch_row($result)) {
-			$sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
-			mysqli_exec($db_hub, $sql_del);
-		}
-	}
+    if(mysqli_num_rows($result) > 0) {
+        while($row = mysqli_fetch_row($result)) {
+            $sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
+            mysqli_exec($db_hub, $sql_del);
+        }
+    }
 } else {
-	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	clean_exit($msg);
+    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+    clean_exit($msg);
 }
 
 $queryDate = new DateTime();
@@ -53,15 +53,15 @@ $queryDate->modify('-7 days');
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "host"';
 $result = mysqli_query($sql, $db_hub);
 if($result) {
-	if(mysqli_num_rows($result) > 0) {
-  		while($row = mysqli_fetch_row($result)) {
-			$sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" and host LIKE '.dbquote($row[0]);
-			mysqli_exec($db_hub, $sql_);
-		}
-	}
+    if(mysqli_num_rows($result) > 0) {
+        while($row = mysqli_fetch_row($result)) {
+            $sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" and host LIKE '.dbquote($row[0]);
+            mysqli_exec($db_hub, $sql_);
+        }
+    }
 } else {
-	$msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-	clean_exit($msg);
+    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+    clean_exit($msg);
 }
 
 db_close($db_hub);

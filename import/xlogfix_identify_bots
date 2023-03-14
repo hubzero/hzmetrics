@@ -66,78 +66,78 @@ $useragent_strings = array();
 $cnt = 1;
 while(1)
 {
-	$line = fgets($filehandle);
+    $line = fgets($filehandle);
 
- 	if (feof($filehandle))
-   		break;
+    if (feof($filehandle))
+        break;
 
-   	if (preg_match($log_pattern_new, $line, $matches)) {
+    if (preg_match($log_pattern_new, $line, $matches)) {
 
-		$datestamp = $matches[1];
-    	$timestamp = $matches[2];
- 	    $timezone  = $matches[3];
-		$pid       = $matches[4];
-	    $user      = $matches[5];
-	    $firstline = $matches[6];
-	    $return    = $matches[7];
-	    $bytes     = $matches[8];
-	    $ip        = $matches[9];
-	    $referrer  = $matches[10];
-	    $useragent = $matches[11];
-	    $sslport   = $matches[12];
-	    $ts        = $matches[13];
-	    $tms       = $matches[14];
-	    $uidNumber = $matches[15];
-	    $joomla_id = $matches[16];
-	    $st_cookie = $matches[17];
-	    $auth_type = $matches[18];
-	    $comp_name = $matches[19];
-	    $view_name = $matches[20];
-	    $task_name = $matches[21];
-	    $actn_name = $matches[22];
-	    $item_name = $matches[23];
+        $datestamp = $matches[1];
+        $timestamp = $matches[2];
+        $timezone  = $matches[3];
+        $pid       = $matches[4];
+        $user      = $matches[5];
+        $firstline = $matches[6];
+        $return    = $matches[7];
+        $bytes     = $matches[8];
+        $ip        = $matches[9];
+        $referrer  = $matches[10];
+        $useragent = $matches[11];
+        $sslport   = $matches[12];
+        $ts        = $matches[13];
+        $tms       = $matches[14];
+        $uidNumber = $matches[15];
+        $joomla_id = $matches[16];
+        $st_cookie = $matches[17];
+        $auth_type = $matches[18];
+        $comp_name = $matches[19];
+        $view_name = $matches[20];
+        $task_name = $matches[21];
+        $actn_name = $matches[22];
+        $item_name = $matches[23];
 
-	} else if (preg_match($log_pattern_old, $line, $matches)) {
+    } else if (preg_match($log_pattern_old, $line, $matches)) {
 
-    	$datestamp = $matches[1];
-		$timestamp = $matches[2];
-		$timezone  = $matches[3];
-    	$pid       = '';
-		$user      = $matches[4];
-		$firstline = $matches[5];
-		$return    = $matches[6];
-		$bytes     = $matches[7];
-		$ip        = $matches[8];
-		$referrer  = $matches[9];
-		$useragent = $matches[10];
-		$sslport   = $matches[11];
-		$ts        = $matches[12];
-		$tms       = $matches[13];
-    	$uidNumber = '';
-    	$joomla_id = '';
-		$st_cookie = $matches[14];
-    	$auth_type = '';
-    	$comp_name = '';
-    	$view_name = '';
-    	$task_name = '';
-    	$actn_name = '';
-    	$item_name = '';
+        $datestamp = $matches[1];
+        $timestamp = $matches[2];
+        $timezone  = $matches[3];
+        $pid       = '';
+        $user      = $matches[4];
+        $firstline = $matches[5];
+        $return    = $matches[6];
+        $bytes     = $matches[7];
+        $ip        = $matches[8];
+        $referrer  = $matches[9];
+        $useragent = $matches[10];
+        $sslport   = $matches[11];
+        $ts        = $matches[12];
+        $tms       = $matches[13];
+        $uidNumber = '';
+        $joomla_id = '';
+        $st_cookie = $matches[14];
+        $auth_type = '';
+        $comp_name = '';
+        $view_name = '';
+        $task_name = '';
+        $actn_name = '';
+        $item_name = '';
 
-	} else {
+    } else {
 
-		$unrec .= 'Unrecognized log format: '.$line;
-		continue;
+        $unrec .= 'Unrecognized log format: '.$line;
+        continue;
 
-	}
+    }
 
-	if ($useragent) {
-		array_push($useragent_strings, $useragent);
-		$cnt++;
-	}
-	if ($cnt > 1000) {
-		$cnt = 1;
-		$useragent_strings = array_unique($useragent_strings);
-	}
+    if ($useragent) {
+        array_push($useragent_strings, $useragent);
+        $cnt++;
+    }
+    if ($cnt > 1000) {
+        $cnt = 1;
+        $useragent_strings = array_unique($useragent_strings);
+    }
 }
 
 
@@ -155,7 +155,7 @@ $sql = 'DELETE FROM '.$metrics_db.'.bot_useragents WHERE (useragent LIKE "%searc
 db_exec($db_hub, $sql);
 
 if ($unrec)
-	print $unrec;
+    print $unrec;
 
 fclose($filehandle);
 db_close($db_hub);

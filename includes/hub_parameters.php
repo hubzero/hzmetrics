@@ -32,8 +32,8 @@ error_reporting(E_ALL & ~E_NOTICE);
 
 if(!ini_get('date.timezone'))
 {
-	exec("date +%Z",$output);
-	date_default_timezone_set($output[0]);
+    exec("date +%Z",$output);
+    date_default_timezone_set($output[0]);
 }
 
 $inicontents = file_get_contents('/etc/hubzero.conf');
@@ -52,15 +52,15 @@ if (!is_array($result))
 }
 
 foreach ($result as $key=>$value) {
-	if (!is_array($value)) {
-		continue;
-	}
-	if (array_key_exists('documentroot', $value)) {
-		$DocumentRootKey = 'documentroot';
-	}
-	if (array_key_exists('DocumentRoot', $value)) {
-		$DocumentRootKey = 'DocumentRoot';	
-	}
+    if (!is_array($value)) {
+        continue;
+    }
+    if (array_key_exists('documentroot', $value)) {
+        $DocumentRootKey = 'documentroot';
+    }
+    if (array_key_exists('DocumentRoot', $value)) {
+        $DocumentRootKey = 'DocumentRoot';  
+    }
 }
 
 if (is_array($result['default']))
@@ -97,20 +97,20 @@ $db_net_pass = $hconfig->ipDBPassword;
 $net_db = $hconfig->ipDBDatabase;
 
 if (false) {
-	echo "hub_db = $hub_db\n";
-	echo "hub_dir = $hub_dir\n";
-	echo "db_host = $db_host\n";
-	echo "db_user = $db_user\n";
-	echo "db_pass = $db_pass\n";
-	echo "db_prefix = $db_prefix\n";
-	echo "metrics_db = $metrics_db\n";
-	echo "report_db = $report_db\n";
-	echo "mw_db = $mw_db\n";
-	echo "db_net_host = $db_net_host\n";
-	echo "db_net_user = $db_net_user\n";
-	echo "db_net_pass = $db_net_pass\n";
-	echo "net_db = $net_db\n";
-	echo "hubzero_ipgeo_url = $hubzero_ipgeo_url\n";
-	echo "hub_key = $hub_key\n";
+    echo "hub_db = $hub_db\n";
+    echo "hub_dir = $hub_dir\n";
+    echo "db_host = $db_host\n";
+    echo "db_user = $db_user\n";
+    echo "db_pass = $db_pass\n";
+    echo "db_prefix = $db_prefix\n";
+    echo "metrics_db = $metrics_db\n";
+    echo "report_db = $report_db\n";
+    echo "mw_db = $mw_db\n";
+    echo "db_net_host = $db_net_host\n";
+    echo "db_net_user = $db_net_user\n";
+    echo "db_net_pass = $db_net_pass\n";
+    echo "net_db = $net_db\n";
+    echo "hubzero_ipgeo_url = $hubzero_ipgeo_url\n";
+    echo "hub_key = $hub_key\n";
 }
 ?>
