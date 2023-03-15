@@ -82,7 +82,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
             $top_type = 'Total Simulation Users';
             $sql = 'SELECT COUNT(DISTINCT user) FROM '.$metrics_db.'.sessionlog_metrics WHERE start > '.$dstart.' AND start < '.$dstop;
             $total = db_fetch($db_hub, $sql);
-            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
+            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
             db_exec($db_hub, $sql_ins);
 
             $sql = 'SELECT res.title, rt.resid, rt.users AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
@@ -93,7 +93,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
             $top_type = "Total Simulation Runs";
             $sql = 'SELECT SUM(jobs) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
             $total = db_fetch($db_hub, $sql);
-            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
+            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
             db_exec($db_hub, $sql_ins);
 
             $sql = 'SELECT res.title, rt.resid, rt.jobs AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
@@ -104,7 +104,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
             $top_type = "Total Simulation Wall Time";
             $sql = 'SELECT SUM(tot_wall) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
             $total = db_fetch($db_hub, $sql);
-            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
+            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
             db_exec($db_hub, $sql_ins);
 
             $sql = 'SELECT res.title, rt.resid, rt.tot_wall AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
@@ -115,7 +115,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
             $top_type = "Total Simulation CPU Time";
             $sql = 'SELECT SUM(tot_cpu) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
             $total = db_fetch($db_hub, $sql);
-            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
+            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
             db_exec($db_hub, $sql_ins);
 
             $sql = 'SELECT res.title, rt.resid, rt.tot_cpu AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
@@ -126,7 +126,7 @@ function compute_data(&$db_hub, $dthis_, $top) {
             $top_type = "Total Simulation Interaction Time";
             $sql = 'SELECT SUM(tot_view) FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools WHERE period = '.$period.' AND datetime = '.$dthis;
             $total = db_fetch($db_hub, $sql);
-            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
+            $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.',"0",'.dbquote($top_type).','.dbquote($total).')';
             db_exec($db_hub, $sql_ins);
 
             $sql = 'SELECT res.title, rt.resid, rt.tot_view AS cnt FROM '.$hub_db.'.'.$db_prefix.'resource_stats_tools AS rt, '.$hub_db.'.'.$db_prefix.'resources AS res WHERE res.id = rt.resid AND res.published = 1 AND period = '.$period.' and datetime = '.$dthis.' ORDER BY cnt DESC';
@@ -149,7 +149,7 @@ function gen_top_tools($db_hub, $sql, $top, $dthis, $period) {
         if(mysqli_num_rows($result) > 0) {
             while($row = mysqli_fetch_assoc($result)) {
                 $name = $row['resid']." ~ ".$row['title'];
-                $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES ('.dbquote($top).','.$dthis.','.$period.','.dbquote($rank).','.dbquote($name).','.dbquote($row['cnt']).')';
+                $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'stats_topvals VALUES (NULL,'.dbquote($top).','.$dthis.','.$period.','.dbquote($rank).','.dbquote($name).','.dbquote($row['cnt']).')';
                 db_exec($db_hub, $sql_ins);
                 $rank = $rank + 1;
             }
