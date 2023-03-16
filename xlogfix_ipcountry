@@ -46,7 +46,7 @@ if ($database == 'hub') {
 $queryDate = new DateTime();
 $queryDate->modify('-7 days');
 $sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND (countryip = "" OR countryip IS NULL) GROUP BY n_ip ORDER by hits desc;';
-$result = mysqli_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 $hubzero_ipgeo_url="http://hubzero.org/ipinfo/v1";
 $hub_key="_HUBZERO_OPNSRC_V1_";
 if($result) {

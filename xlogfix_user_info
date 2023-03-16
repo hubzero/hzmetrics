@@ -67,7 +67,7 @@ function update_tables($db_hub, $param, $table) {
     $queryDate->modify('-7 days');
 
     $sql = 'SELECT DISTINCT user FROM '.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
-    $result = mysqli_query($sql, $db_hub);
+    $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
             while($row = mysqli_fetch_assoc($result)) {
