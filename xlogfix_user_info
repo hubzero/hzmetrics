@@ -87,14 +87,14 @@ function update_tables($db_hub, $param, $table) {
     $user_list = rtrim($user_list,",");
     if ($user_list) {
         $sql = 'SELECT username, countryresident, countryorigin, orgtype FROM '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics WHERE username IN ('.$user_list.')'; 
-        $result = mysqli_query($sql, $db_hub);
+        $result = mysqli_query($db_hub, $sql);
         if($result) {
             if(mysqli_num_rows($result) > 0) {
                 while($row = mysqli_fetch_assoc($result)) {
                     if ($row[$r_param]) {
                         $value = strtoupper($row[$r_param]);
                         $sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
-                        mysqli_exec($db_hub, $sql_updt);
+                        mysqli_query($db_hub, $sql_updt);
                     }
                 }
             }

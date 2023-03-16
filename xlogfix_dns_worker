@@ -50,7 +50,7 @@ if ($database == 'hub') {
 
 $sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' as w WHERE ip <> "" AND ip IS NOT NULL AND datetime > "'.$date.'" and datetime < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
 print "sql: $sql";
-$result = mysqli_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
@@ -62,7 +62,7 @@ if($result) {
             if($row[1] != "?") {
                 $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
                 print $sql_updt;
-                mysqli_exec($db_hub, $sql_updt);
+                mysqli_query($db_hub, $sql_updt);
             }
         }
     }

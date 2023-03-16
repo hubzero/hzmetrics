@@ -34,12 +34,12 @@ if(!$table) {
 }
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "domain"';
-$result = mysqli_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
             $sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
-            mysqli_exec($db_hub, $sql_del);
+            mysqli_query($db_hub, $sql_del);
         }
     }
 } else {
@@ -51,12 +51,12 @@ $queryDate = new DateTime();
 $queryDate->modify('-7 days');
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "host"';
-$result = mysqli_query($sql, $db_hub);
+$result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
             $sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" and host LIKE '.dbquote($row[0]);
-            mysqli_exec($db_hub, $sql_);
+            mysqli_query($db_hub, $sql_);
         }
     }
 } else {

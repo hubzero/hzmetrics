@@ -63,7 +63,7 @@ if($result) {
             $ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key,$n_ip);
             if($ip_geodata['countrySHORT'] <> '') {
                 $sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
-                mysqli_exec($db_hub, $sql_updt);
+                mysqli_query($db_hub, $sql_updt);
             }
         }
     }
