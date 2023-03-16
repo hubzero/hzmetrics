@@ -51,7 +51,7 @@ if ($table == 'sessionlog_metrics') $datetime_col = '`start`';
 
 $queryDate = new DateTime();
 $queryDate->modify('-7 days');
-$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE '.$datetime_col.'> "'.$queryDate->format('Y-m-d').'" AND (countryip = "" OR countryip IS NULL) GROUP BY n_ip ORDER by hits desc;';
+$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE '.$datetime_col.'> "'.$queryDate->format('Y-m-d').'" AND (ipcountry = "" OR ipcountry IS NULL) GROUP BY n_ip ORDER by hits desc;';
 $result = mysqli_query($db_hub, $sql);
 $hubzero_ipgeo_url="http://hubzero.org/ipinfo/v1";
 $hub_key="_HUBZERO_OPNSRC_V1_";
@@ -62,7 +62,7 @@ if($result) {
             $n_ip = $row['n_ip'];
             $ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key,$n_ip);
             if($ip_geodata['countrySHORT'] <> '') {
-                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET countryip= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (countryip = "" OR countryip IS NULL)';
+                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE INET_ATON(ip) = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
                 mysqli_exec($db_hub, $sql_updt);
             }
         }
