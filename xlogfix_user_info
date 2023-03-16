@@ -66,7 +66,13 @@ function update_tables($db_hub, $param, $table) {
     $queryDate = new DateTime();
     $queryDate->modify('-7 days');
 
-    $sql = 'SELECT DISTINCT user FROM '.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
+    // column for datetime has different names in toolstart vs sessionlog_metrics table:
+    // toolstart.datetime column:
+    $datetime_col = '`datetime`';
+    // sessionlog_metrics.start column:
+    if (explode(".", $table)[1] == 'sessionlog_metrics') $datetime_col = '`start`';
+
+    $sql = 'SELECT DISTINCT user FROM '.$table.' WHERE '.$datetime_col.'> "'.$queryDate->format('Y-m-d').'" AND ('.$param.' = "" OR '.$param.' IS NULL)';
     $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
