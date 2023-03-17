@@ -7,8 +7,8 @@
 
 SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
-DEBUG=0
-if [ $DEBUG==1 ]
+DEBUG="0"
+if [ $DEBUG == "1" ]
 then
         echo $SCRIPTPATH
 fi
@@ -18,7 +18,7 @@ begdate=`date '+%C%y-%m-%d' -d "$end_date-1 days"`
 enddate=`date '+%C%y-%m-%d'`
 while [ $begdate != $limitdate ]
 do
-    if [ $DEBUG==1 ]
+    if [ $DEBUG == "1" ]
     then
         echo "calling xlogfix_dns_worker with: " $1 $2 $begdate $enddate&
     fi

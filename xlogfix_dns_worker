@@ -3,7 +3,7 @@
 # =========================================================================
 # This script resolves host fields from ip address fields in various tables
 #
-# USAGE: ./xlogfix_dns <database> <table>
+# USAGE: ./xlogfix_dns_worker <database> <table> <startdate> <enddate>
 #
 # =========================================================================
 # AUTHOR: Swaroop Shivarajapura S, Purdue University
@@ -27,10 +27,11 @@ require_once(__DIR__."/includes/func_misc.php");
 
 $timeout = 1;
 $db_hub = db_connect('db_hub');
+$debug = 0;
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2] || !$_SERVER['argv'][3] || !$_SERVER['argv'][4])
 {
-    $msg = 'Usage: ' . $_SERVER['argv'][0] . '<database> <table> <startdate> <enddate>'."\n";
+    $msg = 'Usage: ' . $_SERVER['argv'][0] . ' <database> <table> <startdate> <enddate>'."\n";
     clean_exit($msg);
 } else {
     $database = $_SERVER['argv'][1];
@@ -49,19 +50,19 @@ if ($database == 'hub') {
 }
 
 $sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' as w WHERE ip <> "" AND ip IS NOT NULL AND datetime > "'.$date.'" and datetime < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
-print "sql: $sql";
+if ($debug == 1) print "sql: $sql \n";
 $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
-            echo "Looking up ".$row[0]." ".$timeout;
+            if ($debug == 1) print "Looking up ".$row[0]." ".$timeout."\n";
             $host = xgethostbyaddr($row[0], $timeout);
             if ($host == $row[0])
                 $host = "?";
             # Update table record...
             if($row[1] != "?") {
                 $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
-                print $sql_updt;
+                if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
                 mysqli_query($db_hub, $sql_updt);
             }
         }
