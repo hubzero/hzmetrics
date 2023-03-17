@@ -27,6 +27,7 @@
 #
 
 ETC=$(DESTDIR)/etc
+VAR_LOG=$(DESTDIR)/var/log
 INSTALLDIR=$(DESTDIR)/opt/hubzero/bin
 
 all:
@@ -71,7 +72,9 @@ install:
 	install --owner apache --group apache --mode 0750 -D metrics/import/xlogimport_authlog $(INSTALLDIR)/metrics/import/xlogimport_authlog
 	install --owner apache --group apache --mode 0750 -D metrics/import/xlogimport_webhits $(INSTALLDIR)/metrics/import/xlogimport_webhits
 
-	install --mode 0644 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/metrics
+	install --owner apache --group apache --mode 0740 -D var/log/metrics/xlogfix.log $(VAR_LOG)/metrics/xlogfix.log
+
+	install --mode 0640 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/metrics
 
 uninstall:
 	@true
