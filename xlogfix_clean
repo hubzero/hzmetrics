@@ -39,7 +39,7 @@ if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
             $sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
-            mysqli_query($db_hub, $sql_del);
+            db_exec($db_hub, $sql_del);
         }
     }
 } else {
@@ -56,7 +56,7 @@ if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
             $sql_ = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE datetime > "'.$queryDate->format('Y-m-d').'" and host LIKE '.dbquote($row[0]);
-            mysqli_query($db_hub, $sql_);
+            db_exec($db_hub, $sql_);
         }
     }
 } else {

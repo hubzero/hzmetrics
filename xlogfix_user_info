@@ -94,7 +94,7 @@ function update_tables($db_hub, $param, $table) {
                     if ($row[$r_param]) {
                         $value = strtoupper($row[$r_param]);
                         $sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
-                        mysqli_query($db_hub, $sql_updt);
+                        db_exec($db_hub, $sql_updt);
                     }
                 }
             }

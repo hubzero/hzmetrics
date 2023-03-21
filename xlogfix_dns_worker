@@ -63,7 +63,7 @@ if($result) {
             if($row[1] != "?") {
                 $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
                 if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
-                mysqli_query($db_hub, $sql_updt);
+                db_exec($db_hub, $sql_updt);
             }
         }
     }
