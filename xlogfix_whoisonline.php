@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_whoisonline
+# @file         xlogfix_whoisonline.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -34,7 +34,7 @@
 # - Creates a file <hub_site_root_dir>/site/stats/maps/whoisonline.xml which is
 #   read by google maps
 #
-# USAGE: xlogfix_whoisonline (executed as a cron every 5 minutes)
+# USAGE: xlogfix_whoisonline.php (executed as a cron every 5 minutes)
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

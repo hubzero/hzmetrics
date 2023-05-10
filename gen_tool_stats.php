@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         gen_tool_stats
+# @file         gen_tool_stats.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script computes the simulation tool stats for the current month
 #
-# USAGE: ./gen_tool_stats [<YYYY-MM>]
+# USAGE: ./gen_tool_stats.php [<YYYY-MM>]
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

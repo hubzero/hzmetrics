@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
 # @package      hubzero-metrics
-# @file         xlogplotgraph
+# @file         xlogplotgraph.pl
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #

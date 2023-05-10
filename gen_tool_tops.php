@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         gen_tool_tops
+# @file         gen_tool_tops.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -33,7 +33,7 @@
 # - Users by Country of Residence
 # - Top Domains by User Count
 #
-# USAGE: ./gen_tool_tops [<YYYY-MM>]
+# USAGE: ./gen_tool_tops.php [<YYYY-MM>]
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

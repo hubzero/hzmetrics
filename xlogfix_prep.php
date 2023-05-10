@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_prep
+# @file         xlogfix_prep.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script creates an include file for the PERL scripts
 #
-# USAGE: ./xlogfix_setup
+# USAGE: ./xlogfix_prep.php
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

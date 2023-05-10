@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogimport_authlog
+# @file         xlogimport_authlog.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # ------------------------------------------------------------------------- 
 # This Script imports information in the auth.log file into table userlogin
 #
-# USAGE: ./xlogimport_authlog <filename>
+# USAGE: ./xlogimport_authlog.php <filename>
 #
 # NOTES: This script handles log files in the old and new formats
 # 2007-05-17 11:06:39 username 128.210.189.195 login

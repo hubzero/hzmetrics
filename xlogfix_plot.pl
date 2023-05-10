@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 #
 # @package      hubzero-metrics
-# @file         xlogfix_plot
+# @file         xlogfix_plot.pl
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script generates the gnuplots for the /usage page
 #
-# USAGE: ./xlogfix_plot <YYYY-MM>
+# USAGE: ./xlogfix_plot.pl <YYYY-MM>
 #
 
 use strict;
@@ -60,7 +60,7 @@ else {
     $graphdir = $hub_dir.'/site/stats/plots';
 }
 
-our $logplotgraph = $Bin.'/includes/xlogplotgraph';
+our $logplotgraph = $Bin.'/includes/xlogplotgraph.pl';
 
 my $dthis;
 

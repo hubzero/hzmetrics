@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_domain
+# @file         xlogfix_domain.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script resolves domain fields from host fields in various tables
 #
-# USAGE: ./xlogfix_domain <database> <table>
+# USAGE: ./xlogfix_domain.php <database> <table>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

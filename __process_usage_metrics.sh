@@ -15,19 +15,19 @@ SCRIPTPATH=`dirname $SCRIPT`
 
 echoerr() { echo "$@" 1>&2; }
 
-$SCRIPTPATH/xlogfix_prep
-$SCRIPTPATH/xlogimport_tool_and_reg_user_data
-$SCRIPTPATH/xlogfix_middleware_wall
-$SCRIPTPATH/xlogfix_middleware_cpu
-$SCRIPTPATH/xlogfix_dns_v2 metrics web $1
-$SCRIPTPATH/xlogfix_dns_v2 metrics toolstart $1
-$SCRIPTPATH/xlogfix_domain metrics web
-$SCRIPTPATH/xlogfix_domain metrics toolstart
-$SCRIPTPATH/logfix_session
-$SCRIPTPATH/xlogfix_clean web
-$SCRIPTPATH/xlogfix_clean websessions
-$SCRIPTPATH/xlogfix_user_info metrics toolstart
-$SCRIPTPATH/xlogfix_ipcountry metrics web
-$SCRIPTPATH/xlogfix_ipcountry metrics websessions
-$SCRIPTPATH/xlogfix_ipcountry metrics toolstart
+$SCRIPTPATH/xlogfix_prep.php
+$SCRIPTPATH/xlogimport_tool_and_reg_user_data.php
+$SCRIPTPATH/xlogfix_middleware_wall.pl
+$SCRIPTPATH/xlogfix_middleware_cpu.pl
+$SCRIPTPATH/xlogfix_dns_v2.sh metrics web $1
+$SCRIPTPATH/xlogfix_dns_v2.sh metrics toolstart $1
+$SCRIPTPATH/xlogfix_domain.php metrics web
+$SCRIPTPATH/xlogfix_domain.php metrics toolstart
+$SCRIPTPATH/logfix_session.pl
+$SCRIPTPATH/xlogfix_clean.php web
+$SCRIPTPATH/xlogfix_clean.php websessions
+$SCRIPTPATH/xlogfix_user_info.php metrics toolstart
+$SCRIPTPATH/xlogfix_ipcountry.php metrics web
+$SCRIPTPATH/xlogfix_ipcountry.php metrics websessions
+$SCRIPTPATH/xlogfix_ipcountry.php metrics toolstart
 

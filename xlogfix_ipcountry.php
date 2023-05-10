@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_clean
+# @file         xlogfix_ipcountry.php
 # @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 # @trademark    HUBzero is a registered trademark of The Regents of the University of California.
@@ -9,7 +9,7 @@
 # ------------------------------------------------------------------------- 
 # This script assigns assigns a country to IP addresses 
 #
-# USAGE: xlogfix_ipcountry <database> <table>
+# USAGE: ./xlogfix_ipcountry.php <database> <table>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

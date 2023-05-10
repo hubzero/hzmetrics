@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 # @package      hubzero-metrics
-# @file         xlogfix_dns_v2
+# @file         xlogfix_dns_v2.sh
 # @copyright    Copyright (c) 2016-2023 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 # @trademark    HUBzero is a registered trademark of The Regents of the University of California.
@@ -8,7 +8,7 @@
 # =========================================================================
 # This script resolves host fields from ip address fields in indicated table, for selected dates
 #
-# USAGE: ./xlogfix_dns_v2 <database-prefix> <table-name> [YYYY-MM]
+# USAGE: ./xlogfix_dns_v2.sh <database-prefix> <table-name> [YYYY-MM]
 
 SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
@@ -46,9 +46,9 @@ while [ $begdate != $limitdate ]
 do
     if [ $DEBUG == "1" ]
     then
-        echo "calling xlogfix_dns_worker with: " $1 $2 $begdate $enddate&
+        echo "calling xlogfix_dns_worker.php with: " $1 $2 $begdate $enddate&
     fi
-    $SCRIPTPATH/xlogfix_dns_worker $1 $2 $begdate $enddate&
+    $SCRIPTPATH/xlogfix_dns_worker.php $1 $2 $begdate $enddate&
     enddate=$begdate
     begdate=`date '+%C%y-%m-%d' --date="$begdate -1 days"`
 done
@@ -56,9 +56,9 @@ done
 # now do one more, the first day:
 if [ $DEBUG == "1" ]
 then
-    echo "last call to xlogfix_dns_worker with: " $1 $2 $begdate $enddate
+    echo "last call to xlogfix_dns_worker.php with: " $1 $2 $begdate $enddate
 fi
-$SCRIPTPATH/xlogfix_dns_worker $1 $2 $begdate $enddate&
+$SCRIPTPATH/xlogfix_dns_worker.php $1 $2 $begdate $enddate&
 
 ps aux |grep "xlogfix_dns_worker"|grep -qv grep
 while [ $? = 0 ]

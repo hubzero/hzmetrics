@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_clean
+# @file         xlogfix_user_info.php
 # @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 # @trademark    HUBzero is a registered trademark of The Regents of the University of California.
@@ -9,7 +9,7 @@
 # This Script assigns countryresident, countrycitizen and orgtype to each 
 # user in toolstart table
 #
-# USAGE: ./xlogfix_user_info
+# USAGE: ./xlogfix_user_info.php
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

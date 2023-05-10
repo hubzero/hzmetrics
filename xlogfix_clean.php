@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_clean
+# @file         xlogfix_clean.php
 # @copyright    Copyright (c) 2016-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 # @trademark    HUBzero is a registered trademark of The Regents of the University of California.
@@ -9,7 +9,7 @@
 # ------------------------------------------------------------------------- 
 # This script clears the web and websessions tables of identified bots 
 #
-# USAGE: ./xlogfix_clean <tablename> 
+# USAGE: ./xlogfix_clean.php <tablename> 
 # <tablename> is 'web' or 'websession'
 #
 
@@ -29,7 +29,7 @@ $db_hub = db_connect('db_hub');
 
 $table = $_SERVER['argv'][1];
 if(!$table) {
-    $msg = 'USAGE: xlogfix_clean <tablename>'."\n";
+    $msg = 'USAGE: ./xlogfix_clean.php <tablename>'."\n";
     clean_exit($msg);
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 # @package      hubzero-metrics
-# @file         xlogfix_middleware_wall
+# @file         xlogfix_middleware_cpu.pl
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -29,7 +29,7 @@
 # =========================================================================
 # This Script copies over the simulation tool data from middleware logs
 #
-# USAGE: ./xlogimport_middleware_wall
+# USAGE: ./xlogfix_middleware_cpu.pl
 #
 
 use lib '/opt/DBI/lib/site_perl/5.6.1/sun4-solaris';
@@ -64,7 +64,7 @@ my $user;
 my $ip;
 my $tool;
 my $execunit;
-my $walltime;
+my $cputime;
 
 $debug = 0;
 
@@ -80,7 +80,7 @@ $dbhandle = DBI->connect("DBI:mysql:$metrics_db:$db_host", $db_user, $db_pass);
 #  Select all Middleware records...
 #--------------------------------
 #print "Finding all Middleware records...\n";
-$statement = "SELECT joblog.start, sessionlog.username, sessionlog.remoteip, sessionlog.appname, sessionlog.exechost, joblog.walltime FROM joblog, sessionlog WHERE joblog.sessnum = sessionlog.sessnum AND sessionlog.username NOT IN (".$exclude_users.") AND sessionlog.username NOT LIKE 'hctest%' AND joblog.event <> '[waiting]' ORDER BY joblog.start, sessionlog.username, sessionlog.remoteip";
+$statement = "SELECT joblog.start, sessionlog.username, sessionlog.remoteip, sessionlog.appname, sessionlog.exechost, joblog.cputime FROM joblog, sessionlog WHERE joblog.sessnum = sessionlog.sessnum AND sessionlog.username NOT IN (".$exclude_users.") AND sessionlog.username NOT LIKE 'hctest%' ORDER BY joblog.start, sessionlog.username, sessionlog.remoteip";
 $mw_sthandle = $mw_handle->prepare($statement)
     or die "Error:  can't prepare statement \"$statement\" ($mw_handle->errstr).\n";
 $mw_rowvalues = $mw_sthandle->execute
@@ -89,7 +89,7 @@ $mw_rowvalues = $mw_sthandle->execute
 #  Select all toolstart records already imported from Middleware...
 #----------------------------------------------------------------
 #print "Finding all toolstart records already imported from Middleware...\n";
-$statement = "SELECT id, datetime, user, ip, tool, execunit, walltime FROM toolstart ORDER BY datetime, user, ip";
+$statement = "SELECT id, datetime, user, ip, tool, execunit, cputime FROM toolstart ORDER BY datetime, user, ip";
 $dbsthandle = $dbhandle->prepare($statement)
     or die "Error:  can't prepare statement \"$statement\" ($dbhandle->errstr).\n";
 $dbrowvalues = $dbsthandle->execute
@@ -103,15 +103,15 @@ while(@mw_row = $mw_sthandle->fetchrow_array) {
     $ip = $mw_row[2];
     $tool = $mw_row[3];
     $execunit = $mw_row[4];
-    $walltime = $mw_row[5];
+    $cputime = $mw_row[5];
 
-    #  If no ending datetime, mark walltime as unknown...
+    #  If no ending datetime, mark cputime as unknown...
     #-----------------------------------------------------
-    if($walltime && $walltime < 0) {
-        $walltime = -1;
+    if($cputime && $cputime < 0) {
+        $cputime = -1;
     }
     else {
-        $walltime = int($walltime + .5);
+        $cputime = int($cputime + .5);
     }
 
     #  Advance toolstart pointer up to Middleware ponter...
@@ -129,8 +129,8 @@ while(@mw_row = $mw_sthandle->fetchrow_array) {
 
         #  If toolstart record is incomplete, check Middleware record for an update...
         #---------------------------------------------------------------------------
-        if($dbrow[6] < 0 && $walltime > 0) {
-            $statement = "UPDATE toolstart SET walltime = " . $dbhandle->quote($walltime)
+        if($dbrow[6] <= 0 && $cputime > 0) {
+            $statement = "UPDATE toolstart SET cputime = " . $dbhandle->quote($cputime)
                  . " WHERE id = " . $dbhandle->quote($dbrow[0])
         }
         else {
@@ -140,18 +140,9 @@ while(@mw_row = $mw_sthandle->fetchrow_array) {
     }
     else {
 
-        #  If no existing toolstart record, create a new one...
+        #  If no existing toolstart record,
+        #  Do nothing as are just importing CPUtimes
         #-------------------------------------------------------
-        $statement = "INSERT INTO toolstart (" .
-             "datetime, success, user, ip, tool, execunit, walltime" .
-             ") VALUES(" .
-             $dbhandle->quote($dt) . ", " .
-             "'1', " .
-             $dbhandle->quote($user) . ", " .
-             $dbhandle->quote($ip) . ", " .
-             $dbhandle->quote($tool) . ", " .
-             $dbhandle->quote($execunit) . ", " .
-             $dbhandle->quote($walltime) . ")";
     }
     if($statement) {
         if($debug > 1) {

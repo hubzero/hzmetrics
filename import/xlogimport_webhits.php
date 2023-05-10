@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogimport_apache
+# @file         xlogimport_webhits.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -28,10 +28,11 @@
 # HUBzero is a registered trademark of The Regents of the University of California.
 #
 # =========================================================================
-# This Script imports apache logs into the web
+# This Script imports apache logs into the web and webhits tables
 #
-# USAGE: ./xlogimport_apache <filename>
+# USAGE: ./xlogimport_webhits.php <filename>
 #
+# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -50,7 +51,7 @@ $db_hub = db_connect('db_hub');
 $filehandle = fopen($_SERVER['argv'][1], "r");
 
 if (!$filehandle) {
-    $msg = 'Error opening file: '.$_SERVER['argv'][1]."\n";
+    $msg = "Error opening file: ".$_SERVER['argv'][1]."\n";
     clean_exit($msg);
 }
 
@@ -69,9 +70,16 @@ $log_pattern_new = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([
 
 $debug     = 0;
 $prevdatestamp = '';
-$sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
-$cnt = 0;
+$hits      = 0;
 
+function update_webhits($db_hub, $datestamp, $hits)
+{
+    global $metrics_db;
+
+    $sql_ins = 'INSERT INTO '.$metrics_db.'.webhits (datetime, hits) VALUES(' . dbquote($datestamp) . ', ' . dbquote($hits) . ')';
+    $result = db_exec($db_hub, $sql_ins);
+}
+    
 while(1)
 {
     $line = fgets($filehandle);
@@ -137,9 +145,6 @@ while(1)
         continue;
 
     }
-    
-    if ((empty($uidNumber)) || ($uidNumber == '-'))
-        $uidNumber = 0;
 
     @list($method, $url, $protocol) = preg_split("/[ ]+/", $firstline);
 
@@ -154,52 +159,24 @@ while(1)
      
     $url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
 
-    $bot = 0;
-    if ($useragent)
-        $bot = checkbot($db_hub, $useragent);
-
-    if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") && (!$bot) )
+    if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") )
     {
-        if ( ( !preg_match('/\.(gif|jpeg|jpg|png|ps|ico|css|js)$/i', $url)
-            && !preg_match('/^\/templates\//i', $url)
-            && !preg_match('/^\/administrator\//i', $url)
-            && !preg_match('/^\/webdav\//i', $url)
-            && !preg_match('/\/projects\/.+?\/svn\/\!svn\//i', $url) ) 
-            || (preg_match('/^\/resources\//i', $url)) ) 
+        $hits++;
+    
+        # Insert total hit-count for previous day into database...
+        if ($prevdatestamp != $datestamp)
         {
-            $dt_time = $datestamp." ".$timestamp;   
-            $sql_ins .= ' ('.
-                dbquote($dt_time) . ', ' .
-                dbquote($url)  . ', ' .
-                dbquote($ip) . ', ' .
-                dbquote($uidNumber)  . ', ' .
-                dbquote($pid)  . ', ' .
-                dbquote($referrer)  . ', ' .
-                dbquote($useragent)  . ', ' .
-                dbquote($joomla_id)  . ', ' .
-                dbquote($st_cookie)  . ', ' .
-                dbquote($auth_type)  . ', ' .
-                dbquote($comp_name)  . ', ' .
-                dbquote($view_name)  . ', ' .
-                dbquote($task_name)  . ', ' .
-                dbquote($actn_name)  . ', ' .
-                dbquote($item_name)  . '), ';
+            if (!empty($prevdatestamp))
+                update_webhits($db_hub, $prevdatestamp, $hits-1);
 
-            $cnt++;
-            if ($cnt > 1000) {
-                $cnt = 0;
-                $sql_ins = rtrim($sql_ins, ', ');
-                db_exec($db_hub, $sql_ins); // Insert new record in database...
-                $sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
-            }
+            $prevdatestamp = $datestamp;
+            $hits = 1;
         }
     }
 }
-// taking care of remaining inserts
-if ($cnt) {
-    $sql_ins = rtrim($sql_ins, ', ');
-    db_exec($db_hub, $sql_ins); // Insert new record in database...
-}
+
+# Insert total hit-count for final day into database...
+update_webhits($db_hub, $prevdatestamp, $hits);
 
 if($unrec)
     print $unrec;

@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_summary
+# @file         xlogfix_summary.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This Script computes the data displayed in the /usage page
 #
-# USAGE: ./xlogfix_summary <YYYY-MM>
+# USAGE: ./xlogfix_summary.php <YYYY-MM>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

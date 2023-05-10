@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogimport_tool_and_reg_user_data
+# @file         xlogimport_tool_and_reg_user_data.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -32,7 +32,7 @@
 # metrics' sessionlog_metrics table and HUB jos_xprofiles table into metrics
 # jos_xprofiles_metrics table.
 #
-# USAGE: ./xlogimport_tool_and_reg_user_data
+# USAGE: ./xlogimport_tool_and_reg_user_data.php
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

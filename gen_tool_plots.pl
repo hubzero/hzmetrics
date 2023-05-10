@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 #
 # @package      hubzero-metrics
-# @file         gen_tool_plots
+# @file         gen_tool_plots.pl
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script generates the usage plot for simulation tools
 #
-# USAGE: ./gen_tool_plots [<YYYY-MM>]
+# USAGE: ./gen_tool_plots.pl [<YYYY-MM>]
 #
 
 use strict;
@@ -61,7 +61,7 @@ else {
    $graphdir = $hub_dir.'/site/stats/chart_resources';
 }
 
-our $logplotgraph = $Bin.'/includes/xlogplotgraph';
+our $logplotgraph = $Bin.'/includes/xlogplotgraph.pl';
 my $dthis;
 
 if(@ARGV < 1) {

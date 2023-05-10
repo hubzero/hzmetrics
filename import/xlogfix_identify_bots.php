@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogimport_webhits
+# @file         xlogfix_identify_bots.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -28,11 +28,10 @@
 # HUBzero is a registered trademark of The Regents of the University of California.
 #
 # =========================================================================
-# This Script imports apache logs into the web and webhits tables
+# This Script reads the apache log and populates the bot_useragents table
 #
-# USAGE: ./xlogimport_webhits <filename>
+# USAGE: ./xlogfix_identify_bots.php <filename>
 #
-# =========================================================================
 
 error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors','1');
@@ -51,35 +50,20 @@ $db_hub = db_connect('db_hub');
 $filehandle = fopen($_SERVER['argv'][1], "r");
 
 if (!$filehandle) {
-    $msg = "Error opening file: ".$_SERVER['argv'][1]."\n";
+    $msg = 'Error opening file: '.$_SERVER['argv'][1]."\n";
     clean_exit($msg);
 }
 
 $unrec = '';
 
-# building excluded IP list
-$filtered_ips = gen_exclude_list('ip');
-# building excluded URL list
-$filtered_urls = gen_exclude_list('url');
-# building excluded useragent list
-$filtered_useragents = gen_exclude_list('useragent');
+$filters = array("feedfetcher","msnbot","gsa-crawler","googlebot","yandex","spider","bot","search","crawl","archive","harvest","slurp","feed","nutch","robot","fetch","findlinks");
 
 $log_pattern_old = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+(.*)$/';
 
 $log_pattern_new = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+([\-\d]+)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s*$/';
 
-$debug     = 0;
-$prevdatestamp = '';
-$hits      = 0;
-
-function update_webhits($db_hub, $datestamp, $hits)
-{
-    global $metrics_db;
-
-    $sql_ins = 'INSERT INTO '.$metrics_db.'.webhits (datetime, hits) VALUES(' . dbquote($datestamp) . ', ' . dbquote($hits) . ')';
-    $result = db_exec($db_hub, $sql_ins);
-}
-    
+$useragent_strings = array();
+$cnt = 1;
 while(1)
 {
     $line = fgets($filehandle);
@@ -146,39 +130,31 @@ while(1)
 
     }
 
-    @list($method, $url, $protocol) = preg_split("/[ ]+/", $firstline);
-
-    if (empty($url))
-    {
-        $url = $method;
-        $method = 'GET';
-        $protocol = 'HTTP/1.1';
+    if ($useragent) {
+        array_push($useragent_strings, $useragent);
+        $cnt++;
     }
-    else if (empty($protocol))
-        $protocol = 'HTTP/1.1';
-     
-    $url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
+    if ($cnt > 1000) {
+        $cnt = 1;
+        $useragent_strings = array_unique($useragent_strings);
+    }
+}
 
-    if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") )
-    {
-        $hits++;
-    
-        # Insert total hit-count for previous day into database...
-        if ($prevdatestamp != $datestamp)
-        {
-            if (!empty($prevdatestamp))
-                update_webhits($db_hub, $prevdatestamp, $hits-1);
 
-            $prevdatestamp = $datestamp;
-            $hits = 1;
+$useragent_strings = array_unique($useragent_strings);
+foreach($useragent_strings as $agent) {
+    foreach ($filters as $filter) {
+        if (stripos($agent, $filter) !== false) {
+            $sql_ins = 'INSERT IGNORE INTO '.$metrics_db.'.bot_useragents (useragent) VALUES ('.dbquote($agent).')';
+            db_exec($db_hub, $sql_ins);
         }
     }
 }
 
-# Insert total hit-count for final day into database...
-update_webhits($db_hub, $prevdatestamp, $hits);
+$sql = 'DELETE FROM '.$metrics_db.'.bot_useragents WHERE (useragent LIKE "%searchtool%" OR useragent LIKE "% feed/%")';
+db_exec($db_hub, $sql);
 
-if($unrec)
+if ($unrec)
     print $unrec;
 
 fclose($filehandle);

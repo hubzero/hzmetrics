@@ -3,7 +3,7 @@
 # =========================================================================
 # This script resolves host fields from ip address fields in various tables
 #
-# USAGE: ./xlogfix_dns_worker <database> <table> <startdate> <enddate>
+# USAGE: ./xlogfix_dns_worker.php <database> <table> <startdate> <enddate>
 #
 # =========================================================================
 # AUTHOR: Swaroop Shivarajapura S, Purdue University

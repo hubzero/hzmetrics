@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogfix_andmore_usage
+# @file         xlogfix_andmore_usage.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -30,7 +30,7 @@
 # =========================================================================
 # This script computes usage metrics for "and more" resources
 #
-# USAGE: ./xlogfix_andmore_usage <YYYY-MM>
+# USAGE: ./xlogfix_andmore_usage.php <YYYY-MM>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);

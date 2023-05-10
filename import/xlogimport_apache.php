@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 # @package      hubzero-metrics
-# @file         xlogimport_identify_bots
+# @file         xlogimport_apache.php
 # @copyright    Copyright (c) 2011-2020 The Regents of the University of California.
 # @license      http://opensource.org/licenses/MIT MIT
 #
@@ -28,9 +28,9 @@
 # HUBzero is a registered trademark of The Regents of the University of California.
 #
 # =========================================================================
-# This Script reads the apache log and populates the bot_useragents table
+# This Script imports apache logs into the web
 #
-# USAGE: ./xlogfix_identify_bots <filename>
+# USAGE: ./xlogimport_apache.php <filename>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);
@@ -56,14 +56,22 @@ if (!$filehandle) {
 
 $unrec = '';
 
-$filters = array("feedfetcher","msnbot","gsa-crawler","googlebot","yandex","spider","bot","search","crawl","archive","harvest","slurp","feed","nutch","robot","fetch","findlinks");
+# building excluded IP list
+$filtered_ips = gen_exclude_list('ip');
+# building excluded URL list
+$filtered_urls = gen_exclude_list('url');
+# building excluded useragent list
+$filtered_useragents = gen_exclude_list('useragent');
 
 $log_pattern_old = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+(.*)$/';
 
 $log_pattern_new = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+([\-\d]+)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s*$/';
 
-$useragent_strings = array();
-$cnt = 1;
+$debug     = 0;
+$prevdatestamp = '';
+$sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
+$cnt = 0;
+
 while(1)
 {
     $line = fgets($filehandle);
@@ -129,32 +137,71 @@ while(1)
         continue;
 
     }
+    
+    if ((empty($uidNumber)) || ($uidNumber == '-'))
+        $uidNumber = 0;
 
-    if ($useragent) {
-        array_push($useragent_strings, $useragent);
-        $cnt++;
+    @list($method, $url, $protocol) = preg_split("/[ ]+/", $firstline);
+
+    if (empty($url))
+    {
+        $url = $method;
+        $method = 'GET';
+        $protocol = 'HTTP/1.1';
     }
-    if ($cnt > 1000) {
-        $cnt = 1;
-        $useragent_strings = array_unique($useragent_strings);
-    }
-}
+    else if (empty($protocol))
+        $protocol = 'HTTP/1.1';
+     
+    $url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
 
+    $bot = 0;
+    if ($useragent)
+        $bot = checkbot($db_hub, $useragent);
 
-$useragent_strings = array_unique($useragent_strings);
-foreach($useragent_strings as $agent) {
-    foreach ($filters as $filter) {
-        if (stripos($agent, $filter) !== false) {
-            $sql_ins = 'INSERT IGNORE INTO '.$metrics_db.'.bot_useragents (useragent) VALUES ('.dbquote($agent).')';
-            db_exec($db_hub, $sql_ins);
+    if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") && (!$bot) )
+    {
+        if ( ( !preg_match('/\.(gif|jpeg|jpg|png|ps|ico|css|js)$/i', $url)
+            && !preg_match('/^\/templates\//i', $url)
+            && !preg_match('/^\/administrator\//i', $url)
+            && !preg_match('/^\/webdav\//i', $url)
+            && !preg_match('/\/projects\/.+?\/svn\/\!svn\//i', $url) ) 
+            || (preg_match('/^\/resources\//i', $url)) ) 
+        {
+            $dt_time = $datestamp." ".$timestamp;   
+            $sql_ins .= ' ('.
+                dbquote($dt_time) . ', ' .
+                dbquote($url)  . ', ' .
+                dbquote($ip) . ', ' .
+                dbquote($uidNumber)  . ', ' .
+                dbquote($pid)  . ', ' .
+                dbquote($referrer)  . ', ' .
+                dbquote($useragent)  . ', ' .
+                dbquote($joomla_id)  . ', ' .
+                dbquote($st_cookie)  . ', ' .
+                dbquote($auth_type)  . ', ' .
+                dbquote($comp_name)  . ', ' .
+                dbquote($view_name)  . ', ' .
+                dbquote($task_name)  . ', ' .
+                dbquote($actn_name)  . ', ' .
+                dbquote($item_name)  . '), ';
+
+            $cnt++;
+            if ($cnt > 1000) {
+                $cnt = 0;
+                $sql_ins = rtrim($sql_ins, ', ');
+                db_exec($db_hub, $sql_ins); // Insert new record in database...
+                $sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
+            }
         }
     }
 }
+// taking care of remaining inserts
+if ($cnt) {
+    $sql_ins = rtrim($sql_ins, ', ');
+    db_exec($db_hub, $sql_ins); // Insert new record in database...
+}
 
-$sql = 'DELETE FROM '.$metrics_db.'.bot_useragents WHERE (useragent LIKE "%searchtool%" OR useragent LIKE "% feed/%")';
-db_exec($db_hub, $sql);
-
-if ($unrec)
+if($unrec)
     print $unrec;
 
 fclose($filehandle);
