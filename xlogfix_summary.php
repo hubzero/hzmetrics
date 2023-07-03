@@ -135,7 +135,7 @@ function compute_all(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
     global $dbug;
 
     if ($dbug) {
-        print n.'Generating summary page data for month='.$dthis.'. Period='.$period;
+        print "\n".'Generating summary page data for month='.$dthis.'. Period='.$period;
         print ' ('.$dstart.' to '.$dstop.')'."\n";
     }
     reg_users($db_hub, $dthis, $dstart, $dstop, $period);
