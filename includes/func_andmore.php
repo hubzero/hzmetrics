@@ -52,7 +52,7 @@ function get_paths(&$db_hub, $resid_list) {
 
 						# todo - This will not work as play is on the child resource. not parent
 						// "%/play?resid=7288%"
-						$path5 = '%/play?resid='.ltrim($path_[sizeof($path_)-2],0)."%";
+						$path5 = '%/play?resid='.ltrim($path_[sizeof($path_)-2],'0')."%";
 
 						$match_string .= 'content LIKE "'.$path4.'" OR ';
 					} else {
@@ -60,7 +60,7 @@ function get_paths(&$db_hub, $resid_list) {
 						$path1 = '/site/resources/'.$path;
 
 						// content = "/resources/9423/download/2010.07.21-Lundstrom-NT101.pdf"
-						$path2 = '/resources/'.ltrim($path_[sizeof($path_)-2],0).'/download/'.$path_[sizeof($path_)-1];
+						$path2 = '/resources/'.ltrim($path_[sizeof($path_)-2],'0').'/download/'.$path_[sizeof($path_)-1];
 
 						# todo - Never seen this pattern
 						// content = "/resources/09423/download/2010.07.21-Lundstrom-NT101.pdf"
