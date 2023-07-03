@@ -87,24 +87,25 @@ function get_tool_versions_aliases($db_hub, $aliases_x) {
 function db_fetch(&$db_hub, $sql) {
 
     global $debug;
-
-    $val = '';
-    if (!mysqli_ping($db_hub))
-        $db_hub = db_connect('db_hub');
-
     if ($debug)
         print $sql."\n";
 
-    $result = mysqli_query($db_hub, $sql);
-    if($result) {
-        if(mysqli_num_rows($result) > 0) {
-            while($row = mysqli_fetch_row($result)) {
-                $val = $row[0];
+    $val = '';
+    if ($db_hub instanceof mysqli) {
+        if (!mysqli_ping($db_hub))
+            $db_hub = db_connect('db_hub');
+
+        $result = mysqli_query($db_hub, $sql);
+        if($result) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
+                    $val = $row[0];
+                }
             }
+        } else {
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+            clean_exit($msg);
         }
-    } else {
-        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-        clean_exit($msg);
     }
     return $val;
 }
@@ -133,7 +134,7 @@ function get_dates($dthis_, $period) {
     } else if (preg_match($dt_pattern_2, $dthis_, $matches) <> 0)  {
         $dates = get_dates_for_period($matches[0], $period);
     } else {
-        $msg = 'Invalid Date'.t.$dthis_."\n";
+        $msg = 'Invalid Date '.$dthis_."\n";
         clean_exit($msg);
     }
     $dates['dthis'] =  $matches[1]."-".$matches[2].'-00';
@@ -162,20 +163,21 @@ function get_dates_for_period($dthis, $period) {
     $cd = strtotime($givendate);
     $d_month = date('m', $cd);
     $d_year = date('Y', $cd);
+    $dates = NULL;
 
     switch ($period) {
 
         // Calendar Year
         case 0:
-            $date1 = date('Y', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd), date('d',$cd), date('Y',$cd))).'-01-01';
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date1 = date('Y', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd), idate('d',$cd), idate('Y',$cd))).'-01-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             $dates = array("start"=>$date1,"stop"=>$date2);
             break;
 
         // Month
         case 1:
-            $date1 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd), date('d',$cd), date('Y',$cd))).'-01';
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date1 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd), idate('d',$cd), idate('Y',$cd))).'-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             $dates = array("start"=>$date1,"stop"=>$date2);
             break;
 
@@ -190,20 +192,20 @@ function get_dates_for_period($dthis, $period) {
             } else if ($d_month >= 10 && $d_month <=12) {
                 $date1 = $d_year."-10-01";
             }
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             $dates = array("start"=>$date1,"stop"=>$date2);
             break;
 
         // 12 months
         case 12:
-            $date1 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)-11, date('d',$cd), date('Y',$cd))).'-01';
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date1 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)-11, idate('d',$cd), idate('Y',$cd))).'-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             $dates = array("start"=>$date1,"stop"=>$date2);
             break;
 
         // Fiscal Year (Oct - Sep)
         case 13:
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             if ($d_month >= 10) {
                 $date1 = $d_year.'-10-01';
             } else {
@@ -215,7 +217,7 @@ function get_dates_for_period($dthis, $period) {
         // Overall Time period
         case 14:
             $date1 = "1995-01-01";
-            $date2 = date('Y-m', mktime(date('h',$cd),date('i',$cd), date('s',$cd), date('m',$cd)+1, date('d',$cd), date('Y',$cd))).'-01';
+            $date2 = date('Y-m', mktime(idate('h',$cd),idate('i',$cd), idate('s',$cd), idate('m',$cd)+1, idate('d',$cd), idate('Y',$cd))).'-01';
             $dates = array("start"=>$date1,"stop"=>$date2);
             break;
 
@@ -243,8 +245,10 @@ function xgethostbyaddr($ip, $timeout = 1)
 function dbquote($str) {
 
     global $db_hub;
-    return '"' . mysqli_real_escape_string($db_hub, $str) . '"';
 
+    if ($db_hub instanceof mysqli) {
+        return '"' . mysqli_real_escape_string($db_hub, $str) . '"';
+    }
 }
 
 function get_countries(&$db_hub, $sql) {
@@ -341,16 +345,18 @@ function gen_exclude_list($type) {
     $arr = array();
 
     $sql = 'SELECT filter FROM '.$metrics_db.'.exclude_list WHERE type = '.dbquote($type);
-    $result = mysqli_query($db_hub, $sql);
-    if($result) {
-        if(mysqli_num_rows($result) > 0) {
-            while($row = mysqli_fetch_row($result)) {
-                array_push($arr, $row[0]);
+    if ($db_hub instanceof mysqli) {
+        $result = mysqli_query($db_hub, $sql);
+        if($result) {
+            if(mysqli_num_rows($result) > 0) {
+                while($row = mysqli_fetch_row($result)) {
+                    array_push($arr, $row[0]);
+                }
             }
+        } else {
+            $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+            clean_exit($msg);
         }
-    } else {
-        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-        clean_exit($msg);
     }
     return $arr;
 
