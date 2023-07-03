@@ -36,6 +36,7 @@ if(!ini_get('date.timezone'))
     date_default_timezone_set($output[0]);
 }
 
+$DocumentRootKey = NULL;
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
 $inicontents = preg_replace('/^\s*basedn\s*=\s*(.*)$/mi','basedn="$1"', $inicontents);

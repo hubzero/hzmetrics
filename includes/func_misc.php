@@ -164,6 +164,8 @@ function get_dates_for_period($dthis, $period) {
     $d_month = date('m', $cd);
     $d_year = date('Y', $cd);
     $dates = NULL;
+    $date1 = NULL;
+    $date2 = NULL;
 
     switch ($period) {
 

@@ -145,7 +145,7 @@ function get_usage($db_hub, $match_string, $dstart, $dstop) {
     if($result) {
         if(mysqli_num_rows($result) > 0) {
             while($row = mysqli_fetch_row($result)) {
-                $users = $row['0'];
+                $users = $row[0];
             }
         }
     } else {
