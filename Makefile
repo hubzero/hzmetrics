@@ -44,7 +44,6 @@ install:
 	install --owner apache --group apache --mode 0750 -D metrics/__process_usage_metrics_summary.sh $(INSTALLDIR)/metrics/__process_usage_metrics_summary.sh
 	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_andmore_usage.php $(INSTALLDIR)/metrics/xlogfix_andmore_usage.php
 	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_clean.php $(INSTALLDIR)/metrics/xlogfix_clean.php
-	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns $(INSTALLDIR)/metrics/xlogfix_dns
 	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns_v2.sh $(INSTALLDIR)/metrics/xlogfix_dns_v2.sh
 	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_dns_worker.php $(INSTALLDIR)/metrics/xlogfix_dns_worker.php
 	install --owner apache --group apache --mode 0750 -D metrics/xlogfix_domain.php $(INSTALLDIR)/metrics/xlogfix_domain.php
