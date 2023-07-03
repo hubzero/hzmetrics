@@ -399,13 +399,13 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
         if($result) {
             if(mysqli_num_rows($result) > 0) {
                 while($row = mysqli_fetch_assoc($result)) {
-                    $geo_data['n_ip'] = $xml->ipset->n_ip;
-                    $geo_data['countrySHORT'] = $xml->ipset->countryCode;
-                    $geo_data['countryLONG'] = $xml->ipset->countryName;
-                    $geo_data['ipREGION'] = $xml->ipset->region;
-                    $geo_data['ipCITY'] = $xml->ipset->city;
-                    $geo_data['ipLATITUDE'] = $xml->ipset->lat;
-                    $geo_data['ipLONGITUDE'] = $xml->ipset->long;
+                    $geo_data['n_ip'] = $row['ip'];
+                    $geo_data['countrySHORT'] =  $row['countrySHORT'];
+                    $geo_data['countryLONG'] = $row['countryLONG'];
+                    $geo_data['ipREGION'] = $row['ipREGION'];
+                    $geo_data['ipCITY'] = $row['ipCITY'];
+                    $geo_data['ipLATITUDE'] = $row['ipLATITUDE'];
+                    $geo_data['ipLONGITUDE'] = $row['ipLONGITUDE'];
                     return $geo_data;
                 }
             }
