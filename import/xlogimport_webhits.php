@@ -28,7 +28,7 @@
 # HUBzero is a registered trademark of The Regents of the University of California.
 #
 # =========================================================================
-# This Script imports apache logs into the web and webhits tables
+# This Script imports apache logs into the webhits table
 #
 # USAGE: ./xlogimport_webhits.php <filename>
 #
