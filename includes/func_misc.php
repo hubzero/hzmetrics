@@ -396,7 +396,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
     $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
     $local_exists = db_fetch($db_hub, $sql);
     if ($local_exists) {
-        $sql = 'SELECT * FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
+        $sql = 'SELECT ip, countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE, lookup_datetime FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
         $result = mysqli_query($db_hub, $sql);
         if($result) {
             if(mysqli_num_rows($result) > 0) {
