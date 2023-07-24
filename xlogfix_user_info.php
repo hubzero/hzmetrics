@@ -9,7 +9,7 @@
 # This Script assigns countryresident, countrycitizen and orgtype to each 
 # user in toolstart table
 #
-# USAGE: ./xlogfix_user_info.php
+# USAGE: ./xlogfix_user_info.php <database-prefix> <table-name>
 #
 
 error_reporting(E_ALL & ~E_NOTICE);
