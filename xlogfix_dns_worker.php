@@ -2,6 +2,7 @@
 <?php
 # =========================================================================
 # This script resolves host fields from ip address fields in various tables
+# It's called for tables: web, toolstart, sessionlog_metrics
 #
 # USAGE: ./xlogfix_dns_worker.php <database> <table> <startdate> <enddate>
 #
@@ -49,7 +50,14 @@ if ($database == 'hub') {
     clean_exit($msg);
 }
 
-$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' as w WHERE ip <> "" AND ip IS NOT NULL AND datetime > "'.$date.'" and datetime < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
+// set the correct column name: it's sessionlog_metrics.start but web.datetime and toolstart.datetime
+if ($table == 'sessionlog_metrics') {
+    $d_column = 'start';
+} else {
+    $d_column = 'datetime';
+} 
+$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
+
 if ($debug == 1) print "sql: $sql \n";
 $result = mysqli_query($db_hub, $sql);
 if($result) {
@@ -57,10 +65,13 @@ if($result) {
         while($row = mysqli_fetch_row($result)) {
             if ($debug == 1) print "Looking up ".$row[0]." ".$timeout."\n";
             $host = xgethostbyaddr($row[0], $timeout);
+
+            // if host lookup was unsuccessful, IP is returned
             if ($host == $row[0])
                 $host = "?";
-            # Update table record...
-            if($row[1] != "?") {
+
+            // Update table record if we found a host (or a change from host="?"):
+            if($row[1] != "?" AND $host != "?") {
                 $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
                 if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
                 db_exec($db_hub, $sql_updt);
