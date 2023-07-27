@@ -18,7 +18,7 @@ $SCRIPTPATH/xlogimport_tool_and_reg_user_data.php
 $SCRIPTPATH/xlogfix_dns_v2.sh metrics sessionlog_metrics $1
 $SCRIPTPATH/xlogfix_domain.php metrics sessionlog_metrics
 $SCRIPTPATH/xlogfix_user_info.php metrics sessionlog_metrics $1
-$SCRIPTPATH/xlogfix_ipcountry.php metrics sessionlog_metrics
+$SCRIPTPATH/xlogfix_ipcountry.php metrics sessionlog_metrics $1
 $SCRIPTPATH/gen_tool_stats.php $1
 $SCRIPTPATH/gen_tool_tops.php $1
 $SCRIPTPATH/gen_tool_plots.pl $1

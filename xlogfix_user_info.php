@@ -9,6 +9,9 @@
 # This Script assigns countryresident, countrycitizen and orgtype to each 
 # user in toolstart and sessionlog_metrics tables, where possible.
 #
+# If a YYYY-MM date argument is passed it runs this computation for each week
+# in the specified month; if not, for each week in the month up to the current day.
+#
 # USAGE: ./xlogfix_user_info.php <database-prefix> <table-name> [<YYYY-MM>]
 #
 
@@ -134,72 +137,6 @@ function update_tables($db_hub, $param, $table, $ddateStart, $ddateEnd) {
             clean_exit($msg);
         }
     }
-}
-
-
-/*
- * findWeeks()
- *
- * input:
- *   yearMonthStr YYYY-MM string indicating effective month for calculation
- *   endDayStr    dd      string indicating end day for calculation, if any
- *
- * output: array of strings indicating start/end dates for approx. 7 day 'weeks'
-*/
-function findWeeks($yearMonthStr, $endDayStr = NULL)
-{
-    global $debug;
-
-    // Convert the yearMonth string to a DateTime object
-    $yearMonth = DateTime::createFromFormat('Y-m', $yearMonthStr);
-
-    if (!$yearMonth ) {
-        return "Invalid input format. Please use YYYY-MM format for yearMonthStr.";
-    }
-
-    // Set the timezone to match your desired timezone if needed
-    // $yearMonth->setTimezone(new DateTimeZone('Your/Timezone'));
-
-    // Get the first day and last day of the month
-    $firstDay = clone $yearMonth;
-    $firstDay->modify('first day of this month')->modify('-1 day'); // Day before the start of the month
-
-    // Set last day of calculation (or month) depending on whether $endDayStr is set
-    if ( is_null($endDayStr) ) {
-        $lastDay = clone $yearMonth;
-        $lastDay->modify('last day of this month')->modify('+1 day'); // Day after the end of the month
-    } else {
-        $dateStr = $yearMonthStr.'-'.$endDayStr;
-        $lastDay = DateTime::createFromFormat('Y-m-d', $dateStr);
-    }
-
-    // Initialize an array to store the periods
-    $periods = array();
-
-    // Start the first period from the day before the start of the month
-    $periodStart = clone $firstDay;
-
-    // Calculate approximate 7-day periods
-    while ($periodStart < $lastDay) {
-        $periodEnd = clone $periodStart;
-        $periodEnd->modify('+7 days');
-
-        // Adjust the calculated period end
-        if ($periodEnd >= $lastDay) {
-            $periodEnd = clone $lastDay;
-        }
-
-        // Add the current period to the array
-        $periods[] = array(
-            'start' => $periodStart->format('Y-m-d'),
-            'end' => $periodEnd->format('Y-m-d')
-        );
-
-        // Move to the next period
-        $periodStart->modify('+7 day');
-    }
-
-    return $periods;
 }
 
 ?>

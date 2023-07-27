@@ -83,6 +83,79 @@ function get_tool_versions_aliases($db_hub, $aliases_x) {
 }
 
 # --------------------------------------------------------------------------------------------
+
+/*
+ * findWeeks()
+ *
+ * Compute start and end dates for approximately week-long periods in
+ * specified YYYY-MM interval. Return computed start/end dates as strings in an array.
+ *
+ * input:
+ *   yearMonthStr YYYY-MM string indicating effective month for calculation
+ *   endDayStr    dd      string indicating end day for calculation, if any
+ *
+ * output:
+ *   periods  array of strings indicating start/end dates for approx. 7 day 'weeks'
+ *      indexed as 'start' and 'end'
+*/
+function findWeeks($yearMonthStr, $endDayStr = NULL)
+{
+    // Convert the yearMonth string to a DateTime object
+    $yearMonth = DateTime::createFromFormat('Y-m', $yearMonthStr);
+
+    // Check if the conversion was successful
+    //if (!$yearMonth ) {
+    //    return "Invalid input format. Please use YYYY-MM format for yearMonthStr.";
+    //}
+
+    // Set the timezone to match your desired timezone if needed
+    // $yearMonth->setTimezone(new DateTimeZone('Your/Timezone'));
+
+    // Get the first day and last day of the month
+    $firstDay = clone $yearMonth;
+    $firstDay->modify('first day of this month')->modify('-1 day'); // Day before the start of the month
+
+    // Set last day of calculation (or month) depending on whether $endDayStr is set
+    if ( is_null($endDayStr) ) {
+        $lastDay = clone $yearMonth;
+        $lastDay->modify('last day of this month')->modify('+1 day'); // Day after the end of the month
+    } else {
+        $dateStr = $yearMonthStr.'-'.$endDayStr;
+        $lastDay = DateTime::createFromFormat('Y-m-d', $dateStr);
+    }
+
+    // Initialize an array to store the periods
+    $periods = array();
+
+    // Start the first period from the day before the start of the month
+    $periodStart = clone $firstDay;
+
+    // Calculate approximately 7-day periods
+    while ($periodStart < $lastDay) {
+        $periodEnd = clone $periodStart;
+        $periodEnd->modify('+7 days');
+
+        // Adjust the calculated period end
+        if ($periodEnd >= $lastDay) {
+            $periodEnd = clone $lastDay;
+        }
+
+        // Add the current period to the array
+        $periods[] = array(
+            'start' => $periodStart->format('Y-m-d'),
+            'end' => $periodEnd->format('Y-m-d')
+        );
+
+        // Move to the next period
+        $periodStart->modify('+7 day');
+    }
+
+    return $periods;
+}
+
+
+# --------------------------------------------------------------------------------------------
+
 # Execute sql function used for SELECT statements with single returns (for $db_hub only)
 function db_fetch(&$db_hub, $sql) {
 

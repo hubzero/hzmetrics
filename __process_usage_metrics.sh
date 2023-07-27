@@ -26,8 +26,8 @@ $SCRIPTPATH/xlogfix_domain.php metrics toolstart
 $SCRIPTPATH/logfix_session.pl
 $SCRIPTPATH/xlogfix_clean.php web
 $SCRIPTPATH/xlogfix_clean.php websessions
-$SCRIPTPATH/xlogfix_user_info.php metrics toolstart
-$SCRIPTPATH/xlogfix_ipcountry.php metrics web
-$SCRIPTPATH/xlogfix_ipcountry.php metrics websessions
-$SCRIPTPATH/xlogfix_ipcountry.php metrics toolstart
+$SCRIPTPATH/xlogfix_user_info.php metrics toolstart $1
+$SCRIPTPATH/xlogfix_ipcountry.php metrics web $1
+$SCRIPTPATH/xlogfix_ipcountry.php metrics websessions $1
+$SCRIPTPATH/xlogfix_ipcountry.php metrics toolstart $1
 
