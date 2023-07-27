@@ -103,14 +103,6 @@ function findWeeks($yearMonthStr, $endDayStr = NULL)
     // Convert the yearMonth string to a DateTime object
     $yearMonth = DateTime::createFromFormat('Y-m', $yearMonthStr);
 
-    // Check if the conversion was successful
-    //if (!$yearMonth ) {
-    //    return "Invalid input format. Please use YYYY-MM format for yearMonthStr.";
-    //}
-
-    // Set the timezone to match your desired timezone if needed
-    // $yearMonth->setTimezone(new DateTimeZone('Your/Timezone'));
-
     // Get the first day and last day of the month
     $firstDay = clone $yearMonth;
     $firstDay->modify('first day of this month')->modify('-1 day'); // Day before the start of the month
