@@ -115,23 +115,25 @@ if($result) {
     clean_exit($msg);
 }
 
-# Looking up Latitude and Longiture information for sessions currently online based on their IP addresses
+# Looking up Latitude and Longitude information for sessions currently online based on their IP addresses
 #------------------------------------------------------------------------------
-$sql = 'SELECT DISTINCT(INET_ATON(ip)) AS n_ip, domain FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE IS NULL';
+// Acquire ip addresses with no associated latitude data. Specify ip as dotted quad format:
+$sql = 'SELECT DISTINCT(ip) AS n_ip, domain FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE IS NULL';
 $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_assoc($result)) {
-            $n_ip = $row['n_ip'];
             $domain = $row['domain'];
             $bot = 0;
             $sql_bot = 'SELECT COUNT(*) FROM '.$metrics_db.'.exclude_list WHERE filter = '.dbquote($domain).' AND type = "domain"';
             $bot = db_exec($db_hub, $sql_bot);
             if ($bot)
                 $bot = 1;
+            // Determine region, country, lat, lon data if possible.
             $data = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
             if ($data) {
-                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET countrySHORT = '.dbquote($data['countrySHORT']).', countryLONG = '.dbquote($data['countryLONG']).', ipREGION = '.dbquote($data['ipREGION']).', ipCITY = '.dbquote($data['ipCITY']).', ipLATITUDE = '.dbquote($data['ipLATITUDE']).', ipLONGITUDE = '.dbquote($data['ipLONGITUDE']).', bot = '.dbquote($bot).' WHERE INET_ATON(ip) = '.dbquote($n_ip);
+                // Perform update of geo information if available. Specify ip as dotted quad format.
+                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET countrySHORT = '.dbquote($data['countrySHORT']).', countryLONG = '.dbquote($data['countryLONG']).', ipREGION = '.dbquote($data['ipREGION']).', ipCITY = '.dbquote($data['ipCITY']).', ipLATITUDE = '.dbquote($data['ipLATITUDE']).', ipLONGITUDE = '.dbquote($data['ipLONGITUDE']).', bot = '.dbquote($bot).' WHERE ip = '.dbquote($n_ip);
                 db_exec($db_hub, $sql_);
             }
         }

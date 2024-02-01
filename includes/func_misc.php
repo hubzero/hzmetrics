@@ -441,9 +441,12 @@ function checkbot (&$db_hub, $useragent) {
     return $bot;
 }
 
-function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
+function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $ip) {
 
     global $hub_db, $db_hub, $db_prefix;
+
+    // Convert provided ip address from dotted quad to a long:
+    $n_ip = ip2long($ip);
 
     $geo_data = array();
     $geo_data['n_ip'] = $n_ip;
@@ -458,15 +461,15 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
     if (!is_numeric($n_ip))
         return $geo_data;
 
+    // If possible, determine location information using the local database table. IP is expected in long format:
     $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
     $local_exists = db_fetch($db_hub, $sql);
     if ($local_exists) {
-        $sql = 'SELECT ip, countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE, lookup_datetime FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
+        $sql = 'SELECT countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE, lookup_datetime FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
         $result = mysqli_query($db_hub, $sql);
         if($result) {
             if(mysqli_num_rows($result) > 0) {
                 while($row = mysqli_fetch_assoc($result)) {
-                    $geo_data['n_ip'] = $row['ip'];
                     $geo_data['countrySHORT'] =  $row['countrySHORT'];
                     $geo_data['countryLONG'] = $row['countryLONG'];
                     $geo_data['ipREGION'] = $row['ipREGION'];
@@ -480,6 +483,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip) {
             $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
             clean_exit($msg);
         }
+    // Otherwise, determine location information using the ipgeo url:
     } else {
         $url = $hubzero_ipgeo_url.'/?&hub_key='.$hub_key.'&n_ip='.$n_ip;
         $xml = @simplexml_load_file($url);
