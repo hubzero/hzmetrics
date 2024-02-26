@@ -29,10 +29,6 @@
 #
 # USAGE: ./logfix_session.pl
 
-use lib '/opt/DBI/lib/site_perl/5.6.1/sun4-solaris';
-use lib '/opt/Data-ShowTable/lib/site_perl/5.6.1';
-use lib '/opt/DBD-mysql/lib/site_perl/5.6.1/sun4-solaris';
-use lib '/opt/mysql/lib/mysql';
 use strict;
 use DBI;
 
