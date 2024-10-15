@@ -44,6 +44,11 @@ $inicontents = preg_replace('/^\s*syncuserdn\s*=\s*(.*)$/mi','syncuserdn="$1"', 
 $inicontents = preg_replace('/^\s*searchuserdn\s*=\s*(.*)$/mi','searchuserdn="$1"', $inicontents);
 $inicontents = preg_replace('/^\s*adminuserdn\s*=\s*(.*)$/mi','adminuserdn="$1"', $inicontents);
 $inicontents = preg_replace('/^\s*Org\s*=\s*(.*)$/m','Org="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*ldap.basedn\s*=\s*(.*)$/mi','ldap.basedn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*ldap.syncuserdn\s*=\s*(.*)$/mi','ldap.syncuserdn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*ldap.searchuserdn\s*=\s*(.*)$/mi','ldap.searchuserdn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*ldap.adminuserdn\s*=\s*(.*)$/mi','ldap.adminuserdn="$1"', $inicontents);
+$inicontents = preg_replace('/^\s*ldap.Org\s*=\s*(.*)$/m','ldap.Org="$1"', $inicontents);
 $result = parse_ini_string($inicontents, true);
 
 if (!is_array($result))
