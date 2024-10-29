@@ -56,7 +56,8 @@ if ($table == 'sessionlog_metrics') {
 } else {
     $d_column = 'datetime';
 } 
-$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
+#$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
+$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host IS NULL)';
 
 if ($debug == 1) print "sql: $sql \n";
 $result = mysqli_query($db_hub, $sql);
@@ -71,11 +72,11 @@ if($result) {
                 $host = "?";
 
             // Update table record if we found a host (or a change from host="?"):
-            if($row[1] != "?" || $host != "?") {
-                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
-                if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
-                db_exec($db_hub, $sql_updt);
-            }
+            #if($row[1] != "?" || $host != "?") {
+            #    $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
+            #    if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
+            #    db_exec($db_hub, $sql_updt);
+            #}
         }
     }
 } else {

@@ -67,7 +67,7 @@ $log_pattern_old = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\
 
 $log_pattern_new = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+([\-\d]+)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s*$/';
 
-$debug     = 0;
+$debug     = 1;
 $prevdatestamp = '';
 $sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
 $cnt = 0;
@@ -158,9 +158,17 @@ while(1)
     if ($useragent)
         $bot = checkbot($db_hub, $useragent);
 
+    # If these file suffixes are found in URL they should be excluded from import into the 'web' table:
+    $codeSuffixes  = 'css|js';
+    $imgSuffixes  = 'gif|jpeg|jpg|png|ps|ico';
+    $fontSuffixes = 'svg|otf|ttf|woff|eot';
+    $excludeSuffixes = $codeSuffixes.'|'.$imgSuffixes.'|'.$fontSuffixes;
+
     if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") && (!$bot) )
     {
-        if ( ( !preg_match('/\.(gif|jpeg|jpg|png|ps|ico|css|js)$/i', $url)
+        # Exclude from import URLs having specific code, image, and font suffixes with or without query strings:
+        #if ( ( !preg_match('/\.(gif|jpeg|jpg|png|ps|ico|css|js)$/i', $url)
+        if ( ( !preg_match('/\.('.$excludeSuffixes.')(\?.*=.*(\&.*=.*)*)*$/i', $url)
             && !preg_match('/^\/templates\//i', $url)
             && !preg_match('/^\/administrator\//i', $url)
             && !preg_match('/^\/webdav\//i', $url)
@@ -186,6 +194,8 @@ while(1)
                 dbquote($item_name)  . '), ';
 
             $cnt++;
+            if ($debug) print ("\n INSERTING $datetime: $url $useragent\n");
+
             if ($cnt > 1000) {
                 $cnt = 0;
                 $sql_ins = rtrim($sql_ins, ', ');
