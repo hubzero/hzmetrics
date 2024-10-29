@@ -14,6 +14,12 @@ SCRIPT=`readlink -f $0`
 SCRIPTPATH=`dirname $SCRIPT`
 DEBUG="0"
 
+# echo scriptname
+if [ $DEBUG == "1" ]
+then
+        echo $0
+fi
+
 # determine the date range to process:
 if [ $# -lt 3 ]
 # only two args passed (db name and table name)

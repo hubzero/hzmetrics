@@ -27,7 +27,7 @@ require_once(__DIR__."/includes/db_connect.php");
 require_once(__DIR__."/includes/func_misc.php");
 
 $db_hub = db_connect('db_hub');
-$debug = 1;
+$debug = 0;
 
 if (!$_SERVER['argv'][1]) {
     $msg = "USAGE: " . $_SERVER['argv'][0] . " <tablename> [YYYY-MM]\n";
@@ -49,20 +49,24 @@ if ($_SERVER['argc'] < 3) {
     $day = NULL;
 }
 
+if ($debug) print("Table for bot removal is: ".$table."\n");
 if ($debug) print("Effective computation month is: ".$yearMonth."\n");
 if ($debug) print("Effective computation day is: ".$day."\n");
 
+// run the processing for each week in the effective month:
+$calculationDates = findWeeks($yearMonth, $day);
+if ($debug) print("Effective computation dates: \n");
+if ($debug) print_r($calculationDates);
+
 // clearing 'domain' type bots:
+if ($debug) print "\nclearing 'domain' type bots\n";
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "domain"';
 $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_row($result)) {
-            $sql_del = 'DELETE FROM '.$metrics_db.'.'.$table.' WHERE domain = '.dbquote($row[0]);
-
-            if ($debug) print("$sql_del\n");
-            db_exec($db_hub, $sql_del);
+            clear_bot_domains($db_hub, $row, $calculationDates);
         }
     }
 } else {
@@ -71,11 +75,7 @@ if($result) {
 }
 
 // clearing 'host' type bots:
-
-// run the processing for each week in the effective month:
-$calculationDates = findWeeks($yearMonth, $day);
-if ($debug) print("Effective computation dates: \n");
-if ($debug) print_r($calculationDates);
+if ($debug) print "\nclearing 'host' type bots\n";
 
 $sql = 'SELECT DISTINCT filter FROM '.$metrics_db.'.exclude_list WHERE type = "host"';
 $result = mysqli_query($db_hub, $sql);
@@ -91,6 +91,23 @@ if($result) {
 }
 
 # ------------------------
+
+
+function clear_bot_domains($db_hub, $row, $dates) {
+
+    global $metrics_db, $table, $debug;
+
+    foreach ($dates as $ddate) {
+
+        $start = $ddate['start'];
+        $end = $ddate['end'];
+
+        $sql_del = "DELETE FROM $metrics_db.$table WHERE datetime > '$start' AND datetime <= '$end' AND domain = ".dbquote($row[0]);
+
+        if ($debug) print("$sql_del\n");
+        db_exec($db_hub, $sql_del);
+    }
+}
 
 function clear_bot_hosts($db_hub, $row, $dates) {
 

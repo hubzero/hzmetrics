@@ -30,7 +30,7 @@
 # =========================================================================
 # This script resolves domain fields from host fields in various tables
 #
-# USAGE: ./xlogfix_domain.php <database> <table>
+# USAGE: ./xlogfix_domain.php <database> <table> [YYYY-MM]
 #
 
 error_reporting(E_ALL & ~E_NOTICE);
@@ -46,6 +46,9 @@ require_once(__DIR__."/includes/db_connect.php");
 require_once(__DIR__."/includes/func_misc.php");
 
 $db_hub = db_connect('db_hub');
+$debug = 0;
+
+if ($debug) print __FILE__."\n";
 
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
@@ -56,6 +59,21 @@ if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
     $table = $_SERVER['argv'][2];
 }
 
+// determine the month and end-date to use
+// if no date passed, use current date:
+if ($_SERVER['argc'] < 4) {
+    // year and month
+    $yearMonth = date('Y').'-'.date('m');
+    // end date
+    $day = date('d');
+} else {
+    // use YYYY-MM argument passed to script
+    $yearMonth = $_SERVER['argv'][3];
+    $day = NULL;
+}
+if ($debug) print("Effective computation month is: ".$yearMonth."\n");
+if ($debug) print("Effective computation day is: ".$day."\n");
+
 if ($database == 'hub') {
     $database = $hub_db;
 } else if ($database == 'metrics') {
@@ -64,23 +82,47 @@ if ($database == 'hub') {
     $msg = 'Invalid database type'."\n";
     clean_exit($msg);
 }
-    
-# Select all web records missing domain names...
-$sql = 'SELECT id, LOWER(host) FROM '.$database.'.'.$table.' WHERE (domain = "" OR domain = "?" OR domain IS NULL) AND host <> ""';
-$result = mysqli_query($db_hub, $sql);
-if($result) {
-    if(mysqli_num_rows($result) > 0) {
-        while($row = mysqli_fetch_row($result)) {
-            $id = $row[0];
-            $host = $row[1];
-            #  Update table  record...
-            $sql_updt = 'UPDATE '.$database.'.'.$table.' SET domain = '.dbquote(get_domain($host)).' WHERE id = '.dbquote($id);
-            db_exec($db_hub, $sql_updt);
-        }
-    }
+
+# set the correct datetime col for the table we are using:
+if ($table == "sessionlog_metrics")
+{
+    $datecol = "start";
 } else {
-    $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
-    clean_exit($msg);
+    $datecol = "datetime";
+}
+
+# run the table updates for each week in the effective month:
+
+$calculationDates = findWeeks($yearMonth, $day);
+
+foreach ($calculationDates as $ddate) {
+    if ($debug) print_r($ddate);
+    $datestart = $ddate['start'];
+    $dateend = $ddate['end'];
+
+    # Select all web records missing domain names...
+    # restricting by date
+
+    #$sql = "SELECT id, LOWER(host) FROM $database.$table WHERE datetime >= '$datestart' AND datetime < '$dateend' AND (domain = '' OR domain = '?' OR domain IS NULL) AND host <> ''";
+    $sql = "SELECT id, LOWER(host) FROM $database.$table WHERE $datecol >= '$datestart' AND $datecol < '$dateend' AND (domain = '' OR domain = '?' OR domain IS NULL) AND host <> ''";
+
+    if ($debug) print($sql."\n");
+    $result = mysqli_query($db_hub, $sql);
+    if($result) {
+        if ($debug) print "  row count: ".mysqli_num_rows($result)."\n \n";
+        if(mysqli_num_rows($result) > 0) {
+            while($row = mysqli_fetch_row($result)) {
+                $id = $row[0];
+                $host = $row[1];
+                #  Update table  record...
+                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET domain = '.dbquote(get_domain($host)).' WHERE id = '.dbquote($id);
+                db_exec($db_hub, $sql_updt);
+            }
+        }
+    } else {
+        $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
+        clean_exit($msg);
+    }
 }
 
 db_close($db_hub);

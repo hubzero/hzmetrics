@@ -30,6 +30,8 @@ require_once(__DIR__."/includes/func_misc.php");
 $db_hub = db_connect('db_hub');
 $debug = 0;
 
+if ($debug) print __FILE__."\n";
+
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
     $msg = "Usage: " . $_SERVER['argv'][0] . " <database> <table> [YYYY-MM]\n";
@@ -100,7 +102,7 @@ function update_tables($db_hub, $param, $table, $ddateStart, $ddateEnd) {
 
     // Obtain list of user_ids that are missing params in the target table:
     $sql = 'SELECT id from '.$hub_db.'.'.$db_prefix.'users where username in (SELECT DISTINCT user FROM '.$table.' WHERE '.$datetime_col.'> "'.$ddateStart.'" AND '.$datetime_col.'<= "'.$ddateEnd.'" AND ('.$param.' = "" OR '.$param.' IS NULL))';
-    if ($debug) print("sql: ".$sql."\n");
+    #if ($debug) print("sql: ".$sql."\n");
     $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
@@ -108,7 +110,7 @@ function update_tables($db_hub, $param, $table, $ddateStart, $ddateEnd) {
             while($row = mysqli_fetch_assoc($result)) {
                 $user_list .= $row['id'].',';
             }
-            if ($debug) print($user_list."\n");
+            #if ($debug) print($user_list."\n");
         }
     } else {
         $msg = mysqli_error($db_hub).' while executing '.$sql."\n";
@@ -119,7 +121,7 @@ function update_tables($db_hub, $param, $table, $ddateStart, $ddateEnd) {
     // select from the user profile table, jos_user_profiles
     if ($user_list) {
         $sql = "SELECT up.id, u.username, up.profile_value FROM ".$hub_db.".".$db_prefix."users u JOIN ".$hub_db.".".$db_prefix."user_profiles up ON u.id=up.user_id WHERE up.profile_key='".$r_param."'";
-        if ($debug) print("sql: ".$sql."\n");
+        #if ($debug) print("sql: ".$sql."\n");
         $result = mysqli_query($db_hub, $sql);
         if($result) {
             if(mysqli_num_rows($result) > 0) {
@@ -127,7 +129,7 @@ function update_tables($db_hub, $param, $table, $ddateStart, $ddateEnd) {
                     if ($row['profile_value']) {
                         $value = strtoupper($row['profile_value']);
                         $sql_updt = 'UPDATE '.$table.' SET '.$param.' = '.dbquote($value).' WHERE ('.$param.' = "" OR '.$param.' IS NULL) AND user = '.dbquote($row['username']);
-                        if ($debug) print("sql_updt: ".$sql_updt."\n");
+                        #if ($debug) print("sql_updt: ".$sql_updt."\n");
                         db_exec($db_hub, $sql_updt);
                     }
                 }

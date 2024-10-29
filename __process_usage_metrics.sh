@@ -21,11 +21,11 @@ $SCRIPTPATH/xlogfix_middleware_wall.pl
 $SCRIPTPATH/xlogfix_middleware_cpu.pl
 $SCRIPTPATH/xlogfix_dns_v2.sh metrics web $1
 $SCRIPTPATH/xlogfix_dns_v2.sh metrics toolstart $1
-$SCRIPTPATH/xlogfix_domain.php metrics web
-$SCRIPTPATH/xlogfix_domain.php metrics toolstart
-$SCRIPTPATH/logfix_session.pl
-$SCRIPTPATH/xlogfix_clean.php web
-$SCRIPTPATH/xlogfix_clean.php websessions
+$SCRIPTPATH/xlogfix_domain.php metrics web $1
+$SCRIPTPATH/xlogfix_domain.php metrics toolstart $1
+$SCRIPTPATH/logfix_session.pl $1
+$SCRIPTPATH/xlogfix_clean.php web $1
+$SCRIPTPATH/xlogfix_clean.php websessions $1
 $SCRIPTPATH/xlogfix_user_info.php metrics toolstart $1
 $SCRIPTPATH/xlogfix_ipcountry.php metrics web $1
 $SCRIPTPATH/xlogfix_ipcountry.php metrics websessions $1

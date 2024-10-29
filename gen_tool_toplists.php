@@ -45,6 +45,9 @@ require_once(__DIR__."/includes/hub_parameters.php");
 require_once(__DIR__."/includes/db_connect.php");
 require_once(__DIR__."/includes/func_misc.php");
 
+$debug = 0;
+if ($debug) print __FILE__."\n";
+
 $db_hub = db_connect('db_hub');
 
 if ($_SERVER['argc'] < 2) {

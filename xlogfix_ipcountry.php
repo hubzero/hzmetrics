@@ -30,6 +30,8 @@ require_once(__DIR__."/includes/func_misc.php");
 $db_hub = db_connect('db_hub');
 $debug = 0;
 
+if ($debug) print __FILE__."\n";
+
 if (!$_SERVER['argv'][1] || !$_SERVER['argv'][2])
 {
     $msg = "Usage: " . $_SERVER['argv'][0] . " <database> <table> [YYYY-MM]\n";
@@ -84,12 +86,13 @@ db_close($db_hub);
 
 function update_tables($db_hub, $database, $table, $datetime_col, $dateStart, $dateEnd) {
 
-    global $metrics_db, $db_prefix, $hub_db, $debug;
+    #global $metrics_db, $db_prefix, $hub_db, $debug;
+    global $metrics_db, $db_prefix, $hub_db;
 
     // Identify ip addresses with no associated ipcountry. Limit query to the current effective week.
     // IP is returned in dotted quad format
     $sql = 'SELECT DISTINCT(ip) AS n_ip, COUNT(*) AS hits FROM '.$database.'.'.$table.' WHERE '.$datetime_col.'> "'.$dateStart.'" AND '.$datetime_col.'<= "'.$dateEnd.'" AND (ipcountry = "" OR ipcountry IS NULL) GROUP BY n_ip ORDER by hits desc;';
-    if ($debug) print("sql: ".$sql."\n");
+    #if ($debug) print("sql: ".$sql."\n");
     $result = mysqli_query($db_hub, $sql);
 
     $hubzero_ipgeo_url="http://hubzero.org/ipinfo/v1";
@@ -98,7 +101,7 @@ function update_tables($db_hub, $database, $table, $datetime_col, $dateStart, $d
     // Update table records with location data:
     if($result) {
 
-        if ($debug) print("resultset: ".mysqli_num_rows($result)."\n");
+        #if ($debug) print("resultset: ".mysqli_num_rows($result)."\n");
         if(mysqli_num_rows($result) > 0) {
 
             while($row = mysqli_fetch_assoc($result)) {
@@ -107,13 +110,13 @@ function update_tables($db_hub, $database, $table, $datetime_col, $dateStart, $d
 
                 // IP is provided in dotted quad format
                 $ip_geodata = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
-                if ($debug) print_r($ip_geodata);
+                #if ($debug) print_r($ip_geodata);
 
                 // If location data returned, update table with this information:
                 if($ip_geodata['countrySHORT'] <> '' && $ip_geodata['countrySHORT'] <> '-') {
                     // IP address is specified in dotted quad format
                     $sql_updt = 'UPDATE '.$database.'.'.$table.' SET ipcountry= '.dbquote($ip_geodata['countrySHORT']).' WHERE ip = '.dbquote($n_ip).' AND (ipcountry = "" OR ipcountry IS NULL)';
-                    if ($debug) print("sql_updt: ".$sql_updt."\n");
+                    #if ($debug) print("sql_updt: ".$sql_updt."\n");
                     db_exec($db_hub, $sql_updt);
                 }
             }

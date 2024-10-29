@@ -91,6 +91,9 @@ my $sql;
 my $title;
 my $resid;
 
+#print "filename: gen_tool_plots.pl\n";
+#print " effective date is: $dthis\n";
+
 #  Open database...
 $dbhandle = DBI->connect("DBI:mysql:database=$metrics_db;host=$db_host", $db_user, $db_pass);
 

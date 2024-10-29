@@ -56,7 +56,7 @@ if (!$filehandle) {
 
 $unrec = '';
 
-$filters = array("feedfetcher","msnbot","gsa-crawler","googlebot","yandex","spider","bot","search","crawl","archive","harvest","slurp","feed","nutch","robot","fetch","findlinks");
+$filters = array("serpstatbot","turnitin","facebookexternalhit","googleother","feedfetcher","msnbot","gsa-crawler","googlebot","yandex","spider","bot","search","crawl","archive","harvest","slurp","feed","nutch","robot","fetch","findlinks");
 
 $log_pattern_old = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+(.*)$/';
 
