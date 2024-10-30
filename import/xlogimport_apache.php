@@ -167,9 +167,10 @@ while(1)
     if ($return == 200 && $bytes > 0 && (!search_array($ip, $filtered_ips)) && (!search_array($useragent, $filtered_useragents)) && (!search_array($url, $filtered_urls)) && ($method == "GET" || $method == "POST") && (!$bot) )
     {
         # Exclude from import URLs having specific code, image, and font suffixes with or without query strings:
+        # Exclude /app/templates in addition to /templates
         #if ( ( !preg_match('/\.(gif|jpeg|jpg|png|ps|ico|css|js)$/i', $url)
         if ( ( !preg_match('/\.('.$excludeSuffixes.')(\?.*=.*(\&.*=.*)*)*$/i', $url)
-            && !preg_match('/^\/templates\//i', $url)
+            && !preg_match('/^(\/app)*\/templates\//i', $url)
             && !preg_match('/^\/administrator\//i', $url)
             && !preg_match('/^\/webdav\//i', $url)
             && !preg_match('/\/projects\/.+?\/svn\/\!svn\//i', $url) ) 
