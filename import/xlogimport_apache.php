@@ -67,7 +67,7 @@ $log_pattern_old = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\
 
 $log_pattern_new = '/^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([\d]+)\s+(\S+)\s+\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+([\-\d]+)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s*$/';
 
-$debug     = 1;
+$debug     = 0;
 $prevdatestamp = '';
 $sql_ins = 'INSERT INTO '.$metrics_db.'.web (datetime, content, ip, uidNumber, apache_pid, referrer, useragent, joomla_sessionid, site_cookie, auth_type, component_name, view_name, task_name, action_name, item_name) VALUES ';
 $cnt = 0;
@@ -155,8 +155,9 @@ while(1)
     $url = preg_replace('/\/+/','/',$url); // collapse multiple / to single /
 
     $bot = 0;
-    if ($useragent)
+    if ($useragent && $useragent <> "-") {
         $bot = checkbot($db_hub, $useragent);
+    }
 
     # If these file suffixes are found in URL they should be excluded from import into the 'web' table:
     $codeSuffixes  = 'css|js';
@@ -195,7 +196,7 @@ while(1)
                 dbquote($item_name)  . '), ';
 
             $cnt++;
-            if ($debug) print ("\n INSERTING $datetime: $url $useragent\n");
+            #if ($debug) print ("\n INSERTING $datetime: $url $useragent\n");
 
             if ($cnt > 1000) {
                 $cnt = 0;
