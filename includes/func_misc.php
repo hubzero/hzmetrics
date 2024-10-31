@@ -459,14 +459,16 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $ip) {
     $geo_data['ipLATITUDE'] = '-';
     $geo_data['ipLONGITUDE'] = '-';
 
-    $local_exists = 0;
-    if (!is_numeric($n_ip))
+    #$local_exists = 0;
+    if (!is_numeric($n_ip)) {
         return $geo_data;
+    }
 
     // If possible, determine location information using the local database table. IP is expected in long format:
-    $sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
-    $local_exists = db_fetch($db_hub, $sql);
-    if ($local_exists) {
+    // Remove count(*) query as it is unnecessary
+    #$sql = 'SELECT COUNT(*) FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
+    #$local_exists = db_fetch($db_hub, $sql);
+    #if ($local_exists) {
         $sql = 'SELECT countrySHORT, countryLONG, ipREGION, ipCITY, ipLATITUDE, ipLONGITUDE, lookup_datetime FROM '.$hub_db.'.'.$db_prefix.'metrics_ipgeo_cache WHERE ip = '.dbquote($n_ip).' AND TO_DAYS(CURDATE())-TO_DAYS(lookup_datetime) <= 90';
         $result = mysqli_query($db_hub, $sql);
         if($result) {
@@ -486,7 +488,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $ip) {
             clean_exit($msg);
         }
     // Otherwise, determine location information using the ipgeo url:
-    } else {
+    #} else {
         $url = $hubzero_ipgeo_url.'/?&hub_key='.$hub_key.'&n_ip='.$n_ip;
         $xml = @simplexml_load_file($url);
         if (!$xml)
@@ -506,7 +508,7 @@ function get_ip_geodata($hubzero_ipgeo_url, $hub_key, $ip) {
         } else if ( $xml->status == "_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_" ) {
             print 'Warning: HUBzero.org IP-Geo location key is invalid. Please check hubconfiguration.php for "$hubzero_ipgeo_key". Please submit a support ticket on hubzero.org if the problem persists.'."\n";
         }
-    }
+    #}
     return $geo_data;
 
 }
