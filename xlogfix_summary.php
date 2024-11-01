@@ -96,10 +96,17 @@ if($result) {
 }
 
 $download_files = ' w.content LIKE "/resources/%/download/%" OR w.dnload = 1 OR ';
-foreach (array_unique($file_names) as $file_name) {
-    $file_name = '/resources/%'.$file_name.'%';
-    $download_files .= ' w.content LIKE '.dbquote($file_name).' OR ';
+# so many SQL 'LIKE' operations against thousands of filename strings in the web table breaks us:
+#foreach (array_unique($file_names) as $file_name) {
+#    $file_name = '/resources/%'.$file_name.'%';
+#    $download_files .= ' w.content LIKE '.dbquote($file_name).' OR ';
+#}
+# let's use file suffixes instead:
+foreach (array_unique($file_exts) as $file_ext) {
+    $file_ext = '/resources/%.'.$file_ext.'%';
+    $download_files .= ' w.content LIKE '.dbquote($file_ext).' OR ';
 }
+
 $download_files = rtrim($download_files," OR ");
 
 # --------------------------------------------------------------------------------------------
@@ -705,7 +712,7 @@ function int_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 # Download Users Unique
 function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) {
 
-    global $hub_db, $metrics_db, $download_files;
+    global $hub_db, $metrics_db, $download_files, $dbug;
 
     $table = $metrics_db.".summary_user_vals";
 
@@ -713,6 +720,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Download Users "Total"
+    if ($dbug) print("deterimining Download Users Total\n");
     $colid = 1;
     $valfmt = 1;
 
@@ -734,6 +742,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Residence Identified
+    if ($dbug) print("deterimining Download Users residence identified\n");
     $colid = 2;
     $valfmt = 1;
 
@@ -755,6 +764,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Residence US 
+    if ($dbug) print("determining Download Users residence US\n");
     $colid = 3;
     $valfmt = 2;
 
@@ -776,6 +786,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Residence Asia 
+    if ($dbug) print("determining Download Users residence Asia\n");
     $colid = 4;
     $valfmt = 2;
 
@@ -800,6 +811,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Residence Europe
+    if ($dbug) print("determining Download Users residence Europe\n");
     $colid = 5;
     $valfmt = 2;
 
@@ -824,6 +836,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Residence Other
+    if ($dbug) print("determining Download Users residence Other\n");
     $colid = 6;
     $valfmt = 2;
     
@@ -848,6 +861,7 @@ function download_users(&$db_hub, $dthis, $dstart, $dstop, $period, $login_ips) 
 
     # -------------------------- 
     # Organization all
+    if ($dbug) print("determining Download Users Organization All\n");
     $rowid = 8;
     $sess_ids = '';
     $sql = 'SELECT DISTINCT(sessionid) FROM '.$metrics_db.'.web AS w WHERE ('.$download_files.') AND w.datetime >'.dbquote($dstart).' AND w.datetime < '.dbquote($dstop);
