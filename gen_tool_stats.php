@@ -158,9 +158,19 @@ function compute_data($db_hub, $dthis, $dstart, $dstop, $period, $resid, $filter
     $sql_ins='';
 
     if (!$id) {
-        $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools (resid, restype, users, sessions, simulations, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, avg_view, tot_view, avg_wait, tot_wait, avg_cpus, tot_cpus, datetime, period) VALUES ('.dbquote($resid).',"7",'.dbquote($users).','.dbquote($sessions).','.dbquote($simulations).','.dbquote($jobs).','.dbquote($avg_wall).','.dbquote($tot_wall).','.dbquote($avg_cpu).','.dbquote($tot_cpu).','.dbquote($avg_view).','.dbquote($tot_view).','.dbquote($avg_wait).','.dbquote($tot_wait).','.dbquote($avg_cpus).','.dbquote($tot_cpus).','.$dthis.', '.$period.')';
+        $sql_ins = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools (resid, restype,
+        users, sessions, simulations, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, avg_view,
+        tot_view, avg_wait, tot_wait, avg_cpus, tot_cpus, datetime, period, processed_on) VALUES
+        ('.dbquote($resid).',"7",'.dbquote($users).','.dbquote($sessions).','.dbquote($simulations).','.dbquote($jobs).','.dbquote($avg_wall).','.dbquote($tot_wall).','.dbquote($avg_cpu).','.dbquote($tot_cpu).','.dbquote($avg_view).','.dbquote($tot_view).','.dbquote($avg_wait).','.dbquote($tot_wait).','.dbquote($avg_cpus).','.dbquote($tot_cpus).','.$dthis.',
+        '.$period.', NOW())';
     } else {
-        $sql_ins = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats_tools SET users = '.dbquote($users).', sessions = '.dbquote($sessions).', simulations = '.dbquote($simulations).', jobs = '.dbquote($jobs).' , avg_wall = '.dbquote($avg_wall).', tot_wall = '.dbquote($tot_wall).', avg_cpu = '.dbquote($avg_cpu).', tot_cpu = '.dbquote($tot_cpu).', avg_view = '.dbquote($avg_view).', tot_view = '.dbquote($tot_view).', avg_wait = '.dbquote($avg_wait).', tot_wait = '.dbquote($tot_wait).', avg_cpus = '.dbquote($avg_cpus).', tot_cpus = '.dbquote($tot_cpus).' WHERE id = '.dbquote($id);
+        $sql_ins = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats_tools SET users =
+        '.dbquote($users).', sessions = '.dbquote($sessions).', simulations =
+        '.dbquote($simulations).', jobs = '.dbquote($jobs).' , avg_wall = '.dbquote($avg_wall).',
+        tot_wall = '.dbquote($tot_wall).', avg_cpu = '.dbquote($avg_cpu).', tot_cpu =
+        '.dbquote($tot_cpu).', avg_view = '.dbquote($avg_view).', tot_view = '.dbquote($tot_view).',
+        avg_wait = '.dbquote($avg_wait).', tot_wait = '.dbquote($tot_wait).', avg_cpus =
+        '.dbquote($avg_cpus).', tot_cpus = '.dbquote($tot_cpus).', processed_on=NOW() WHERE id = '.dbquote($id);
     }
     db_exec($db_hub, $sql_ins);
 }
@@ -186,9 +196,14 @@ function update_stats($db_hub, $dthis, $period, $resid) {
                 $avg_cpu = dbquote($row[6]);
                 $tot_cpu = dbquote($row[7]);
                 if (!$id) {
-                $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, datetime, period) VALUES ('.$resid.','.$restype.','.$users.','.$jobs.','.$avg_wall.','.$tot_wall.','.$avg_cpu.','.$tot_cpu.','.$dthis.','.$period.')';
+                    $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats (resid, restype,
+                    users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, datetime, period, processed_on) VALUES
+                    ('.$resid.','.$restype.','.$users.','.$jobs.','.$avg_wall.','.$tot_wall.','.$avg_cpu.','.$tot_cpu.','.$dthis.','.$period.', NOW())';
                 } else {
-                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET resid = '.$resid.', restype = '.$restype.', users = '.$users.', jobs = '.$jobs.', avg_wall = '.$avg_wall.', tot_wall = '.$tot_wall.', avg_cpu = '.$avg_cpu.', tot_cpu = '.$tot_cpu.' WHERE id = '.dbquote($id);
+                    $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'resource_stats SET resid = '.$resid.',
+                    restype = '.$restype.', users = '.$users.', jobs = '.$jobs.', avg_wall =
+                    '.$avg_wall.', tot_wall = '.$tot_wall.', avg_cpu = '.$avg_cpu.', tot_cpu =
+                    '.$tot_cpu.', processed_on=NOW() WHERE id = '.dbquote($id);
                 }
                 db_exec($db_hub, $sql_);
             }
