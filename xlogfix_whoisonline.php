@@ -123,11 +123,22 @@ $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
         while($row = mysqli_fetch_assoc($result)) {
+
+            $n_ip = $row['n_ip'];
             $domain = $row['domain'];
             $bot = 0;
-            $sql_bot = 'SELECT COUNT(*) FROM '.$metrics_db.'.exclude_list WHERE filter = '.dbquote($domain).' AND type = "domain"';
-            $bot = db_exec($db_hub, $sql_bot);
-            if ($bot)
+
+            // is the record from a bot domain?
+            $sql_bot = 'SELECT * FROM '.$metrics_db.'.exclude_list WHERE filter = '.dbquote($domain).' AND type = "domain"';
+            $checkbot = mysqli_query($db_hub, $sql_bot);
+
+            if ($checkbot)
+            {
+                if (mysqli_num_rows($checkbot) > 0)
+                {
+                    $bot = 1;
+                }
+            }
                 $bot = 1;
             // Determine region, country, lat, lon data if possible.
             $data = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
