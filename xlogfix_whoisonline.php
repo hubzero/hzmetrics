@@ -28,11 +28,14 @@
 # HUBzero is a registered trademark of The Regents of the University of California.
 #
 # ------------------------------------------------------------------------- 
-# This script generates data shown in the whoisonline maps for the HUB.
-# - Updates hostname, domain name and IP Latitude & Longitute information 
-#   for IPs in hub_metrics.user_session (logged in users)
+# This script generates data for display in the whoisonline map for the HUB.
+# - Looks up hostname, domain name and IP Latitude & Longitude information 
+#   for IPs found in <hubdb>.jos_session (logged in users and visitors)
+# - Inserts this data into table <hubdb>.jos_session_geo
 # - Creates a file <hub_site_root_dir>/site/stats/maps/whoisonline.xml which is
 #   read by google maps
+# - Google Maps API string must be properly set up in Hub backend to enable display.
+# - Session geo information is flushed from table every 30 minutes
 #
 # USAGE: xlogfix_whoisonline.php (executed as a cron every 5 minutes)
 #
@@ -74,7 +77,10 @@ if (!is_dir($mapDir)) {
     }
 }
 
-# Populate the session table from the HUB jos_session table
+# Clear out sessions idle longer than 30 mins
+clear_stale_sessions($db_hub, $idle_time);
+
+# Populate the jos_session_geo table from the HUB jos_session table
 $sql = 'INSERT IGNORE INTO '.$hub_db.'.'.$db_prefix.'session_geo (ip, session_id, username, time, guest, userid) SELECT ip, session_id, username, time, guest, userid FROM '.$hub_db.'.'.$db_prefix.'session WHERE (UNIX_TIMESTAMP()-time) < '.dbquote($idle_time).' GROUP BY ip, username';
 db_exec($db_hub, $sql);
 
@@ -88,7 +94,7 @@ if($result) {
             $ip = $row['ip'];
             $host = $row['host'];
             $domain = $row['domain'];
-                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET host = ' . dbquote($host) . ', domain = ' . dbquote($domain). ' WHERE ip = ' . dbquote($ip);
+            $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET host = ' . dbquote($host) . ', domain = ' . dbquote($domain). ' WHERE ip = ' . dbquote($ip);
             db_exec($db_hub, $sql_);
         }
     }
@@ -106,7 +112,7 @@ if($result) {
         while($row = mysqli_fetch_row($result)) {
             $ip = $row[0];
             $host = xgethostbyaddr($ip);
-                $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET host = ' . dbquote($host) . ', domain = ' . dbquote(get_domain($ip, $host)). ' WHERE ip = ' . dbquote($ip);
+            $sql_ = 'UPDATE '.$hub_db.'.'.$db_prefix.'session_geo SET host = ' . dbquote($host) . ', domain = ' . dbquote(get_domain($ip, $host)). ' WHERE ip = ' . dbquote($ip);
             db_exec($db_hub, $sql_);
         }
     }
@@ -118,7 +124,7 @@ if($result) {
 # Looking up Latitude and Longitude information for sessions currently online based on their IP addresses
 #------------------------------------------------------------------------------
 // Acquire ip addresses with no associated latitude data. Specify ip as dotted quad format:
-$sql = 'SELECT DISTINCT(ip) AS n_ip, domain FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE IS NULL';
+$sql = 'SELECT DISTINCT(ip) AS n_ip, domain, bot FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE ipLATITUDE IS NULL';
 $result = mysqli_query($db_hub, $sql);
 if($result) {
     if(mysqli_num_rows($result) > 0) {
@@ -126,20 +132,13 @@ if($result) {
 
             $n_ip = $row['n_ip'];
             $domain = $row['domain'];
-            $bot = 0;
+            $bot = $row['bot'];
 
-            // is the record from a bot domain?
-            $sql_bot = 'SELECT * FROM '.$metrics_db.'.exclude_list WHERE filter = '.dbquote($domain).' AND type = "domain"';
-            $checkbot = mysqli_query($db_hub, $sql_bot);
-
-            if ($checkbot)
-            {
-                if (mysqli_num_rows($checkbot) > 0)
-                {
-                    $bot = 1;
-                }
+            // is it a known bot domain?
+            if ($bot == 0) {
+                $bot = checkforbot($domain, $db_hub);
             }
-                $bot = 1;
+            
             // Determine region, country, lat, lon data if possible.
             $data = get_ip_geodata($hubzero_ipgeo_url, $hub_key, $n_ip);
             if ($data) {
@@ -182,10 +181,36 @@ fwrite($fh, $xml);
 fclose($fh);
 
 # Clearing out sessions idle longer than 30 mins
-$sql = 'DELETE FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE (UNIX_TIMESTAMP()-time) > '.dbquote($idle_time);
-db_exec($db_hub, $sql);
+clear_stale_sessions($db_hub, $idle_time);
 
 db_close($db_hub);
+
+
+function checkforbot($domain, $db_hub) {
+# Is the supplied domain known to be a bot domain (in exclude_list table)?
+    global $metrics_db, $db_prefix;
+
+    $bot = 0;
+
+    $sql_bot = 'SELECT * FROM '.$metrics_db.'.exclude_list WHERE filter = '.dbquote($domain).' AND type = "domain"';
+    $checkbot = mysqli_query($db_hub, $sql_bot);
+    if ($checkbot) {
+        if(mysqli_num_rows($checkbot) > 0) {
+            $bot = 1;
+        }
+    }
+    return $bot;
+}
+
+
+function clear_stale_sessions($db_hub, $idle_time) {
+# Clear out sessions idle longer than 30 mins
+
+    global $hub_db, $db_prefix;
+
+    $sql = 'DELETE FROM '.$hub_db.'.'.$db_prefix.'session_geo WHERE (UNIX_TIMESTAMP()-time) > '.dbquote($idle_time);
+    db_exec($db_hub, $sql);
+}
 
 function get_domain($ip, $host) {
 
