@@ -17,7 +17,17 @@ DEBUG="0"
 # echo scriptname
 if [ $DEBUG == "1" ]
 then
-        echo $0
+    echo $0 
+fi
+
+if [ $# -ge 2 ]
+then
+    # Assign table and database names
+    dbname=$1
+    tablename=$2
+else
+    echo "Error: $0 script call must specify table and database names"
+    exit 1
 fi
 
 # determine the date range to process:
@@ -44,6 +54,8 @@ then
     echo "limitdate=$limitdate"
     echo "begdate=$begdate"
     echo "enddate=$enddate"
+    echo "dbname=$dbname"
+    echo "tablename=$tablename"
     echo "starting calculation... "
 fi
 
@@ -52,9 +64,9 @@ while [ $begdate != $limitdate ]
 do
     if [ $DEBUG == "1" ]
     then
-        echo "calling xlogfix_dns_worker.php with: " $1 $2 $begdate $enddate&
+        echo "calling xlogfix_dns_worker.php with: " $dbname $tablename $begdate $enddate&
     fi
-    $SCRIPTPATH/xlogfix_dns_worker.php $1 $2 $begdate $enddate&
+    $SCRIPTPATH/xlogfix_dns_worker.php $dbname $tablename $begdate $enddate&
     enddate=$begdate
     begdate=`date '+%C%y-%m-%d' --date="$begdate -1 days"`
 done
@@ -62,14 +74,16 @@ done
 # now do one more, the first day:
 if [ $DEBUG == "1" ]
 then
-    echo "last call to xlogfix_dns_worker.php with: " $1 $2 $begdate $enddate
+    echo "last call to xlogfix_dns_worker.php with: " $dbname $tablename $begdate $enddate
 fi
-$SCRIPTPATH/xlogfix_dns_worker.php $1 $2 $begdate $enddate&
+$SCRIPTPATH/xlogfix_dns_worker.php $dbname $tablename $begdate $enddate&
 
-ps aux |grep "xlogfix_dns_worker"|grep -qv grep
+# do not exit if there are running worker processes
+ps aux |grep "xlogfix_dns_worker"|grep $dbname|grep $tablename|grep -qv grep
 while [ $? = 0 ]
 do
     sleep 1
-    ps aux |grep "xlogfix_dns_worker"|grep -qv grep
+    ps aux |grep "xlogfix_dns_worker"|grep $dbname|grep $tablename|grep -qv grep
 done
 
+exit 0
