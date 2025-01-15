@@ -56,25 +56,31 @@ if ($table == 'sessionlog_metrics') {
 } else {
     $d_column = 'datetime';
 } 
-#$sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host = "?" OR host IS NULL)';
+// Let's not look up host=? records, for time savings
 $sql = 'SELECT DISTINCT ip, host FROM '.$database.'.'.$table.' WHERE ip <> "" AND ip IS NOT NULL AND '.$d_column.' > "'.$date.'" and '.$d_column.' < "'.$enddate.'" AND (host = "" OR host IS NULL)';
 
 if ($debug == 1) print "sql: $sql \n";
 $result = mysqli_query($db_hub, $sql);
 if($result) {
-    if(mysqli_num_rows($result) > 0) {
+    $rowcount = mysqli_num_rows($result);
+    if ($debug == 1) print "Row count: $rowcount\n";
+    if ($rowcount > 0) {
         while($row = mysqli_fetch_row($result)) {
             if ($debug == 1) print "Looking up ".$row[0]." ".$timeout."\n";
             $host = xgethostbyaddr($row[0], $timeout);
 
             // if host lookup was unsuccessful, IP is returned
-            if ($host == $row[0])
+            if ($host == $row[0]) {
                 $host = "?";
+	        }
 
-            // Update table record if we found a host (or a change from host="?"):
+            if ($debug == 1 and $host<>"?") print " found $host\n";
+
+            // Update table record if we found a host
             if($row[1] != "?" || $host != "?") {
-                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host = "?" OR host IS NULL) AND ip = '.dbquote($row[0]);
-                if ($debug == 1) print "sql_updt: ".$sql_updt."\n";
+		        // we are no longer updating host=? records, for time savings
+                $sql_updt = 'UPDATE '.$database.'.'.$table.' SET host = '.dbquote($host).' WHERE (host = "" OR host IS NULL) AND ip = '.dbquote($row[0]);
+                if ($debug == 1) print " updating $table record with $host\n";
                 db_exec($db_hub, $sql_updt);
             }
         }
