@@ -300,9 +300,12 @@ function get_dates_for_period($dthis, $period) {
 
 function xgethostbyaddr($ip, $timeout = 1)
 {
+    # look up host by IP address
     # limit retries to 1 to save time on each lookup
+    # explicitly prefix lookup with 'timeout 1'
+
     $retries = 1;
-    $cmd = "/bin/bash -c \"/usr/bin/host -R $retries -W $timeout $ip 2>/dev/null\"";
+    $cmd = "/bin/bash -c \"/usr/bin/timeout $timeout /usr/bin/host -R $retries -W $timeout $ip 2>/dev/null\"";
     $output = shell_exec($cmd);
 
     if (preg_match('/.*pointer ([A-Za-z0-9.-]+)\..*/',$output,$regs))
