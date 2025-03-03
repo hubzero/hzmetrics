@@ -21,5 +21,4 @@ $SCRIPTPATH/xlogfix_user_info.php metrics sessionlog_metrics $1
 $SCRIPTPATH/xlogfix_ipcountry.php metrics sessionlog_metrics $1
 $SCRIPTPATH/gen_tool_stats.php $1
 $SCRIPTPATH/gen_tool_tops.php $1
-$SCRIPTPATH/gen_tool_plots.pl $1
 $SCRIPTPATH/gen_tool_toplists.php $1

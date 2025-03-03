@@ -16,5 +16,4 @@ SCRIPTPATH=`dirname $SCRIPT`
 $SCRIPTPATH/xlogfix_prep.php
 $SCRIPTPATH/xlogimport_tool_and_reg_user_data.php
 $SCRIPTPATH/xlogfix_summary.php $1
-$SCRIPTPATH/xlogfix_plot.pl $1
 $SCRIPTPATH/xlogfix_andmore_usage.php $1
