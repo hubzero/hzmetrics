@@ -29,12 +29,14 @@
 ETC=$(DESTDIR)/etc
 VAR_LOG=$(DESTDIR)/var/log
 INSTALLDIR=$(DESTDIR)/opt/hubzero/bin
+VAR_SPOOL=$(DESTDIR)/var/spool
 
 all:
 	@true
 
 install:
-	install --mode 0750 -D metrics/gen_tool_plots.pl $(INSTALLDIR)/metrics/gen_tool_plots.pl
+	# gen_tool_plots has been removed
+	#install --mode 0750 -D metrics/gen_tool_plots.pl $(INSTALLDIR)/metrics/gen_tool_plots.pl
 	install --mode 0750 -D metrics/gen_tool_stats.php $(INSTALLDIR)/metrics/gen_tool_stats.php
 	install --mode 0750 -D metrics/gen_tool_toplists.php $(INSTALLDIR)/metrics/gen_tool_toplists.php
 	install --mode 0750 -D metrics/gen_tool_tops.php $(INSTALLDIR)/metrics/gen_tool_tops.php
@@ -50,7 +52,8 @@ install:
 	install --mode 0750 -D metrics/xlogfix_ipcountry.php $(INSTALLDIR)/metrics/xlogfix_ipcountry.php
 	install --mode 0750 -D metrics/xlogfix_middleware_cpu.pl $(INSTALLDIR)/metrics/xlogfix_middleware_cpu.pl
 	install --mode 0750 -D metrics/xlogfix_middleware_wall.pl $(INSTALLDIR)/metrics/xlogfix_middleware_wall.pl
-	install --mode 0750 -D metrics/xlogfix_plot.pl $(INSTALLDIR)/metrics/xlogfix_plot.pl
+	# xlogfix_plot.pl has been removed
+	#install --mode 0750 -D metrics/xlogfix_plot.pl $(INSTALLDIR)/metrics/xlogfix_plot.pl
 	install --mode 0750 -D metrics/xlogfix_prep.php $(INSTALLDIR)/metrics/xlogfix_prep.php
 	install --mode 0750 -D metrics/xlogfix_summary.php $(INSTALLDIR)/metrics/xlogfix_summary.php
 	install --mode 0750 -D metrics/xlogfix_user_info.php $(INSTALLDIR)/metrics/xlogfix_user_info.php
@@ -61,7 +64,8 @@ install:
 	install --mode 0640 -D metrics/includes/func_andmore.php $(INSTALLDIR)/metrics/includes/func_andmore.php
 	install --mode 0640 -D metrics/includes/func_misc.php $(INSTALLDIR)/metrics/includes/func_misc.php
 	install --mode 0640 -D metrics/includes/hub_parameters.php $(INSTALLDIR)/metrics/includes/hub_parameters.php
-	install --mode 0750 -D metrics/includes/xlogplotgraph.pl $(INSTALLDIR)/metrics/includes/xlogplotgraph.pl
+	# xlogplotgraph.pl has been removed
+	#install --mode 0750 -D metrics/includes/xlogplotgraph.pl $(INSTALLDIR)/metrics/includes/xlogplotgraph.pl
 
 	install --mode 0750 -D metrics/import/__archive_apache_and_auth_log.sh $(INSTALLDIR)/metrics/import/__archive_apache_and_auth_log.sh
 	install --mode 0750 -D metrics/import/__fetch_apache_and_auth_log.sh $(INSTALLDIR)/metrics/import/__fetch_apache_and_auth_log.sh
@@ -73,7 +77,9 @@ install:
 
 	install --mode 0740 -D var/log/metrics/xlogfix.log $(VAR_LOG)/metrics/xlogfix.log
 
-	install --mode 0640 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/metrics
+	# We've moved cron job to /var/spool/cron/apache to allow human metrics manager access
+	#install --mode 0640 -D conf/hubzero-metrics.cron.d $(ETC)/cron.d/metrics
+	install --mode 0600 -D conf/hubzero-metrics.cron.apache $(VAR_SPOOL)/cron/apache
 
 uninstall:
 	@true
