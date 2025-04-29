@@ -43,8 +43,8 @@ else
     #echo "xlogfix_dns_v2: date arg passed: $3"
     # limitdate: first day of specified month
     limitdate=`date -d "$3-01" '+%F'`
-    # enddate: last day of specified month
-    enddate=`date -d "$limitdate +1 month -1 day" '+%F'`
+    # enddate: first day of next month (work all the way up to the border)
+    enddate=`date -d "$limitdate +1 month" '+%F'`
     # begdate: last day but one of specified month. Work backwards from there.
     begdate=`date -d "$enddate -1 day" '+%F'`
 fi
