@@ -174,6 +174,8 @@ while(1)
             && !preg_match('/^(\/app)*\/templates\//i', $url)
             && !preg_match('/^\/administrator\//i', $url)
             && !preg_match('/^\/webdav\//i', $url)
+            && !preg_match('/^\/api\//i', $url)
+            && !preg_match('/^\/cron\/tick\//i', $url)
             && !preg_match('/\/projects\/.+?\/svn\/\!svn\//i', $url) ) 
             || (preg_match('/^\/resources\//i', $url)) ) 
         {
