@@ -308,9 +308,10 @@ function xgethostbyaddr($ip, $timeout = 1)
     $cmd = "/bin/bash -c \"/usr/bin/timeout $timeout /usr/bin/host -R $retries -W $timeout $ip 2>/dev/null\"";
     $output = shell_exec($cmd);
 
-    if (preg_match('/.*pointer ([A-Za-z0-9.-]+)\..*/',$output,$regs))
-        return $regs[1];
-
+    if (!is_null($output)) {
+        preg_match('/.*pointer ([A-Za-z0-9.-]+)\..*/', $output, $regs);
+        $ip = $regs[1];
+    }
     return $ip;
 }
 
