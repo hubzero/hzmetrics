@@ -151,31 +151,21 @@ function get_domain($hostname)
     $us_4level["cc"] = 1;
     $us_4level["tec"] = 1;
     
-    $force = array("brain.grub.org","crawl.yahoo.net","crawl8-public.alexa.com","hanta.yahoo.com","idle.eidetica.com","morgue1.corp.yahoo.com","msnbot.msn.com","panchma.tivra.com","tpiol.tpiol.com","xs4.kso.co.uk","zeus.nj.nec.com","punch.purdue.edu","san2.attens.net","search.msn.com","sac.overture.com","66.237.109.194.ptr.us.xo.net","67.108.223.130.ptr.us.xo.net","67.106.152.131.ptr.us.xo.net");
-
-    $field = array_reverse(explode(".", $host));
-    $domain = $host;
-    $force_found = 0;
-    
-    foreach($force as $forcedomain) 
+    # process if host not null and contains ".":
+    if (!is_null($host) && str_contains($host,'.')) 
     {
-        $pattern = "/$forcedomain$/";
-        if (preg_match($pattern, $host) )
-        {
-            $domain = $forcedomain;
-            $force_found = 1;
-        }
+        $field = array_reverse(explode(".", $host));
     }
 
-    if (!$force_found && $field[0]) 
+    if (isset($field[0]))
     {
         $domain = $field[0];
         
-        if($field[1]) 
+        if (isset($field[1]))
         {
             $domain = $field[1] . "." . $field[0];
             
-            if($field[2]) 
+            if (isset($field[2]))
             {
                 if (!isset($no2_3level[$field[1]]) && strlen($field[1]) == 2 && strlen($field[0]) == 2
                     || isset($int_3level[$field[1]]) && strlen($field[0]) == 2
@@ -184,7 +174,7 @@ function get_domain($hostname)
                     $domain = $field[2] . "." . $field[1] . "." . $field[0];
                 }
                 
-                if ($field[3]) 
+                if (isset($field[3]))
                 {
                     if (isset($us_4level[$field[2]]) && $field[0] == "us") 
                     {
@@ -231,7 +221,7 @@ function get_domain($hostname)
         }
     }
 
-    if (!$domain || $domain == ".") 
+    if (!isset($domain) || $domain == ".") 
     {
         $domain = "?";
     }
