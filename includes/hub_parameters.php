@@ -83,6 +83,8 @@ if (!file_exists($DocumentRoot . '/configuration.php'))
     die;
 }
 
+# ---- configuration.php ----
+
 require_once ( $DocumentRoot . '/configuration.php');
 $jconfig = new JConfig();
 
@@ -98,6 +100,8 @@ $report_db = '`'.$hub_db.'_annualreport`';
 $hub_db = '`'.$hub_db.'`';
 $mw_db = $hub_db; // This should be read dynamically from database
 
+# ---- hubconfiguration.php ----
+
 // check for existence of additional config files:
 if (!file_exists($DocumentRoot . '/hubconfiguration.php'))
 {
@@ -107,13 +111,24 @@ if (!file_exists($DocumentRoot . '/hubconfiguration.php'))
 require_once ( $DocumentRoot . '/hubconfiguration.php');
 $hconfig = new HUBConfig();
 
-$hubzero_ipgeo_url = $hconfig->hubzero_ipgeo_url;
-$hub_key = $hconfig->hubzero_ipgeo_key;
-
-$db_net_host = $hconfig->ipDBHost;
-$db_net_user = $hconfig->ipDBUsername;
-$db_net_pass = $hconfig->ipDBPassword;
-$net_db = $hconfig->ipDBDatabase;
+if (isset($hconfig->hubzero_ipgeo_url)) {
+    $hubzero_ipgeo_url = $hconfig->hubzero_ipgeo_url;
+}
+if (isset($hconfig->hubzero_ipgeo_key)) {
+    $hub_key = $hconfig->hubzero_ipgeo_key;
+}
+if (isset($hconfig->ipDBHost)) {
+    $db_net_host = $hconfig->ipDBHost;
+}
+if (isset($hconfig->ipDBUsername)) {
+    $db_net_user = $hconfig->ipDBUsername;
+}
+if (isset($hconfig->ipDBPassword)) {
+    $db_net_pass = $hconfig->ipDBPassword;
+}
+if (isset($hconfig->ipDBDatabase)) {
+    $net_db = $hconfig->ipDBDatabase;
+}
 
 if (false) {
     echo "hub_db = $hub_db\n";
