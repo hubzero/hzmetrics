@@ -319,7 +319,12 @@ function dbquote($str) {
 
     global $db_hub;
 
-    if ($db_hub instanceof mysqli && !is_null($str)) {
+    if (is_null($str))
+    {
+        $str = "";
+    }
+
+    if ($db_hub instanceof mysqli) {
         return '"' . mysqli_real_escape_string($db_hub, $str) . '"';
     }
 }
