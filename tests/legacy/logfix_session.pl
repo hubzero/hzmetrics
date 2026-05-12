@@ -33,7 +33,7 @@ use strict;
 use DBI;
 
 use FindBin '$Bin';
-my $filename = '/etc/hubzero-metrics/access.cfg';
+my $filename = $ENV{HZMETRICS_ACCESS_CFG} || '/etc/hubzero-metrics/access.cfg';
 
 our $hub_db;
 our $metrics_db;

@@ -36,6 +36,26 @@ if(!ini_get('date.timezone'))
     date_default_timezone_set($output[0]);
 }
 
+# ---------------------------------------------------------------------------
+# A/B test harness override.  When HZMETRICS_ACCESS_CFG is set we load the
+# DB connection variables directly from that file (bare $var = 'value' lines,
+# no <?php tag — same format the Perl scripts and hzmetrics.py parse) instead
+# of going through /etc/hubzero.conf → configuration.php → hubconfiguration.php.
+# Production behaviour is unchanged when the env var is unset.
+# ---------------------------------------------------------------------------
+$_harness_cfg = getenv('HZMETRICS_ACCESS_CFG');
+if ($_harness_cfg) {
+    $_text = file_get_contents($_harness_cfg);
+    preg_match_all("/\\\$([A-Za-z_]\\w*)\\s*=\\s*'([^']*)'/", $_text, $_m, PREG_SET_ORDER);
+    foreach ($_m as $_pair) { $GLOBALS[$_pair[1]] = $_pair[2]; }
+    $metrics_db = '`'.$metrics_db.'`';
+    $hub_db     = '`'.$hub_db.'`';
+    $mw_db      = $hub_db;
+    if (!isset($hubzero_ipgeo_url)) $hubzero_ipgeo_url = 'https://help.hubzero.org/ipinfo/v1';
+    if (!isset($hub_key))           $hub_key           = '_HUBZERO_OPNSRC_V1_';
+    return;
+}
+
 $DocumentRootKey = NULL;
 $inicontents = file_get_contents('/etc/hubzero.conf');
 $inicontents = preg_replace('/\[DEFAULT]/m','[default]', $inicontents);
