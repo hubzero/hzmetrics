@@ -13,6 +13,7 @@ Usage:
   hzmetrics.py summarize --month YYYY-MM [--force]
   hzmetrics.py fill-geo  --month YYYY-MM | --all
   hzmetrics.py backfill-dnload [--start YYYY-MM]
+  hzmetrics.py resolve-dns {metrics|hub} <table> [YYYY-MM] [-n NAMESERVER] [-c N] [-t SEC]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -779,6 +780,17 @@ def cmd_status():
     summarize("/var/log/httpd/imported",   f"{SITE}-access*log*", "httpd  ")
     summarize("/var/log/hubzero/imported", "cmsauth*log*",         "hubzero")
 
+    print("\n=== resolve-dns settings ===")
+    try:
+        conf_present = HZMETRICS_CONF.is_file()
+        conf_src = str(HZMETRICS_CONF) if conf_present else "(not present — using defaults / env)"
+    except PermissionError:
+        conf_src = f"{HZMETRICS_CONF} (no read access — using defaults / env)"
+    print(f"  config file: {conf_src}")
+    print(f"  nameserver : {DNS_NAMESERVER}")
+    print(f"  concurrency: {DNS_CONCURRENCY}")
+    print(f"  timeout    : {DNS_TIMEOUT}s")
+
 
 # ---------------------------------------------------------------------------
 # import  (raw log ingestion only)
@@ -1085,6 +1097,311 @@ def cmd_tick(args):
 
 
 # ---------------------------------------------------------------------------
+# resolve-dns  (async reverse-DNS via aiodns; replaces xlogfix_dns_v2.sh
+#               + xlogfix_dns_worker.php fan-out)
+# ---------------------------------------------------------------------------
+
+# Built-in defaults.  Overridable by /etc/hubzero-metrics/hzmetrics.conf
+# (INI format, [dns] section), then by env vars HZMETRICS_DNS_NAMESERVER /
+# HZMETRICS_DNS_CONCURRENCY / HZMETRICS_DNS_TIMEOUT, then by CLI flags.
+#
+# Defaults are deliberately conservative: aim at the system resolver (no
+# unbound assumed) at a concurrency that empirically stayed under the
+# Purdue DNS rate-limit floor.  Operators who deploy a local or central
+# unbound should override:
+#     [dns]
+#     nameserver  = 127.0.0.1     ; or central unbound IP
+#     concurrency = 500
+# unbound absorbs c=500 cleanly; the system resolver does not — c=500
+# direct-to-system regressed in benchmarking.  c=100 to system is fine.
+_DEFAULT_DNS_NAMESERVER  = "system"
+_DEFAULT_DNS_CONCURRENCY = 100
+_DEFAULT_DNS_TIMEOUT     = 2.0
+
+HZMETRICS_CONF = Path("/etc/hubzero-metrics/hzmetrics.conf")
+
+def _read_dns_config():
+    """Resolve DNS-related settings from config file → env vars → defaults.
+
+    Tolerant of an unreadable config: PermissionError / FileNotFoundError
+    silently fall through to env vars and built-in defaults (so the script
+    keeps working when invoked by a user without /etc/hubzero-metrics
+    access)."""
+    ns          = _DEFAULT_DNS_NAMESERVER
+    concurrency = _DEFAULT_DNS_CONCURRENCY
+    timeout     = _DEFAULT_DNS_TIMEOUT
+
+    try:
+        text = HZMETRICS_CONF.read_text()
+    except (FileNotFoundError, PermissionError):
+        text = None
+    if text is not None:
+        import configparser, io
+        cp = configparser.ConfigParser()
+        try:
+            cp.read_file(io.StringIO(text))
+            if cp.has_section("dns"):
+                ns          = cp.get("dns", "nameserver",  fallback=ns).strip()
+                concurrency = cp.getint("dns", "concurrency", fallback=concurrency)
+                timeout     = cp.getfloat("dns", "timeout",  fallback=timeout)
+        except (configparser.Error, ValueError) as e:
+            print(f"[warn] {HZMETRICS_CONF}: {e}; using defaults", flush=True)
+
+    ns = os.environ.get("HZMETRICS_DNS_NAMESERVER", ns)
+    try:
+        concurrency = int(os.environ.get("HZMETRICS_DNS_CONCURRENCY", concurrency))
+    except ValueError:
+        pass
+    try:
+        timeout = float(os.environ.get("HZMETRICS_DNS_TIMEOUT", timeout))
+    except ValueError:
+        pass
+
+    return ns, concurrency, timeout
+
+DNS_NAMESERVER, DNS_CONCURRENCY, DNS_TIMEOUT = _read_dns_config()
+
+def hub_db_name():
+    """Parse hub_db (the hub-side DB name) from access.cfg."""
+    text = ACCESS_CFG.read_text()
+    m = re.search(r"\$hub_db\s*=\s*'([^']*)'", text)
+    return m.group(1) if m else ""
+
+def _open_db(database=None):
+    """Open a pymysql connection from access.cfg.  Lazy import so other
+    hzmetrics.py commands don't pay the dep if they don't need it."""
+    import pymysql
+    host, user, password, _ = db_credentials()
+    return pymysql.connect(
+        host=host, user=user, password=password,
+        database=database, autocommit=True, charset="utf8mb4",
+    )
+
+async def _resolve_ips_async(ips, nameserver, concurrency, timeout):
+    """Resolve IPs to (ip, host) pairs.  Returns '?' for any failure / no-PTR.
+
+    nameserver='system' (case-insensitive) or '' / None means: use whatever
+    /etc/resolv.conf points at (no explicit override).  Otherwise pass the
+    string as a single nameserver IP to aiodns.
+    """
+    import asyncio
+    import aiodns
+    if not nameserver or str(nameserver).strip().lower() == "system":
+        resolver = aiodns.DNSResolver(timeout=timeout)
+    else:
+        resolver = aiodns.DNSResolver(nameservers=[nameserver], timeout=timeout)
+    sem = asyncio.Semaphore(concurrency)
+    async def one(ip):
+        async with sem:
+            try:
+                r = await resolver.gethostbyaddr(ip)
+                return ip, (r.name if r and r.name else "?")
+            except aiodns.error.DNSError:
+                return ip, "?"
+    return await asyncio.gather(*(one(ip) for ip in ips))
+
+def _expand_date_token(tok, *, side):
+    """Expand 'YYYY' / 'YYYY-MM' / 'YYYY-MM-DD' to a date.
+
+    side='start' anchors to the first day of the period;
+    side='end'   anchors to the first day AFTER the period (so the
+                 caller can use < end for an exclusive bound).
+    """
+    parts = tok.strip().split("-")
+    if len(parts) == 1:
+        y = int(parts[0])
+        return date(y, 1, 1) if side == "start" else date(y + 1, 1, 1)
+    if len(parts) == 2:
+        y, m = int(parts[0]), int(parts[1])
+        if side == "start":
+            return date(y, m, 1)
+        first = date(y, m, 1)
+        return (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    if len(parts) == 3:
+        d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        return d if side == "start" else d + timedelta(days=1)
+    raise ValueError(f"unrecognized date token {tok!r}; expected YYYY, YYYY-MM, or YYYY-MM-DD")
+
+def parse_date_range(spec):
+    """Parse a flexible date-range spec into (start, end-exclusive).
+
+    Accepts any of:
+        YYYY                       a whole year
+        YYYY-MM                    a whole month
+        YYYY-MM-DD                 a single day
+        <left>..<right>            a range; each side any of the above
+        ..<right>                  open-ended lower bound — everything before <right>
+        <left>..                   open-ended upper bound — everything from <left> onward
+
+    Either returned bound may be None to signal "no limit on that side".
+    Right-side resolves to the FIRST day after its period, so the caller
+    treats end as exclusive (`{col} < end`).
+    """
+    if ".." in spec:
+        left, right = spec.split("..", 1)
+        if left.strip():
+            start = _expand_date_token(left, side="start")
+            # closed range: right side is "end of period <right>" — first day AFTER
+            right_side = "end"
+        else:
+            start = None
+            # open-ended `..<right>` means "before <right>" — right side is the
+            # START of <right>'s period (exclusive boundary).  Otherwise
+            # `..2025` would mean "before end-of-2025" which is surprising.
+            right_side = "start"
+        end = _expand_date_token(right, side=right_side) if right.strip() else None
+    else:
+        start = _expand_date_token(spec, side="start")
+        end   = _expand_date_token(spec, side="end")
+    if start is not None and end is not None and end <= start:
+        raise ValueError(f"empty or inverted date range: {spec!r} → {start}..{end}")
+    return start, end
+
+def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
+                   nameserver=DNS_NAMESERVER, concurrency=DNS_CONCURRENCY,
+                   timeout=DNS_TIMEOUT, logfile=None, dry_run=False):
+    """
+    Reverse-DNS resolve unresolved IPs in <db>.<table>.  Replaces the
+    PHP/shell xlogfix_dns_v2.sh + xlogfix_dns_worker.php fan-out with
+    one async Python pass through a local/central unbound.
+
+    db_key:    'metrics' or 'hub' — which DB the table lives in.
+    table:     web | toolstart | sessionlog_metrics | …
+    date_spec: flexible date / date range string.  Accepts
+               YYYY, YYYY-MM, YYYY-MM-DD, or `<start>..<end>` of any
+               combination.  If None, defaults to the last 7 days unless
+               all_dates is set.  See parse_date_range().
+    all_dates: if True, drop the date filter entirely — useful for
+               cross-month backfill of orphaned unresolved IPs.
+    """
+    try:
+        import asyncio    # asyncio.run requires python >= 3.7
+        import aiodns     # noqa: F401 — fails loudly if missing
+        import pymysql    # noqa: F401
+    except ImportError as e:
+        msg = (f"[resolve-dns] missing dependency: {e}. "
+               f"Install via 'python3 -m pip install aiodns pymysql' (needs python >= 3.7).")
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 1
+
+    _, _, _, metrics_db = db_credentials()
+    if db_key == "metrics":
+        db_name = metrics_db
+    elif db_key == "hub":
+        db_name = hub_db_name()
+    else:
+        msg = f"[resolve-dns] unknown db_key {db_key!r}; expected 'metrics' or 'hub'"
+        print(msg, flush=True)
+        return 2
+    if not db_name:
+        msg = f"[resolve-dns] could not resolve DB name for db_key={db_key!r} from access.cfg"
+        print(msg, flush=True)
+        return 2
+
+    # sessionlog_metrics is keyed on 'start'; everyone else on 'datetime'
+    d_col = "start" if table == "sessionlog_metrics" else "datetime"
+
+    # Resolve scope: all rows, a parsed range (possibly half-open), or default last-7-days.
+    if all_dates:
+        start_d = end_d = None
+    else:
+        if date_spec:
+            try:
+                start_d, end_d = parse_date_range(date_spec)
+            except ValueError as e:
+                msg = f"[resolve-dns] {e}"
+                print(msg, flush=True)
+                if logfile: logfile.write(msg + "\n")
+                return 2
+        else:
+            end_d = date.today()
+            start_d = end_d - timedelta(days=7)
+
+    def _build_pred(col_alias=""):
+        col = f"{col_alias}{d_col}" if col_alias else d_col
+        parts = []
+        if start_d is not None:
+            parts.append(f"AND {col} >= '{start_d.isoformat()} 00:00:00'")
+        if end_d is not None:
+            parts.append(f"AND {col} < '{end_d.isoformat()} 00:00:00'")
+        return " ".join(parts) + (" " if parts else "")
+
+    if start_d is None and end_d is None:
+        scope_label = "ALL" if all_dates else "(unbounded)"
+    elif start_d is None:
+        scope_label = f"..{end_d}"
+    elif end_d is None:
+        scope_label = f"{start_d}.."
+    else:
+        scope_label = f"{start_d}..{end_d}"
+    date_pred = _build_pred()
+
+    sel_sql = (
+        f"SELECT DISTINCT ip FROM {table} "
+        f"WHERE ip <> '' AND ip IS NOT NULL "
+        f"{date_pred}"
+        f"AND (host IS NULL OR host = '')"
+    )
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    # Use one pymysql connection for the whole flow: select, async resolve
+    # (network-bound, releases the connection), then temp-table insert +
+    # update join.  Temp table is per-connection so it has to be one conn.
+    conn = _open_db(db_name)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sel_sql)
+            ips = [r[0] for r in cur.fetchall()]
+
+            log(f"[resolve-dns] {db_name}.{table} {scope_label}: "
+                f"{len(ips)} unresolved IPs (ns={nameserver}, c={concurrency})")
+            if not ips or dry_run:
+                return 0
+
+            import time
+            t0 = time.monotonic()
+            pairs = asyncio.run(_resolve_ips_async(ips, nameserver, concurrency, timeout))
+            wall = time.monotonic() - t0
+            resolved_count = sum(1 for _, h in pairs if h != "?")
+            no_ptr   = len(pairs) - resolved_count
+            rate     = len(pairs) / wall if wall > 0 else 0
+            log(f"[resolve-dns] resolved={resolved_count} no_ptr={no_ptr} "
+                f"wall={wall:.1f}s rate={rate:.0f} IPs/s")
+
+            cur.execute(
+                "CREATE TEMPORARY TABLE _dns_tmp ("
+                "ip VARCHAR(45) NOT NULL PRIMARY KEY, host VARCHAR(255)) ENGINE=Memory")
+            cur.executemany(
+                "INSERT INTO _dns_tmp (ip, host) VALUES (%s, %s)", pairs)
+            update_date_pred = _build_pred("t.")
+            cur.execute(
+                f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
+                f"SET t.host = d.host "
+                f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred}")
+            updated = cur.rowcount
+            log(f"[resolve-dns] applied: {updated} rows updated in {table}")
+            return 0
+    finally:
+        conn.close()
+
+def cmd_resolve_dns(args):
+    with log_open() as lf:
+        return do_resolve_dns(
+            args.db_key, args.table, args.date_spec,
+            all_dates=args.all,
+            nameserver=args.nameserver,
+            concurrency=args.concurrency,
+            timeout=args.timeout,
+            logfile=lf,
+            dry_run=args.dry_run,
+        )
+
+
+# ---------------------------------------------------------------------------
 # run  (autonomous daily / catch-up mode)
 # ---------------------------------------------------------------------------
 
@@ -1240,6 +1557,40 @@ def main():
     grp_geo.add_argument("--all",   action="store_true", help="Fill all months with missing GeoIP data")
     p_geo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
+    p_dns = sub.add_parser("resolve-dns",
+        help="Reverse-DNS resolve unresolved IPs in a metrics table (replaces xlogfix_dns_v2.sh)",
+        description=(
+            "Resolve reverse DNS for unresolved IPs in a metrics table.\n"
+            "Date scope is flexible: a year, month, or day, or a range using '..':\n"
+            "  YYYY                    e.g. 2024                — whole year\n"
+            "  YYYY-MM                 e.g. 2024-10             — whole month\n"
+            "  YYYY-MM-DD              e.g. 2024-10-15          — single day\n"
+            "  <start>..<end>          e.g. 2024-10..2024-12    — closed range\n"
+            "  ..<end>                 e.g. ..2025              — everything before <end>\n"
+            "  <start>..               e.g. 2025-07-01..        — everything from <start> on\n"
+            "Each side of a range may use any granularity (YYYY / YYYY-MM / YYYY-MM-DD).\n"
+            "Omit the date to default to the last 7 days; use --all for everything."),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_dns.add_argument("db_key", choices=["metrics", "hub"],
+        help="Target DB ('metrics' or 'hub')")
+    p_dns.add_argument("table",
+        help="Target table (web | toolstart | sessionlog_metrics | ...)")
+    p_dns.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
+        help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' of any combination "
+             "(default: last 7 days)")
+    p_dns.add_argument("--all", action="store_true",
+        help="Resolve every unresolved IP in the table regardless of date "
+             "(for cross-month backfill)")
+    p_dns.add_argument("--nameserver", "-n", default=DNS_NAMESERVER,
+        help=f"DNS server IP — set to a local/central unbound for max speed "
+             f"(default '{DNS_NAMESERVER}')")
+    p_dns.add_argument("--concurrency", "-c", type=int, default=DNS_CONCURRENCY,
+        help=f"aiodns concurrency (default {DNS_CONCURRENCY})")
+    p_dns.add_argument("--timeout", "-t", type=float, default=DNS_TIMEOUT,
+        help=f"DNS timeout seconds (default {DNS_TIMEOUT})")
+    p_dns.add_argument("--dry-run", action="store_true",
+        help="Just count unresolved IPs; don't resolve or update")
+
     args = parser.parse_args()
 
     if args.command == "tick":
@@ -1266,6 +1617,8 @@ def main():
         cmd_backfill_dnload(args)
     elif args.command == "fill-geo":
         cmd_fill_geo(args)
+    elif args.command == "resolve-dns":
+        cmd_resolve_dns(args)
     else:
         parser.print_help()
 
