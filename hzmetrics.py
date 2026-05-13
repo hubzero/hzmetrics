@@ -19,6 +19,7 @@ Usage:
   hzmetrics.py import-auth <file>      (file may be '-' for stdin)
   hzmetrics.py fill-user-info {metrics|hub} <table>
   hzmetrics.py identify-bots <file>    (file may be '-' for stdin)
+  hzmetrics.py import-webhits <file>   (file may be '-' for stdin)
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -28,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -1966,6 +1968,159 @@ def cmd_identify_bots(args):
         return do_identify_bots(args.input_file, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# import-webhits  (aggregate per-day hit counts from apache log into
+#                  metrics.webhits; ports xlogimport_webhits.php)
+# ---------------------------------------------------------------------------
+
+_SLASH_COLLAPSE = re.compile(r'/+')
+
+def _search_array(needle, filters):
+    """Mirror search_array() from func_misc.php: case-insensitive substring
+    test — returns True if any filter is a substring of `needle`.  Used
+    for IP, user-agent, URL, and host exclusion checks where the filter
+    list comes from metrics.exclude_list."""
+    if not needle:
+        return False
+    lo = needle.lower()
+    for f in filters:
+        if f and f.lower() in lo:
+            return True
+    return False
+
+# Backwards-compatible alias for code that already called _ip_excluded.
+_ip_excluded = _search_array
+
+def do_import_webhits(input_file, *, logfile=None, dry_run=False):
+    """Aggregate per-day hit counts from an apache staged log and
+    INSERT one row per day into metrics.webhits.  Faithful port of
+    xlogimport_webhits.php.
+
+    Counted rows: status=200, bytes>0, method ∈ {GET,POST}, IP/UA/URL
+    not matched by their respective exclude_list filters (substring,
+    case-insensitive).  URL is normalised by collapsing repeated '/'.
+
+    Note: webhits has no unique key; original PHP uses plain INSERT
+    (not INSERT IGNORE), so re-running this on overlapping content adds
+    duplicate (datetime, hits) rows.  This port preserves that semantic.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    if not metrics_db:
+        msg = "[import-webhits] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    # Pull filter lists once
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+            ip_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
+            ua_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
+            url_filters = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    daily_hits = defaultdict(int)
+    total = 0
+    unrec = 0
+
+    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
+    try:
+        for line in src:
+            total += 1
+            line = line.rstrip("\r\n")
+            m = _APACHE_PAT_NEW.match(line)
+            if m:
+                datestamp = m.group(1)
+                firstline = m.group(6)
+                return_code = m.group(7)
+                bytes_str = m.group(8)
+                ip = m.group(9)
+                useragent = m.group(11)
+            else:
+                m = _APACHE_PAT_OLD.match(line)
+                if not m:
+                    unrec += 1
+                    continue
+                datestamp = m.group(1)
+                firstline = m.group(5)
+                return_code = m.group(6)
+                bytes_str = m.group(7)
+                ip = m.group(8)
+                useragent = m.group(10)
+
+            # Parse method/url/protocol — PHP edge case: when only one token in
+            # the request line, treat it as URL with default GET method.
+            parts = firstline.strip().split(None, 2)
+            method = parts[0] if parts else ''
+            url = parts[1] if len(parts) > 1 else ''
+            if not url:
+                url = method
+                method = 'GET'
+            url = _SLASH_COLLAPSE.sub('/', url)
+
+            # Filter chain
+            if return_code != "200":
+                continue
+            try:
+                if int(bytes_str) <= 0:
+                    continue
+            except ValueError:
+                continue
+            if method != "GET" and method != "POST":
+                continue
+            if _search_array(ip, ip_filters):
+                continue
+            if _search_array(useragent, ua_filters):
+                continue
+            if _search_array(url, url_filters):
+                continue
+
+            daily_hits[datestamp] += 1
+    finally:
+        if src is not sys.stdin:
+            src.close()
+
+    log(f"[import-webhits] parsed {total} line(s); "
+        f"counted {sum(daily_hits.values())} hit(s) across {len(daily_hits)} day(s); "
+        f"unrecognized = {unrec}")
+
+    if dry_run or not daily_hits:
+        if dry_run:
+            for d, h in sorted(daily_hits.items())[:5]:
+                log(f"  [dry-run] {d}  hits={h}")
+            if len(daily_hits) > 5:
+                log(f"  [dry-run] ... and {len(daily_hits) - 5} more day(s)")
+        return 0
+
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO webhits (datetime, hits) VALUES (%s, %s)",
+                sorted(daily_hits.items()),
+            )
+            inserted = cur.rowcount
+    finally:
+        conn.close()
+
+    log(f"[import-webhits] inserted {inserted} row(s) into webhits")
+    return 0
+
+def cmd_import_webhits(args):
+    with log_open() as lf:
+        return do_import_webhits(args.input_file, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -2149,6 +2304,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_wh = sub.add_parser("import-webhits",
+        help="Aggregate per-day hit counts from an apache log into metrics.webhits "
+             "(ports xlogimport_webhits.php)")
+    p_wh.add_argument("input_file", metavar="FILE",
+        help="path to staged apache log, or '-' for stdin")
+    p_wh.add_argument("--dry-run", action="store_true",
+        help="Parse and report counts; don't INSERT")
+
     p_bots = sub.add_parser("identify-bots",
         help="Scan an apache-format log and populate metrics.bot_useragents "
              "(ports xlogfix_identify_bots.php)")
@@ -2250,6 +2413,8 @@ def main():
         cmd_fill_user_info(args)
     elif args.command == "identify-bots":
         cmd_identify_bots(args)
+    elif args.command == "import-webhits":
+        cmd_import_webhits(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
