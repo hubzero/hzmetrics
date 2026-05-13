@@ -15,6 +15,7 @@ Usage:
   hzmetrics.py backfill-dnload [--start YYYY-MM]
   hzmetrics.py resolve-dns {metrics|hub} <table> [YYYY-MM] [-n NAMESERVER] [-c N] [-t SEC]
   hzmetrics.py clean-bots {web|websessions} [YYYY-MM | range]
+  hzmetrics.py import-hub-data
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -934,13 +935,19 @@ def cmd_process(args):
 
 ACCESS_CFG = Path("/etc/hubzero-metrics/access.cfg")
 
-def db_credentials():
-    """Parse DB connection info from access.cfg."""
+def db_config():
+    """Parse every $name = '…'; assignment in /etc/hubzero-metrics/access.cfg
+    into a dict.  Defined variables typically include hub_dir, hub_db,
+    metrics_db, db_host, db_user, db_pass, db_prefix."""
     text = ACCESS_CFG.read_text()
-    def get(var):
-        m = re.search(r'\$' + var + r"\s*=\s*'([^']*)'", text)
-        return m.group(1) if m else ""
-    return get("db_host"), get("db_user"), get("db_pass"), get("metrics_db")
+    return {m.group(1): m.group(2)
+            for m in re.finditer(r"\$([\w_]+)\s*=\s*'([^']*)'", text)}
+
+def db_credentials():
+    """Returns (db_host, db_user, db_pass, metrics_db) for backwards compat.
+    Use db_config() for the full set including hub_db, db_prefix, etc."""
+    c = db_config()
+    return c.get("db_host", ""), c.get("db_user", ""), c.get("db_pass", ""), c.get("metrics_db", "")
 
 def mysql_query(sql):
     """Run a SELECT against the metrics DB, return list of result rows.
@@ -1186,10 +1193,8 @@ def _read_dns_config():
 DNS_NAMESERVER, DNS_CONCURRENCY, DNS_TIMEOUT = _read_dns_config()
 
 def hub_db_name():
-    """Parse hub_db (the hub-side DB name) from access.cfg."""
-    text = ACCESS_CFG.read_text()
-    m = re.search(r"\$hub_db\s*=\s*'([^']*)'", text)
-    return m.group(1) if m else ""
+    """Convenience alias for db_config()['hub_db']."""
+    return db_config().get("hub_db", "")
 
 def _open_db(database=None):
     """Open a pymysql connection from access.cfg.  Lazy import so other
@@ -1533,6 +1538,83 @@ def cmd_clean_bots(args):
         )
 
 
+# ---------------------------------------------------------------------------
+# import-hub-data  (refresh sessionlog_metrics and jos_xprofiles_metrics
+#                   from the hub DB; ports xlogimport_tool_and_reg_user_data.php)
+# ---------------------------------------------------------------------------
+
+def do_import_hub_data(*, logfile=None, dry_run=False):
+    """Copy tool session starts and registered-user profiles from the
+    hub DB into the metrics DB.  Faithful port of
+    xlogimport_tool_and_reg_user_data.php:
+
+    1. INSERT IGNORE INTO {metrics_db}.sessionlog_metrics
+       SELECT FROM {hub_db}.sessionlog  -- idempotent on sessnum PK
+    2. DROP+CREATE LIKE+INSERT {metrics_db}.{prefix}xprofiles_metrics
+       from {hub_db}.{prefix}xprofiles WHERE emailConfirmed > 0
+       (rebuilt from scratch every run — see CLAUDE.md for rationale).
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    hub_db     = cfg.get("hub_db", "")
+    db_prefix  = cfg.get("db_prefix", "jos_")
+    if not metrics_db or not hub_db:
+        msg = f"[import-hub-data] missing metrics_db / hub_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    stmts = [
+        (
+            f"INSERT IGNORE INTO {metrics_db}.sessionlog_metrics "
+            f"(sessnum, user, ip, start, appname) "
+            f"SELECT sessnum, username, remoteip, start, appname "
+            f"FROM {hub_db}.sessionlog",
+            "copy tool session starts → sessionlog_metrics",
+        ),
+        (
+            f"DROP TABLE IF EXISTS {metrics_db}.{db_prefix}xprofiles_metrics",
+            f"drop old {db_prefix}xprofiles_metrics",
+        ),
+        (
+            f"CREATE TABLE {metrics_db}.{db_prefix}xprofiles_metrics "
+            f"LIKE {hub_db}.{db_prefix}xprofiles",
+            f"recreate {db_prefix}xprofiles_metrics schema from hub",
+        ),
+        (
+            f"INSERT INTO {metrics_db}.{db_prefix}xprofiles_metrics "
+            f"SELECT * FROM {hub_db}.{db_prefix}xprofiles "
+            f"WHERE emailConfirmed > 0",
+            "copy confirmed user profiles",
+        ),
+    ]
+
+    if dry_run:
+        for sql, desc in stmts:
+            log(f"  [dry-run] {desc}")
+            log(f"            {sql.split(' SELECT ')[0]} ...")
+        return 0
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            for sql, desc in stmts:
+                log(f"[import-hub-data] {desc}")
+                cur.execute(sql)
+                log(f"                  rows affected: {cur.rowcount}")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_import_hub_data(args):
+    with log_open() as lf:
+        return do_import_hub_data(logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -1702,6 +1784,12 @@ def main():
     grp_geo.add_argument("--all",   action="store_true", help="Fill all months with missing GeoIP data")
     p_geo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
+    p_hub = sub.add_parser("import-hub-data",
+        help="Copy sessionlog and xprofiles from the hub DB into the metrics DB "
+             "(ports xlogimport_tool_and_reg_user_data.php)")
+    p_hub.add_argument("--dry-run", action="store_true",
+        help="Show statements without executing")
+
     p_clean = sub.add_parser("clean-bots",
         help="DELETE rows in web/websessions matching exclude_list bot patterns (ports xlogfix_clean.php)")
     p_clean.add_argument("table", choices=list(CLEAN_BOTS_TABLES),
@@ -1773,6 +1861,8 @@ def main():
         cmd_backfill_dnload(args)
     elif args.command == "fill-geo":
         cmd_fill_geo(args)
+    elif args.command == "import-hub-data":
+        cmd_import_hub_data(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
