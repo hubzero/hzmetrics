@@ -942,24 +942,47 @@ def db_credentials():
     return get("db_host"), get("db_user"), get("db_pass"), get("metrics_db")
 
 def mysql_query(sql):
-    """Run a mysql query using credentials from access.cfg, return list of result rows."""
-    host, user, password, _ = db_credentials()
-    result = subprocess.run(
-        ["mysql", f"-h{host}", f"-u{user}", f"-p{password}", "-BN", "-e", sql],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    return [r.strip() for r in result.stdout.decode().strip().splitlines() if r.strip()]
+    """Run a SELECT against the metrics DB, return list of result rows.
+
+    Each row is rendered as a tab-joined string for backwards compatibility
+    with the older `mysql -BN` shell-out output format — single-column
+    callers index rows[i] as the value directly; multi-column callers
+    split on \\t themselves.  NULL renders as the literal 'NULL', again
+    matching the prior shell behaviour.
+
+    Callers must fully-qualify table names with {metrics_db} — no default
+    database is selected on the connection.
+    """
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return ["\t".join("NULL" if c is None else str(c) for c in row)
+                    for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 def mysql_exec(sql):
-    """Run a mysql DML/DDL statement, print any error, return exit code."""
-    host, user, password, _ = db_credentials()
-    result = subprocess.run(
-        ["mysql", f"-h{host}", f"-u{user}", f"-p{password}", "-e", sql],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if result.returncode != 0:
-        print(f"[mysql error] {result.stderr.decode().strip()}", flush=True)
-    return result.returncode
+    """Run a DML/DDL statement against the metrics DB.  Returns 0 on
+    success, 1 on failure (prints the error).  Single-statement contract.
+
+    Callers must fully-qualify table names with {metrics_db} — no default
+    database is selected on the connection."""
+    import pymysql
+    try:
+        conn = _open_db()
+    except pymysql.MySQLError as e:
+        print(f"[mysql error] connect: {e}", flush=True)
+        return 1
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        return 0
+    except pymysql.MySQLError as e:
+        print(f"[mysql error] {e}", flush=True)
+        return 1
+    finally:
+        conn.close()
 
 def months_with_missing_geo():
     """Query DB for months that have rows with null ipcountry in the web table."""
