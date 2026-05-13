@@ -18,6 +18,7 @@ Usage:
   hzmetrics.py import-hub-data
   hzmetrics.py import-auth <file>      (file may be '-' for stdin)
   hzmetrics.py fill-user-info {metrics|hub} <table>
+  hzmetrics.py identify-bots <file>    (file may be '-' for stdin)
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -1838,6 +1839,133 @@ def cmd_fill_user_info(args):
                                  logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# identify-bots  (scan apache log for bot UAs, populate metrics.bot_useragents;
+#                 ports xlogfix_identify_bots.php)
+# ---------------------------------------------------------------------------
+
+# Apache log patterns — same shape used in xlogimport_apache.php on the source
+# branch.  Two formats are recognized: the older 14-field combined-ish format,
+# and the newer 23-field format used on the reference host with PID and joomla fields.
+_APACHE_PAT_NEW = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+([\d]+)\s+(\S+)\s+'
+    r'\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+'
+    r'([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+([\-\d]+)\s+'
+    r'([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s+([^_].*)\s*$'
+)
+_APACHE_PAT_OLD = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})\s+(\d+:\d{2}:\d{2})\s+([\w\-\d]+)\s+(\S+)\s+'
+    r'\"(.+)\"\s+([\-\d]+)\s+([\d]+)\s+([\w\-\.\d]+)\s+\"(.*)\"\s+\"(.*)\"\s+'
+    r'([\w\-\.\d]+)\s+([\w\-\d]+)\s+([\w\-\d]+)\s+(.*)$'
+)
+
+# group index of the user-agent capture in each pattern (1-based as PHP)
+_APACHE_UA_GROUP_NEW = 11
+_APACHE_UA_GROUP_OLD = 10
+
+# Substring filters from xlogfix_identify_bots.php — case-insensitive match
+# against the user-agent string.  Any UA containing one of these gets flagged.
+BOT_UA_FILTERS = [
+    "owler", "serpstatbot", "turnitin", "facebookexternalhit", "googleother",
+    "feedfetcher", "msnbot", "gsa-crawler", "googlebot", "yandex",
+    "spider", "bot", "search", "crawl", "archive", "harvest", "slurp",
+    "feed", "nutch", "robot", "fetch", "findlinks",
+]
+# Whitelist overrides — remove these false positives after flagging.
+BOT_UA_WHITELIST_LIKE = ["%searchtool%", "% feed/%"]
+
+def _ua_is_bot(ua):
+    lo = ua.lower()
+    for f in BOT_UA_FILTERS:
+        if f in lo:
+            return True
+    return False
+
+def do_identify_bots(input_file, *, logfile=None, dry_run=False):
+    """Scan an apache-format staged log file, collect unique user-agent
+    strings that match any of the bot substring filters, and INSERT IGNORE
+    them into metrics.bot_useragents.  Then DELETE two whitelist
+    overrides (searchtool, ' feed/') that the substring filter would
+    have incorrectly flagged.  Faithful port of xlogfix_identify_bots.php.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    if not metrics_db:
+        msg = "[identify-bots] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    unique_uas = set()
+    total = 0
+    unrec = 0
+
+    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
+    try:
+        for line in src:
+            total += 1
+            line = line.rstrip("\r\n")
+            m = _APACHE_PAT_NEW.match(line)
+            if m:
+                ua = m.group(_APACHE_UA_GROUP_NEW)
+            else:
+                m = _APACHE_PAT_OLD.match(line)
+                if not m:
+                    unrec += 1
+                    continue
+                ua = m.group(_APACHE_UA_GROUP_OLD)
+            if ua:
+                unique_uas.add(ua)
+    finally:
+        if src is not sys.stdin:
+            src.close()
+
+    matched = [ua for ua in unique_uas if _ua_is_bot(ua)]
+
+    log(f"[identify-bots] parsed {total} line(s); "
+        f"unique UAs = {len(unique_uas)}; "
+        f"flagged as bot = {len(matched)}; "
+        f"unrecognized = {unrec}")
+
+    if dry_run or not matched:
+        if dry_run and matched:
+            for ua in matched[:5]:
+                log(f"  [dry-run] would insert: {ua[:120]}")
+            if len(matched) > 5:
+                log(f"  [dry-run] ... and {len(matched) - 5} more")
+        return 0
+
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT IGNORE INTO bot_useragents (useragent) VALUES (%s)",
+                [(ua,) for ua in matched],
+            )
+            inserted = cur.rowcount
+            # Whitelist overrides — match the PHP `OR useragent LIKE …` shape
+            cur.execute(
+                "DELETE FROM bot_useragents "
+                "WHERE useragent LIKE %s OR useragent LIKE %s",
+                BOT_UA_WHITELIST_LIKE,
+            )
+            removed = cur.rowcount
+    finally:
+        conn.close()
+
+    log(f"[identify-bots] inserted {inserted} new bot UA(s); "
+        f"removed {removed} whitelist override(s)")
+    return 0
+
+def cmd_identify_bots(args):
+    with log_open() as lf:
+        return do_identify_bots(args.input_file, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -2021,6 +2149,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_bots = sub.add_parser("identify-bots",
+        help="Scan an apache-format log and populate metrics.bot_useragents "
+             "(ports xlogfix_identify_bots.php)")
+    p_bots.add_argument("input_file", metavar="FILE",
+        help="path to staged apache log, or '-' for stdin")
+    p_bots.add_argument("--dry-run", action="store_true",
+        help="Parse and report counts; don't INSERT or DELETE")
+
     p_ui = sub.add_parser("fill-user-info",
         help="Fill countrycitizen / countryresident / orgtype on toolstart / "
              "sessionlog_metrics from hub user profiles (ports xlogfix_user_info.php)")
@@ -2112,6 +2248,8 @@ def main():
         cmd_import_auth(args)
     elif args.command == "fill-user-info":
         cmd_fill_user_info(args)
+    elif args.command == "identify-bots":
+        cmd_identify_bots(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
