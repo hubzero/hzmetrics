@@ -16,6 +16,7 @@ Usage:
   hzmetrics.py resolve-dns {metrics|hub} <table> [YYYY-MM] [-n NAMESERVER] [-c N] [-t SEC]
   hzmetrics.py clean-bots {web|websessions} [YYYY-MM | range]
   hzmetrics.py import-hub-data
+  hzmetrics.py import-auth <file>      (file may be '-' for stdin)
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -1615,6 +1616,134 @@ def cmd_import_hub_data(args):
         return do_import_hub_data(logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# import-auth  (parse cmsauth.log → userlogin; ports xlogimport_authlog.php)
+# ---------------------------------------------------------------------------
+
+# Old format: 2007-05-17 11:06:39 username 128.210.189.195 login
+# New format: 2009-01-17 11:06:39 1234 [username] 128.210.189.195 login
+_AUTH_PAT_NEW = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+\[(.+)\]\s+([\.\d]+)\s+(\w+)\s*$'
+)
+_AUTH_PAT_OLD = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+)\s+([\.\d]+)\s+(\w+)\s*$'
+)
+
+def _ip_excluded(ip, filters):
+    """Mirror search_array() from func_misc.php: case-insensitive substring
+    test of each filter against the candidate IP.  Filter list is small
+    (typically 1-3 entries), so straightforward loop is fine."""
+    lo = ip.lower()
+    for f in filters:
+        if f and f.lower() in lo:
+            return True
+    return False
+
+def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
+    """Parse a cmsauth-format file and INSERT IGNORE login/simulation
+    events into metrics.userlogin.  Faithful port of xlogimport_authlog.php
+    against the source-tree version (which filters action ∈ {login,
+    simulation}; master inserted every action).
+
+    input_file: path to the staged auth log (typically
+    /var/log/hubzero/metrics/_hub_auth.log) or '-' for stdin.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    if not metrics_db:
+        msg = "[import-auth] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    # Pull the IP exclusion list once
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+            ip_filters = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    rows = []
+    unrec = 0
+    skipped_action = 0
+    skipped_filter = 0
+    total = 0
+
+    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
+    try:
+        for line in src:
+            total += 1
+            line = line.rstrip("\r\n")
+            m = _AUTH_PAT_NEW.match(line)
+            if m:
+                dt = f"{m.group(1)} {m.group(2)}"
+                uid = int(m.group(3))
+                user = m.group(4).strip()
+                ip = m.group(5).strip()
+                action = m.group(6).strip()
+            else:
+                m = _AUTH_PAT_OLD.match(line)
+                if not m:
+                    unrec += 1
+                    continue
+                dt = f"{m.group(1)} {m.group(2)}"
+                uid = 0
+                user = m.group(3).strip()
+                ip = m.group(4).strip()
+                action = m.group(5).strip()
+            if not user:
+                user = "-"
+            if action not in ("login", "simulation"):
+                skipped_action += 1
+                continue
+            if user in ("hubstatus", "hubadmin"):
+                skipped_filter += 1
+                continue
+            if _ip_excluded(ip, ip_filters):
+                skipped_filter += 1
+                continue
+            rows.append((dt, uid, user, ip, action))
+    finally:
+        if src is not sys.stdin:
+            src.close()
+
+    log(f"[import-auth] parsed {total} line(s); "
+        f"login/simulation kept = {len(rows)}; "
+        f"unrecognized = {unrec}; "
+        f"filtered = {skipped_filter}; "
+        f"other-action skipped = {skipped_action}")
+
+    if dry_run or not rows:
+        return 0
+
+    inserted = 0
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            sql = ("INSERT IGNORE INTO userlogin "
+                   "(datetime, uidNumber, user, ip, action) "
+                   "VALUES (%s, %s, %s, %s, %s)")
+            for i in range(0, len(rows), batch_size):
+                cur.executemany(sql, rows[i:i + batch_size])
+                inserted += cur.rowcount
+    finally:
+        conn.close()
+
+    log(f"[import-auth] inserted {inserted} new row(s) into userlogin "
+        f"(others were duplicates rejected by INSERT IGNORE)")
+    return 0
+
+def cmd_import_auth(args):
+    with log_open() as lf:
+        return do_import_auth(args.input_file, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -1790,6 +1919,14 @@ def main():
     p_hub.add_argument("--dry-run", action="store_true",
         help="Show statements without executing")
 
+    p_iauth = sub.add_parser("import-auth",
+        help="Parse a cmsauth-format file and INSERT IGNORE login/simulation rows "
+             "into metrics.userlogin (ports xlogimport_authlog.php)")
+    p_iauth.add_argument("input_file", metavar="FILE",
+        help="path to staged auth log, or '-' for stdin")
+    p_iauth.add_argument("--dry-run", action="store_true",
+        help="Parse and report counts, but don't INSERT")
+
     p_clean = sub.add_parser("clean-bots",
         help="DELETE rows in web/websessions matching exclude_list bot patterns (ports xlogfix_clean.php)")
     p_clean.add_argument("table", choices=list(CLEAN_BOTS_TABLES),
@@ -1863,6 +2000,8 @@ def main():
         cmd_fill_geo(args)
     elif args.command == "import-hub-data":
         cmd_import_hub_data(args)
+    elif args.command == "import-auth":
+        cmd_import_auth(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
