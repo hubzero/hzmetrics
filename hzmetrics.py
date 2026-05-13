@@ -20,6 +20,7 @@ Usage:
   hzmetrics.py fill-user-info {metrics|hub} <table>
   hzmetrics.py identify-bots <file>    (file may be '-' for stdin)
   hzmetrics.py import-webhits <file>   (file may be '-' for stdin)
+  hzmetrics.py fill-domain {metrics|hub} <table>
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -2121,6 +2122,210 @@ def cmd_import_webhits(args):
         return do_import_webhits(args.input_file, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# fill-domain  (derive `domain` column from `host`; ports xlogfix_domain.php)
+# ---------------------------------------------------------------------------
+
+# get_domain() supporting sets, mirrors xlogfix_domain.php
+_DOMAIN_NO2_3LEVEL = {"ub"}
+_DOMAIN_MIL_3LEVEL = {"af", "army", "navy"}
+_DOMAIN_INT_3LEVEL = {"com", "net", "org", "edu", "gov", "mil",
+                     "ac", "co", "ne", "or", "ed"}
+_DOMAIN_US_4LEVEL  = {"k12", "lib", "cc", "tec"}
+
+# SLD-internal patterns (active only when the hostname has exactly 2 dot-parts):
+# strip a 4+ dash/underscore prefix and keep the suffix.
+_DOMAIN_SLD_PATTERNS = [
+    re.compile(r'^(.+-.+-.+-.+)-(.+)$'),
+    re.compile(r'^(.+_.+_.+_.+)-(.+)$'),
+    re.compile(r'^(.+_.+_.+_.+)_(.+)$'),
+    re.compile(r'^(.+-.+-.+-.+)_(.+)$'),
+]
+
+def get_domain(hostname):
+    """Extract effective domain from a hostname.  Faithful port of
+    get_domain() in xlogfix_domain.php — same TLD-promotion rules,
+    same special-case ordering, same '?' sentinel for non-host inputs.
+    """
+    if not hostname or "." not in hostname:
+        return "?"
+    field = hostname.split(".")
+    field.reverse()    # field[0] = TLD, field[1] = SLD, ...
+
+    domain = field[0] if field else None
+
+    if len(field) >= 2:
+        domain = f"{field[1]}.{field[0]}"
+
+        if len(field) >= 3:
+            # 3-level promote: ccTLDs with various SLD patterns
+            cond_2letter = (
+                field[1] not in _DOMAIN_NO2_3LEVEL
+                and len(field[1]) == 2 and len(field[0]) == 2
+            )
+            cond_int = (
+                field[1] in _DOMAIN_INT_3LEVEL and len(field[0]) == 2
+            )
+            cond_mil = (
+                field[1] in _DOMAIN_MIL_3LEVEL and field[0] == "mil"
+            )
+            if cond_2letter or cond_int or cond_mil:
+                domain = f"{field[2]}.{field[1]}.{field[0]}"
+
+            # 4-level: k12/lib/cc/tec under .us
+            if len(field) >= 4 and field[2] in _DOMAIN_US_4LEVEL and field[0] == "us":
+                domain = f"{field[3]}.{field[2]}.{field[1]}.{field[0]}"
+        else:
+            # exactly 2 fields — check SLD-internal hyphen/underscore patterns
+            sld = field[1]
+            for pat in _DOMAIN_SLD_PATTERNS:
+                m = pat.match(sld)
+                if m:
+                    domain = f"{m.group(2)}.{field[0]}"
+                    break
+
+    if not domain or domain == ".":
+        return "?"
+    return domain
+
+
+FILL_DOMAIN_TABLES = ("web", "toolstart", "sessionlog_metrics")
+
+def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
+                   logfile=None, dry_run=False):
+    """Derive the `domain` column from `host` for unfilled rows and bulk
+    UPDATE the target table.  Ports xlogfix_domain.php — same eligibility
+    (domain ∈ {'', '?', NULL} AND host <> ''), same get_domain() logic,
+    same SQL date semantics (datecol >= start AND datecol < end).
+
+    Optimization vs PHP: original issued one UPDATE per row (~millions
+    per month on web).  This port pulls distinct hosts, computes the
+    domain locally, and applies one JOIN-UPDATE via a temp table —
+    identical end state in one statement instead of N.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    hub_db     = cfg.get("hub_db", "")
+    if not metrics_db:
+        msg = "[fill-domain] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if db_key == "metrics":
+        db_name = metrics_db
+    elif db_key == "hub":
+        db_name = hub_db
+    else:
+        msg = f"[fill-domain] unknown db_key {db_key!r}"
+        print(msg, flush=True)
+        return 2
+
+    if table not in FILL_DOMAIN_TABLES:
+        # Not strictly enforced by the PHP, but the only callers in the
+        # pipeline are these three.  Warn but proceed.
+        print(f"[fill-domain] warning: table {table!r} is not one of the "
+              f"usual targets ({FILL_DOMAIN_TABLES}); proceeding anyway",
+              flush=True)
+
+    d_col = "start" if table == "sessionlog_metrics" else "datetime"
+
+    # date range
+    if all_dates:
+        start_d = end_d = None
+    elif date_spec:
+        try:
+            start_d, end_d = parse_date_range(date_spec)
+        except ValueError as e:
+            msg = f"[fill-domain] {e}"
+            print(msg, flush=True)
+            if logfile: logfile.write(msg + "\n")
+            return 2
+    else:
+        today = date.today()
+        start_d = today.replace(day=1)
+        end_d = today + timedelta(days=1)
+
+    # SQL predicates — PHP uses `datecol >= start AND datecol < end`
+    parts = []
+    params = []
+    if start_d is not None:
+        parts.append(f"{d_col} >= %s")
+        params.append(f"{start_d.isoformat()} 00:00:00")
+    if end_d is not None:
+        parts.append(f"{d_col} < %s")
+        params.append(f"{end_d.isoformat()} 00:00:00")
+    date_pred_sql = (" AND " + " AND ".join(parts)) if parts else ""
+    date_params = tuple(params)
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    scope_label = "ALL" if (start_d is None and end_d is None) \
+        else f"{start_d if start_d else '...'}..{end_d if end_d else '...'}"
+
+    conn = _open_db(db_name)
+    try:
+        with conn.cursor() as cur:
+            select_sql = (
+                f"SELECT DISTINCT LOWER(host) FROM {table} "
+                f"WHERE host <> '' AND host IS NOT NULL "
+                f"AND (domain = '' OR domain = '?' OR domain IS NULL)"
+                f"{date_pred_sql}"
+            )
+            cur.execute(select_sql, date_params)
+            hosts = [r[0] for r in cur.fetchall() if r[0]]
+
+            log(f"[fill-domain] {db_name}.{table} {scope_label}: "
+                f"{len(hosts)} distinct host(s) to derive domain from")
+
+            if not hosts:
+                return 0
+
+            pairs = [(h, get_domain(h)) for h in hosts]
+
+            if dry_run:
+                for h, d in pairs[:5]:
+                    log(f"  [dry-run] {h!r} -> {d!r}")
+                if len(pairs) > 5:
+                    log(f"  [dry-run] ... and {len(pairs) - 5} more")
+                return 0
+
+            # Bulk update via temp table + JOIN
+            cur.execute(
+                "CREATE TEMPORARY TABLE _domain_tmp ("
+                "host VARCHAR(255) NOT NULL PRIMARY KEY, "
+                "domain VARCHAR(255)) ENGINE=Memory"
+            )
+            cur.executemany(
+                "INSERT INTO _domain_tmp (host, domain) VALUES (%s, %s)",
+                pairs,
+            )
+            update_sql = (
+                f"UPDATE {table} t "
+                f"INNER JOIN _domain_tmp d ON LOWER(t.host) = d.host "
+                f"SET t.domain = d.domain "
+                f"WHERE (t.domain = '' OR t.domain = '?' OR t.domain IS NULL) "
+                f"AND t.host <> '' AND t.host IS NOT NULL"
+                f"{date_pred_sql.replace(d_col, 't.' + d_col)}"
+            )
+            cur.execute(update_sql, date_params)
+            updated = cur.rowcount
+            cur.execute("DROP TEMPORARY TABLE _domain_tmp")
+
+        log(f"[fill-domain] updated {updated} row(s) in {table}")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_fill_domain(args):
+    with log_open() as lf:
+        return do_fill_domain(args.db_key, args.table, args.date_spec,
+                              all_dates=args.all,
+                              logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -2304,6 +2509,20 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_fd = sub.add_parser("fill-domain",
+        help="Derive `domain` column from `host` and bulk-update target table "
+             "(ports xlogfix_domain.php)")
+    p_fd.add_argument("db_key", choices=["metrics", "hub"],
+        help="Target DB ('metrics' or 'hub')")
+    p_fd.add_argument("table",
+        help="Target table (web | toolstart | sessionlog_metrics)")
+    p_fd.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
+        help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' (default: current month)")
+    p_fd.add_argument("--all", action="store_true",
+        help="No date filter (use with care on large tables)")
+    p_fd.add_argument("--dry-run", action="store_true",
+        help="Show derivations; don't UPDATE")
+
     p_wh = sub.add_parser("import-webhits",
         help="Aggregate per-day hit counts from an apache log into metrics.webhits "
              "(ports xlogimport_webhits.php)")
@@ -2415,6 +2634,8 @@ def main():
         cmd_identify_bots(args)
     elif args.command == "import-webhits":
         cmd_import_webhits(args)
+    elif args.command == "fill-domain":
+        cmd_fill_domain(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
