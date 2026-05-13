@@ -21,6 +21,7 @@ Usage:
   hzmetrics.py identify-bots <file>    (file may be '-' for stdin)
   hzmetrics.py import-webhits <file>   (file may be '-' for stdin)
   hzmetrics.py fill-domain {metrics|hub} <table>
+  hzmetrics.py import-apache <file>    (file may be '-' for stdin)
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -2326,6 +2327,253 @@ def cmd_fill_domain(args):
                               logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# import-apache  (parse apache log → metrics.web; ports xlogimport_apache.php)
+# ---------------------------------------------------------------------------
+
+# URL exclusion patterns — content with these suffixes (optionally with a
+# query string) is not stored in the web table.
+_CODE_SUFFIXES = "css|js"
+_IMG_SUFFIXES  = "gif|jpeg|jpg|png|ps|ico"
+_FONT_SUFFIXES = "svg|otf|ttf|woff|eot"
+_EXCLUDE_SUFFIX_RE = re.compile(
+    r'\.(' + '|'.join((_CODE_SUFFIXES, _IMG_SUFFIXES, _FONT_SUFFIXES)) +
+    r')(\?.*=.*(\&.*=.*)*)*$',
+    re.IGNORECASE,
+)
+_TEMPLATES_RE = re.compile(r'^(/app)*/templates/', re.IGNORECASE)
+_ADMIN_RE     = re.compile(r'^/administrator/',    re.IGNORECASE)
+_WEBDAV_RE    = re.compile(r'^/webdav/',           re.IGNORECASE)
+_API_RE       = re.compile(r'^/api/',              re.IGNORECASE)
+_CRON_RE      = re.compile(r'^/cron/tick/',        re.IGNORECASE)
+_SVN_RE       = re.compile(r'/projects/.+?/svn/\!svn/', re.IGNORECASE)
+_RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
+
+# dnload flag triggers (matches the new-code addition to set web.dnload=1)
+_DOWNLOAD_PATH_RE = re.compile(r'^/resources/.*/download/', re.IGNORECASE)
+_DOWNLOAD_EXTS = (
+    "txt|png|pdf|ppt|pptx|swf|docx|jpg|doc|zip|mp3|mbtiles|xml|xlsx|"
+    "webm|mp4|xls|r|csv|nc4|template|tgz|mov|ipynb|py|rar|grd|tif|nc|har"
+)
+_DOWNLOAD_EXT_RE = re.compile(
+    r'^/resources/.*\.(' + _DOWNLOAD_EXTS + r')([?#]|$)',
+    re.IGNORECASE,
+)
+
+def _is_download_url(url):
+    return bool(_DOWNLOAD_PATH_RE.match(url) or _DOWNLOAD_EXT_RE.match(url))
+
+def _is_excluded_url(url):
+    """True iff URL hits any exclusion rule (suffix or path)."""
+    if _EXCLUDE_SUFFIX_RE.search(url): return True
+    if _TEMPLATES_RE.match(url):       return True
+    if _ADMIN_RE.match(url):           return True
+    if _WEBDAV_RE.match(url):          return True
+    if _API_RE.match(url):             return True
+    if _CRON_RE.match(url):            return True
+    if _SVN_RE.search(url):            return True
+    return False
+
+def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False):
+    """Parse an apache staged log file and INSERT eligible rows into
+    metrics.web.  Ports xlogimport_apache.php (source-tree version with
+    the dnload column set).
+
+    Eligibility:
+      - regex matches new or old apache log format
+      - status=200, bytes>0, method ∈ {GET,POST}
+      - IP / UA / URL not matched by exclude_list filters
+      - useragent not present in metrics.bot_useragents (exact match)
+      - URL not excluded by suffix/path rules, OR is under /resources/
+    Sets dnload=1 for resource-download URL shapes; 0 otherwise.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    if not metrics_db:
+        msg = "[import-apache] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    # Load filter lists once
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+            ip_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
+            ua_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
+            url_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT useragent FROM bot_useragents")
+            bot_uas = {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+    log(f"[import-apache] loaded filters: "
+        f"ip={len(ip_filters)} ua={len(ua_filters)} url={len(url_filters)} "
+        f"bot_useragents={len(bot_uas)}")
+
+    insert_sql = (
+        "INSERT INTO web "
+        "(datetime, content, ip, uidNumber, apache_pid, referrer, useragent, "
+        "joomla_sessionid, site_cookie, auth_type, component_name, view_name, "
+        "task_name, action_name, item_name, dnload) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    )
+
+    rows_buf = []
+    total = 0
+    parsed = 0
+    inserted = 0
+    unrec = 0
+    skipped_bot = 0
+    skipped_status = 0
+    skipped_filter = 0
+    skipped_url = 0
+    dnload_set = 0
+
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
+            try:
+                for line in src:
+                    total += 1
+                    line = line.rstrip("\r\n")
+
+                    m = _APACHE_PAT_NEW.match(line)
+                    if m:
+                        datestamp = m.group(1)
+                        timestamp = m.group(2)
+                        pid       = m.group(4)
+                        firstline = m.group(6)
+                        ret_code  = m.group(7)
+                        bytes_str = m.group(8)
+                        ip        = m.group(9)
+                        referrer  = m.group(10)
+                        useragent = m.group(11)
+                        uidNumber = m.group(15)
+                        joomla_id = m.group(16)
+                        st_cookie = m.group(17)
+                        auth_type = m.group(18)
+                        comp_name = m.group(19)
+                        view_name = m.group(20)
+                        task_name = m.group(21)
+                        actn_name = m.group(22)
+                        item_name = m.group(23)
+                    else:
+                        m = _APACHE_PAT_OLD.match(line)
+                        if not m:
+                            unrec += 1
+                            continue
+                        datestamp = m.group(1)
+                        timestamp = m.group(2)
+                        pid       = ''
+                        firstline = m.group(5)
+                        ret_code  = m.group(6)
+                        bytes_str = m.group(7)
+                        ip        = m.group(8)
+                        referrer  = m.group(9)
+                        useragent = m.group(10)
+                        uidNumber = ''
+                        joomla_id = ''
+                        st_cookie = m.group(14)
+                        auth_type = ''
+                        comp_name = ''
+                        view_name = ''
+                        task_name = ''
+                        actn_name = ''
+                        item_name = ''
+                    parsed += 1
+
+                    # Normalize uidNumber: '' / '-' → 0, else int (fallback 0)
+                    if not uidNumber or uidNumber == '-':
+                        uid = 0
+                    else:
+                        try:
+                            uid = int(uidNumber)
+                        except ValueError:
+                            uid = 0
+
+                    # Parse request line — single-token fallback per PHP
+                    parts = firstline.strip().split(None, 2)
+                    method = parts[0] if parts else ''
+                    url    = parts[1] if len(parts) > 1 else ''
+                    if not url:
+                        url = method
+                        method = 'GET'
+                    url = _SLASH_COLLAPSE.sub('/', url)
+
+                    # Filter chain — same order as PHP
+                    if ret_code != "200":
+                        skipped_status += 1
+                        continue
+                    try:
+                        if int(bytes_str) <= 0:
+                            skipped_status += 1
+                            continue
+                    except ValueError:
+                        skipped_status += 1
+                        continue
+                    if method != "GET" and method != "POST":
+                        skipped_status += 1
+                        continue
+                    if _search_array(ip, ip_filters) or \
+                       _search_array(useragent, ua_filters) or \
+                       _search_array(url, url_filters):
+                        skipped_filter += 1
+                        continue
+                    if useragent and useragent != '-' and useragent in bot_uas:
+                        skipped_bot += 1
+                        continue
+
+                    # URL include: excluded by suffix/path UNLESS under /resources/
+                    if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
+                        skipped_url += 1
+                        continue
+
+                    dnload = 1 if _is_download_url(url) else 0
+                    if dnload:
+                        dnload_set += 1
+
+                    rows_buf.append((
+                        f"{datestamp} {timestamp}",
+                        url, ip, uid, pid, referrer, useragent,
+                        joomla_id, st_cookie, auth_type,
+                        comp_name, view_name, task_name, actn_name, item_name,
+                        dnload,
+                    ))
+
+                    if len(rows_buf) >= batch_size and not dry_run:
+                        cur.executemany(insert_sql, rows_buf)
+                        inserted += cur.rowcount
+                        rows_buf = []
+            finally:
+                if src is not sys.stdin:
+                    src.close()
+
+            if rows_buf and not dry_run:
+                cur.executemany(insert_sql, rows_buf)
+                inserted += cur.rowcount
+    finally:
+        conn.close()
+
+    log(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
+        f"eligible={len(rows_buf) if dry_run else inserted}; "
+        f"skipped: status={skipped_status} filter={skipped_filter} "
+        f"bot={skipped_bot} url={skipped_url}; dnload-flagged={dnload_set}")
+    return 0
+
+def cmd_import_apache(args):
+    with log_open() as lf:
+        return do_import_apache(args.input_file, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -2509,6 +2757,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_ia = sub.add_parser("import-apache",
+        help="Parse an apache-format file and INSERT eligible rows into "
+             "metrics.web (ports xlogimport_apache.php)")
+    p_ia.add_argument("input_file", metavar="FILE",
+        help="path to staged apache log, or '-' for stdin")
+    p_ia.add_argument("--dry-run", action="store_true",
+        help="Parse and report counts; don't INSERT")
+
     p_fd = sub.add_parser("fill-domain",
         help="Derive `domain` column from `host` and bulk-update target table "
              "(ports xlogfix_domain.php)")
@@ -2636,6 +2892,8 @@ def main():
         cmd_import_webhits(args)
     elif args.command == "fill-domain":
         cmd_fill_domain(args)
+    elif args.command == "import-apache":
+        cmd_import_apache(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
