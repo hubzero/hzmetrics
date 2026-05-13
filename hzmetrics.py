@@ -14,6 +14,7 @@ Usage:
   hzmetrics.py fill-geo  --month YYYY-MM | --all
   hzmetrics.py backfill-dnload [--start YYYY-MM]
   hzmetrics.py resolve-dns {metrics|hub} <table> [YYYY-MM] [-n NAMESERVER] [-c N] [-t SEC]
+  hzmetrics.py clean-bots {web|websessions} [YYYY-MM | range]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -1411,6 +1412,127 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
     finally:
         conn.close()
 
+# ---------------------------------------------------------------------------
+# clean-bots  (DELETE rows in web/websessions matching exclude_list bot
+#              patterns; ports xlogfix_clean.php)
+# ---------------------------------------------------------------------------
+
+CLEAN_BOTS_TABLES = ("web", "websessions")
+
+def _findweeks(start_d, end_d):
+    """Yield (chunk_start, chunk_end) date pairs covering [start_d, end_d)
+    in ~7-day windows, with the PHP findWeeks() boundary convention
+    preserved: each chunk's SQL semantics are `col > start AND col <= end`,
+    and the very first chunk starts the day BEFORE start_d so that the
+    first day of the period is captured (since `> start` is exclusive).
+    """
+    if start_d is None or end_d is None:
+        raise ValueError("clean-bots requires a bounded date range "
+                         "(use --all only with explicit bounds upstream)")
+    chunk_start = start_d - timedelta(days=1)
+    while chunk_start < end_d:
+        chunk_end = chunk_start + timedelta(days=7)
+        if chunk_end > end_d:
+            chunk_end = end_d
+        yield chunk_start, chunk_end
+        chunk_start = chunk_end
+
+def do_clean_bots(table, date_spec=None, *, all_dates=False,
+                  logfile=None, dry_run=False):
+    """DELETE rows in <table> whose domain or host matches an entry in
+    foo_metrics.exclude_list (types 'domain' and 'host').  Faithful
+    port of xlogfix_clean.php — same SQL shape, same week-chunked DELETEs,
+    same boundary semantics, same source list (exclude_list, not exclude_list2).
+    """
+    if table not in CLEAN_BOTS_TABLES:
+        msg = f"[clean-bots] table {table!r} not supported (expected one of {CLEAN_BOTS_TABLES})"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    _, _, _, metrics_db = db_credentials()
+
+    if all_dates:
+        msg = "[clean-bots] --all not supported (DELETE needs a bounded range)"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if date_spec:
+        try:
+            start_d, end_d = parse_date_range(date_spec)
+        except ValueError as e:
+            msg = f"[clean-bots] {e}"
+            print(msg, flush=True)
+            if logfile: logfile.write(msg + "\n")
+            return 2
+        if start_d is None or end_d is None:
+            msg = "[clean-bots] open-ended ranges not supported"
+            print(msg, flush=True)
+            if logfile: logfile.write(msg + "\n")
+            return 2
+    else:
+        # default: current month-to-today (mirrors PHP behavior when no
+        # argument is passed)
+        today = date.today()
+        start_d = today.replace(day=1)
+        end_d   = today + timedelta(days=1)
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT filter FROM exclude_list WHERE type='domain'")
+            domain_filters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT DISTINCT filter FROM exclude_list WHERE type='host'")
+            host_filters = [r[0] for r in cur.fetchall()]
+
+            chunks = list(_findweeks(start_d, end_d))
+            log(f"[clean-bots] {metrics_db}.{table} {start_d}..{end_d}: "
+                f"{len(domain_filters)} domain filter(s), {len(host_filters)} host filter(s), "
+                f"{len(chunks)} week chunk(s)")
+
+            if dry_run:
+                for c_start, c_end in chunks:
+                    log(f"  [dry-run] chunk {c_start} < datetime <= {c_end}")
+                for f in domain_filters:
+                    log(f"  [dry-run] domain = {f!r}")
+                for f in host_filters:
+                    log(f"  [dry-run] host LIKE {f!r}")
+                return 0
+
+            total_deleted = 0
+            for c_start, c_end in chunks:
+                for f in domain_filters:
+                    cur.execute(
+                        f"DELETE FROM {table} "
+                        f"WHERE datetime > %s AND datetime <= %s AND domain = %s",
+                        (c_start, c_end, f))
+                    total_deleted += cur.rowcount
+                for f in host_filters:
+                    cur.execute(
+                        f"DELETE FROM {table} "
+                        f"WHERE datetime > %s AND datetime <= %s AND host LIKE %s",
+                        (c_start, c_end, f))
+                    total_deleted += cur.rowcount
+
+            log(f"[clean-bots] deleted {total_deleted} rows from {table}")
+            return 0
+    finally:
+        conn.close()
+
+def cmd_clean_bots(args):
+    with log_open() as lf:
+        return do_clean_bots(
+            args.table, args.date_spec,
+            all_dates=args.all,
+            logfile=lf, dry_run=args.dry_run,
+        )
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -1580,6 +1702,17 @@ def main():
     grp_geo.add_argument("--all",   action="store_true", help="Fill all months with missing GeoIP data")
     p_geo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
+    p_clean = sub.add_parser("clean-bots",
+        help="DELETE rows in web/websessions matching exclude_list bot patterns (ports xlogfix_clean.php)")
+    p_clean.add_argument("table", choices=list(CLEAN_BOTS_TABLES),
+        help="Target table (web | websessions)")
+    p_clean.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
+        help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' (default: current month)")
+    p_clean.add_argument("--all", action="store_true",
+        help="Not supported — DELETE needs an explicit bounded range")
+    p_clean.add_argument("--dry-run", action="store_true",
+        help="Show the chunks and filters; don't DELETE anything")
+
     p_dns = sub.add_parser("resolve-dns",
         help="Reverse-DNS resolve unresolved IPs in a metrics table (replaces xlogfix_dns_v2.sh)",
         description=(
@@ -1640,6 +1773,8 @@ def main():
         cmd_backfill_dnload(args)
     elif args.command == "fill-geo":
         cmd_fill_geo(args)
+    elif args.command == "clean-bots":
+        cmd_clean_bots(args)
     elif args.command == "resolve-dns":
         cmd_resolve_dns(args)
     else:
