@@ -17,6 +17,7 @@ Usage:
   hzmetrics.py clean-bots {web|websessions} [YYYY-MM | range]
   hzmetrics.py import-hub-data
   hzmetrics.py import-auth <file>      (file may be '-' for stdin)
+  hzmetrics.py fill-user-info {metrics|hub} <table>
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -1744,6 +1745,99 @@ def cmd_import_auth(args):
         return do_import_auth(args.input_file, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# fill-user-info  (assign countrycitizen, countryresident, orgtype on
+#                  toolstart / sessionlog_metrics rows by joining to hub
+#                  user profiles; ports xlogfix_user_info.php)
+# ---------------------------------------------------------------------------
+
+# (column-in-target-table, profile_key-in-hub-user_profiles)
+USER_INFO_PARAMS = [
+    ("countrycitizen",  "countryorigin"),
+    ("countryresident", "countryresident"),
+    ("orgtype",         "orgtype"),
+]
+
+def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
+                      logfile=None, dry_run=False):
+    """Fill countrycitizen / countryresident / orgtype columns on rows
+    in <table> by joining usernames against hub.jos_users +
+    hub.jos_user_profiles.  Ports xlogfix_user_info.php.
+
+    Optimization vs the PHP: original looped over week chunks and emitted
+    one UPDATE per matching profile row.  The UPDATE's WHERE clause has no
+    date filter (only user filter and column-is-empty), so the per-week
+    loop was redundant.  We do one UPDATE per parameter via INNER JOIN,
+    which produces an identical end state in 3 statements instead of N
+    week-chunks × N profiles × 3 params.
+
+    The CLI accepts a date_spec for compatibility with the old invocation
+    pattern (__process_*.sh passes the month), but the value is ignored
+    to match PHP semantics exactly — the UPDATE always considers all
+    unfilled rows regardless of date.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    hub_db     = cfg.get("hub_db", "")
+    db_prefix  = cfg.get("db_prefix", "jos_")
+    if not metrics_db or not hub_db:
+        msg = "[fill-user-info] missing metrics_db / hub_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if db_key == "metrics":
+        db_name = metrics_db
+    elif db_key == "hub":
+        db_name = hub_db
+    else:
+        msg = f"[fill-user-info] unknown db_key {db_key!r}"
+        print(msg, flush=True)
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if date_spec or all_dates:
+        log(f"[fill-user-info] {db_name}.{table}: date arg ignored (matching "
+            f"the PHP behaviour — UPDATE has no date filter, only user filter)")
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            grand_total = 0
+            for column, profile_key in USER_INFO_PARAMS:
+                update_sql = (
+                    f"UPDATE {db_name}.{table} t "
+                    f"INNER JOIN {hub_db}.{db_prefix}users u "
+                    f"  ON u.username = t.user "
+                    f"INNER JOIN {hub_db}.{db_prefix}user_profiles up "
+                    f"  ON up.user_id = u.id AND up.profile_key = %s "
+                    f"SET t.{column} = UPPER(up.profile_value) "
+                    f"WHERE (t.{column} IS NULL OR t.{column} = '') "
+                    f"AND up.profile_value IS NOT NULL "
+                    f"AND up.profile_value <> ''"
+                )
+                if dry_run:
+                    log(f"  [dry-run] {column} <- profile_key={profile_key!r}")
+                    continue
+                cur.execute(update_sql, (profile_key,))
+                log(f"[fill-user-info] {column}: {cur.rowcount} row(s) updated")
+                grand_total += cur.rowcount
+            if not dry_run:
+                log(f"[fill-user-info] {db_name}.{table}: {grand_total} total updates")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_fill_user_info(args):
+    with log_open() as lf:
+        return do_fill_user_info(args.db_key, args.table, args.date_spec,
+                                 all_dates=args.all,
+                                 logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -1927,6 +2021,20 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_ui = sub.add_parser("fill-user-info",
+        help="Fill countrycitizen / countryresident / orgtype on toolstart / "
+             "sessionlog_metrics from hub user profiles (ports xlogfix_user_info.php)")
+    p_ui.add_argument("db_key", choices=["metrics", "hub"],
+        help="Target DB ('metrics' or 'hub')")
+    p_ui.add_argument("table",
+        help="Target table (typically toolstart or sessionlog_metrics)")
+    p_ui.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
+        help="Accepted for CLI compat; ignored — UPDATE has no date filter")
+    p_ui.add_argument("--all", action="store_true",
+        help="Accepted for CLI compat; ignored")
+    p_ui.add_argument("--dry-run", action="store_true",
+        help="Show statements without executing")
+
     p_clean = sub.add_parser("clean-bots",
         help="DELETE rows in web/websessions matching exclude_list bot patterns (ports xlogfix_clean.php)")
     p_clean.add_argument("table", choices=list(CLEAN_BOTS_TABLES),
@@ -2002,6 +2110,8 @@ def main():
         cmd_import_hub_data(args)
     elif args.command == "import-auth":
         cmd_import_auth(args)
+    elif args.command == "fill-user-info":
+        cmd_fill_user_info(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
