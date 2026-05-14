@@ -25,6 +25,7 @@ Usage:
   hzmetrics.py andmore-usage [YYYY-MM]
   hzmetrics.py fill-ipcountry {metrics|hub} <table> [DATE_OR_RANGE]
   hzmetrics.py gen-tool-stats [YYYY-MM]
+  hzmetrics.py gen-tool-tops  [YYYY-MM]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -3326,6 +3327,157 @@ def cmd_gen_tool_stats(args):
         return do_gen_tool_stats(args.yearmonth, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# gen-tool-tops  (top-N breakdowns per tool stat row into
+#                 jos_resource_stats_tools_topvals; ports gen_tool_tops.php)
+# ---------------------------------------------------------------------------
+
+# top codes
+GEN_TOOL_TOP_COUNTRYRES = 1
+GEN_TOOL_TOP_DOMAIN     = 2
+GEN_TOOL_TOP_ORGTYPE    = 3
+
+def _topvals_insert(cur, hub_db, db_prefix, stat_id, top, rank, name, value):
+    cur.execute(
+        f"INSERT INTO {hub_db}.{db_prefix}resource_stats_tools_topvals "
+        f"(id, top, rank, name, value) VALUES (%s, %s, %s, %s, %s)",
+        (stat_id, top, rank, name, value))
+
+def _gen_topcountryres(cur, hub_db, metrics_db, db_prefix,
+                       aliases, dstart, dstop, stat_id, users, top):
+    # row 0: "Total Users"
+    _topvals_insert(cur, hub_db, db_prefix, stat_id, top, 0, "Total Users", users)
+    placeholders = ",".join(["%s"] * len(aliases))
+    cur.execute(
+        f"SELECT DISTINCT(countryresident) AS country, name, COUNT(DISTINCT user) AS cnt "
+        f"FROM {metrics_db}.sessionlog_metrics "
+        f"LEFT JOIN {metrics_db}.countries ON countryresident = code "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s "
+        f"GROUP BY country ORDER BY cnt DESC LIMIT 10",
+        tuple(aliases) + (dstart, dstop))
+    rows = cur.fetchall()
+    rank = 0
+    for _code, country_name, cnt in rows:
+        rank += 1
+        label = country_name if country_name else "Unknown"
+        _topvals_insert(cur, hub_db, db_prefix, stat_id, top, rank, label, cnt)
+    if rank == 0:
+        # PHP: if no rows, insert single "Unknown" with users count
+        _topvals_insert(cur, hub_db, db_prefix, stat_id, top, 1, "Unknown", users)
+
+def _gen_topdomains(cur, hub_db, metrics_db, db_prefix,
+                    aliases, dstart, dstop, stat_id, users, top):
+    _topvals_insert(cur, hub_db, db_prefix, stat_id, top, 0, "Total Users", users)
+    placeholders = ",".join(["%s"] * len(aliases))
+    cur.execute(
+        f"SELECT DISTINCT(domain) AS dom, COUNT(DISTINCT user) AS cnt "
+        f"FROM {metrics_db}.sessionlog_metrics "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s "
+        f"GROUP BY dom ORDER BY cnt DESC LIMIT 10",
+        tuple(aliases) + (dstart, dstop))
+    rank = 0
+    for dom, cnt in cur.fetchall():
+        rank += 1
+        label = dom if dom else "Unknown"
+        _topvals_insert(cur, hub_db, db_prefix, stat_id, top, rank, label, cnt)
+
+def _gen_orgtypes(cur, hub_db, metrics_db, db_prefix,
+                  aliases, dstart, dstop, stat_id, users, top):
+    _topvals_insert(cur, hub_db, db_prefix, stat_id, top, 0, "Total Users", users)
+    placeholders = ",".join(["%s"] * len(aliases))
+    cur.execute(
+        f"SELECT DISTINCT(u.orgtype), COUNT(DISTINCT t.user) AS cnt "
+        f"FROM {metrics_db}.sessionlog_metrics AS t, "
+        f"{metrics_db}.{db_prefix}xprofiles_metrics AS u "
+        f"WHERE t.user = u.username AND t.appname IN ({placeholders}) "
+        f"AND t.start > %s AND t.start < %s "
+        f"GROUP BY u.orgtype ORDER BY cnt DESC",
+        tuple(aliases) + (dstart, dstop))
+    rank = 0
+    for orgtype, cnt in cur.fetchall():
+        rank += 1
+        label = orgtype if orgtype else "Unknown"
+        _topvals_insert(cur, hub_db, db_prefix, stat_id, top, rank, label, cnt)
+
+# (top_code → generator function)
+_GEN_TOOL_TOPS = {
+    GEN_TOOL_TOP_COUNTRYRES: _gen_topcountryres,
+    GEN_TOOL_TOP_DOMAIN:     _gen_topdomains,
+    GEN_TOOL_TOP_ORGTYPE:    _gen_orgtypes,
+}
+
+def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
+    """Top-N breakdowns (country / domain / orgtype) for each tool
+    resource_stats_tools row of <yearmonth>.  Writes rows into
+    hub.jos_resource_stats_tools_topvals.  Direct port of
+    gen_tool_tops.php.
+    """
+    cfg = db_config()
+    hub_db     = cfg.get('hub_db', '')
+    metrics_db = cfg.get('metrics_db', '')
+    db_prefix  = cfg.get('db_prefix', 'jos_')
+    if not hub_db or not metrics_db:
+        msg = "[gen-tool-tops] missing hub_db / metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if yearmonth:
+        ym = yearmonth[:7]
+    else:
+        today = date.today()
+        ym = f"{today.year:04d}-{today.month:02d}"
+    dthis_str = f"{ym}-00"
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            for top in (GEN_TOOL_TOP_COUNTRYRES, GEN_TOOL_TOP_DOMAIN, GEN_TOOL_TOP_ORGTYPE):
+                cur.execute(
+                    f"SELECT res_stats.id, res_stats.resid, res.alias, "
+                    f"res_stats.users, res_stats.simulations, res_stats.period, "
+                    f"LEFT(res_stats.datetime, 10) AS dthis "
+                    f"FROM {hub_db}.{db_prefix}resource_stats_tools AS res_stats, "
+                    f"{hub_db}.{db_prefix}resources AS res "
+                    f"WHERE res_stats.resid = res.id "
+                    f"AND res_stats.restype = '7' AND res.standalone = '1' "
+                    f"AND res_stats.datetime = %s ORDER BY datetime DESC",
+                    (dthis_str,))
+                rows = list(cur.fetchall())
+                log(f"[gen-tool-tops] top={top} processing {len(rows)} stat row(s) for {dthis_str}")
+
+                for stat_id, resid, alias, users, sims, period, _dthis_str in rows:
+                    aliases = _get_tool_versions_aliases(cur, hub_db, db_prefix, alias)
+                    if not aliases:
+                        continue
+                    dstart, dstop = period_dates(ym, period)
+
+                    if dry_run:
+                        log(f"  [dry-run] top={top} id={stat_id} alias={alias!r} "
+                            f"period={period} window={dstart}..{dstop} users={users}")
+                        continue
+
+                    # Clear existing topvals for this (id, top), then regenerate
+                    cur.execute(
+                        f"DELETE FROM {hub_db}.{db_prefix}resource_stats_tools_topvals "
+                        f"WHERE id = %s AND top = %s",
+                        (stat_id, top))
+                    _GEN_TOOL_TOPS[top](cur, hub_db, metrics_db, db_prefix,
+                                        aliases, dstart, dstop, stat_id, users, top)
+        log("[gen-tool-tops] done")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_gen_tool_tops(args):
+    with log_open() as lf:
+        return do_gen_tool_tops(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -3509,6 +3661,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_gtt = sub.add_parser("gen-tool-tops",
+        help="Top-N breakdowns (country / domain / orgtype) per tool stat row "
+             "into hub.jos_resource_stats_tools_topvals (ports gen_tool_tops.php)")
+    p_gtt.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to process (default: current month)")
+    p_gtt.add_argument("--dry-run", action="store_true",
+        help="Report what would be regenerated without DELETE/INSERT")
+
     p_gts = sub.add_parser("gen-tool-stats",
         help="Per-tool session/job aggregates into hub.jos_resource_stats_tools "
              "and resource_stats (ports gen_tool_stats.php)")
@@ -3688,6 +3848,8 @@ def main():
         cmd_fill_ipcountry(args)
     elif args.command == "gen-tool-stats":
         cmd_gen_tool_stats(args)
+    elif args.command == "gen-tool-tops":
+        cmd_gen_tool_tops(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
