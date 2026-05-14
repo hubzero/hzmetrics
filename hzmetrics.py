@@ -27,6 +27,8 @@ Usage:
   hzmetrics.py gen-tool-stats [YYYY-MM]
   hzmetrics.py gen-tool-tops  [YYYY-MM]
   hzmetrics.py gen-tool-toplists [YYYY-MM]
+  hzmetrics.py middleware-wall
+  hzmetrics.py middleware-cpu
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -3858,6 +3860,130 @@ def cmd_gen_tool_toplists(args):
         return do_gen_tool_toplists(args.yearmonth, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# middleware-wall / middleware-cpu  (copy walltime/cputime from middleware
+#                                    sessionlog+joblog into metrics.toolstart;
+#                                    direct ports of the two Perl scripts)
+# ---------------------------------------------------------------------------
+
+# Original Perl scripts (xlogfix_middleware_wall.pl, xlogfix_middleware_cpu.pl)
+# do a sorted-stream two-pointer merge between hub joblog×sessionlog and the
+# metrics toolstart table.  In SQL terms this is:
+#   - INSERT new toolstart rows for joblog records that don't have a matching
+#     (datetime, user, ip) row already.
+#   - UPDATE the walltime/cputime where the existing row had a negative
+#     ("incomplete") value and the joblog now has a positive one.
+# Two statements replace ~150 lines of Perl streaming.
+#
+# Note: toolstart.walltime / .cputime are FLOAT UNSIGNED on this schema, so
+# the Perl's "-1 = unknown" sentinel was already broken at the SQL layer
+# (the value gets coerced to 0 on insert in lenient mode, or rejected in
+# strict mode).  The UPDATE branch `WHERE walltime < 0` therefore never
+# fires in practice but is preserved here for fidelity.
+
+# users that must not be counted as tool sessions (script-execution accounts)
+_MIDDLEWARE_EXCLUDE_WHERE = (
+    "AND s.username <> 'gridstat' "
+    "AND s.username NOT LIKE 'hctest%' "
+    "AND j.event <> '[waiting]'"
+)
+
+def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
+    """Common implementation for both middleware-wall and middleware-cpu.
+
+    metric is the joblog column to copy and the toolstart column to
+    write — 'walltime' or 'cputime'.  Two statements per call:
+    INSERT new rows, then UPDATE incomplete ones.
+    """
+    if metric not in ("walltime", "cputime"):
+        raise ValueError(f"middleware_copy: unknown metric {metric!r}")
+
+    cfg = db_config()
+    hub_db     = cfg.get('hub_db', '')
+    metrics_db = cfg.get('metrics_db', '')
+    if not hub_db or not metrics_db:
+        msg = f"[middleware-{metric}] missing hub_db / metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    # Build the INSERT — only the metric column varies between wall/cpu.
+    if metric == "walltime":
+        metric_select = (
+            "CASE WHEN j.walltime < 0 THEN -1 "
+            "     ELSE ROUND(j.walltime) END"
+        )
+        # No need to read s.appname differently for the two — kept identical
+        # to PHP/Perl flow.
+    else:  # cputime
+        metric_select = (
+            "CASE WHEN j.cputime < 0 THEN -1 "
+            "     ELSE ROUND(j.cputime) END"
+        )
+
+    insert_sql = (
+        f"INSERT INTO {metrics_db}.toolstart "
+        f"(datetime, success, user, ip, tool, execunit, {metric}) "
+        f"SELECT j.start, '1', s.username, s.remoteip, s.appname, s.exechost, "
+        f"       {metric_select} "
+        f"FROM {hub_db}.joblog AS j "
+        f"INNER JOIN {hub_db}.sessionlog AS s ON j.sessnum = s.sessnum "
+        f"LEFT JOIN {metrics_db}.toolstart AS t "
+        f"       ON t.datetime = j.start AND t.user = s.username AND t.ip = s.remoteip "
+        f"WHERE t.id IS NULL "
+        f"{_MIDDLEWARE_EXCLUDE_WHERE}"
+    )
+    update_sql = (
+        f"UPDATE {metrics_db}.toolstart t "
+        f"INNER JOIN {hub_db}.joblog j ON j.start = t.datetime "
+        f"INNER JOIN {hub_db}.sessionlog s "
+        f"       ON j.sessnum = s.sessnum AND s.username = t.user AND s.remoteip = t.ip "
+        f"SET t.{metric} = ROUND(j.{metric}) "
+        f"WHERE t.{metric} < 0 AND j.{metric} > 0 "
+        f"{_MIDDLEWARE_EXCLUDE_WHERE}"
+    )
+
+    if dry_run:
+        log(f"  [dry-run] INSERT: {insert_sql.split('SELECT')[0]}... (would scan joblog×sessionlog vs toolstart)")
+        log(f"  [dry-run] UPDATE: {metric} where existing row has < 0 and joblog has > 0")
+        return 0
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(insert_sql)
+            inserted = cur.rowcount
+            cur.execute(update_sql)
+            updated = cur.rowcount
+        log(f"[middleware-{metric}] inserted {inserted} new toolstart row(s), "
+            f"updated {metric} on {updated}")
+        return 0
+    finally:
+        conn.close()
+
+def do_middleware_wall(*, logfile=None, dry_run=False):
+    """Direct port of xlogfix_middleware_wall.pl — copy joblog.walltime
+    into metrics.toolstart, inserting missing rows."""
+    return _do_middleware_copy("walltime", logfile=logfile, dry_run=dry_run)
+
+def do_middleware_cpu(*, logfile=None, dry_run=False):
+    """Direct port of xlogfix_middleware_cpu.pl — copy joblog.cputime
+    into metrics.toolstart, inserting missing rows."""
+    return _do_middleware_copy("cputime", logfile=logfile, dry_run=dry_run)
+
+def cmd_middleware_wall(args):
+    with log_open() as lf:
+        return do_middleware_wall(logfile=lf, dry_run=args.dry_run)
+
+def cmd_middleware_cpu(args):
+    with log_open() as lf:
+        return do_middleware_cpu(logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -4040,6 +4166,18 @@ def main():
         help="path to staged auth log, or '-' for stdin")
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
+
+    p_mw = sub.add_parser("middleware-wall",
+        help="Copy joblog.walltime into metrics.toolstart "
+             "(direct port of xlogfix_middleware_wall.pl)")
+    p_mw.add_argument("--dry-run", action="store_true",
+        help="Show statements without executing")
+
+    p_mc = sub.add_parser("middleware-cpu",
+        help="Copy joblog.cputime into metrics.toolstart "
+             "(direct port of xlogfix_middleware_cpu.pl)")
+    p_mc.add_argument("--dry-run", action="store_true",
+        help="Show statements without executing")
 
     p_gtl = sub.add_parser("gen-tool-toplists",
         help="Per-period ranked lists across all tools into hub.jos_stats_topvals "
@@ -4240,6 +4378,10 @@ def main():
         cmd_gen_tool_tops(args)
     elif args.command == "gen-tool-toplists":
         cmd_gen_tool_toplists(args)
+    elif args.command == "middleware-wall":
+        cmd_middleware_wall(args)
+    elif args.command == "middleware-cpu":
+        cmd_middleware_cpu(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
