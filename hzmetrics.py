@@ -3351,7 +3351,7 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
                         f"(resid, restype, users, datetime, period) "
                         f"VALUES (%s, %s, %s, %s, %s) "
                         f"ON DUPLICATE KEY UPDATE users = VALUES(users)",
-                        (resid, restype, users, f"{ym}-00 00:00:00", period)
+                        (resid, restype, users, processed_on, period)
                     )
                     n_upserts += 1
                 n_done += 1
