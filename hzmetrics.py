@@ -5369,7 +5369,10 @@ def _summary_misc_usage(cur, metrics_db, db_prefix,
     def one(rowid, valfmt, sql, params):
         cur.execute(sql, params)
         r = cur.fetchone()
-        v = (r[0] if r and r[0] is not None else 0)
+        # Legacy db_fetch + dbquote(NULL) write empty string when SUM()
+        # returns NULL on an empty window.  COUNT() never returns NULL,
+        # so this only affects the SUM(duration)/SUM(hits) callsites.
+        v = (r[0] if r and r[0] is not None else '')
         _summary_write_cell(cur, table, rowid, colid, dthis, period, v, valfmt)
 
     one(1, 1,
