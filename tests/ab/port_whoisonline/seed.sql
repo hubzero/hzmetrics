@@ -10,6 +10,14 @@
 --   * Two different users on same IP (separate rows)
 --   * DNS-stable IPs (9.9.9.9, 1.1.1.1, 8.8.8.8)
 
+-- Bot-domain entry: when a session's resolved domain matches a
+-- type='domain' filter in exclude_list, whoisonline's checkforbot()
+-- flags it with bot=1 in jos_session_geo and the XML marker.
+-- 9.9.9.9 has stable PTR dns9.quad9.net → get_domain → quad9.net.
+USE foo_metrics_test;
+INSERT INTO exclude_list (filter, type, notes) VALUES
+  ('quad9.net', 'domain', 'whoisonline-test bot domain');
+
 USE foo_test;
 
 INSERT INTO jos_session (session_id, time, ip, username, guest, userid) VALUES
