@@ -4160,10 +4160,9 @@ def cmd_gen_tool_toplists(args):
 # fires in practice but is preserved here for fidelity.
 
 # users that must not be counted as tool sessions (script-execution accounts)
-_MIDDLEWARE_EXCLUDE_WHERE = (
+_MIDDLEWARE_USER_FILTER = (
     "AND s.username <> 'gridstat' "
     "AND s.username NOT LIKE 'hctest%' "
-    "AND j.event <> '[waiting]'"
 )
 
 def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
@@ -4190,18 +4189,33 @@ def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
         if logfile: logfile.write(s + "\n")
 
     # Build the INSERT — only the metric column varies between wall/cpu.
+    # Perl: `int($x + 0.5)` — round-half-up.  MariaDB's ROUND() on a DOUBLE
+    # column uses banker's rounding (round-half-to-even) so 200.5 → 200,
+    # which diverges from the legacy 201.  FLOOR(x + 0.5) reproduces the
+    # Perl semantics exactly.
+    #
+    # wall.pl and cpu.pl differ in three ways:
+    #   * wall.pl filters out joblog.event = '[waiting]'; cpu.pl does not
+    #   * wall.pl INSERTs missing rows; cpu.pl only UPDATEs existing rows
+    #     ("Do nothing as are just importing CPUtimes" — legacy comment)
+    #   * wall.pl UPDATE condition is `t.walltime < 0 AND j.walltime > 0`,
+    #     cpu.pl is `t.cputime <= 0 AND j.cputime > 0`  (catches cputime=0 too)
     if metric == "walltime":
         metric_select = (
             "CASE WHEN j.walltime < 0 THEN -1 "
-            "     ELSE ROUND(j.walltime) END"
+            "     ELSE FLOOR(j.walltime + 0.5) END"
         )
-        # No need to read s.appname differently for the two — kept identical
-        # to PHP/Perl flow.
+        join_extra = " AND j.event <> '[waiting]'"
+        update_check = "t.walltime < 0 AND j.walltime > 0"
+        do_insert = True
     else:  # cputime
         metric_select = (
             "CASE WHEN j.cputime < 0 THEN -1 "
-            "     ELSE ROUND(j.cputime) END"
+            "     ELSE FLOOR(j.cputime + 0.5) END"
         )
+        join_extra = ""   # cpu.pl does not filter [waiting]
+        update_check = "t.cputime <= 0 AND j.cputime > 0"
+        do_insert = False
 
     insert_sql = (
         f"INSERT INTO {metrics_db}.toolstart "
@@ -4213,28 +4227,33 @@ def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
         f"LEFT JOIN {metrics_db}.toolstart AS t "
         f"       ON t.datetime = j.start AND t.user = s.username AND t.ip = s.remoteip "
         f"WHERE t.id IS NULL "
-        f"{_MIDDLEWARE_EXCLUDE_WHERE}"
+        f"{_MIDDLEWARE_USER_FILTER}"
+        f"{join_extra}"
     )
     update_sql = (
         f"UPDATE {metrics_db}.toolstart t "
         f"INNER JOIN {hub_db}.joblog j ON j.start = t.datetime "
         f"INNER JOIN {hub_db}.sessionlog s "
         f"       ON j.sessnum = s.sessnum AND s.username = t.user AND s.remoteip = t.ip "
-        f"SET t.{metric} = ROUND(j.{metric}) "
-        f"WHERE t.{metric} < 0 AND j.{metric} > 0 "
-        f"{_MIDDLEWARE_EXCLUDE_WHERE}"
+        f"SET t.{metric} = FLOOR(j.{metric} + 0.5) "
+        f"WHERE {update_check} "
+        f"{_MIDDLEWARE_USER_FILTER}"
+        f"{join_extra}"
     )
 
     if dry_run:
-        log(f"  [dry-run] INSERT: {insert_sql.split('SELECT')[0]}... (would scan joblog×sessionlog vs toolstart)")
-        log(f"  [dry-run] UPDATE: {metric} where existing row has < 0 and joblog has > 0")
+        if do_insert:
+            log(f"  [dry-run] INSERT: would scan joblog×sessionlog vs toolstart")
+        log(f"  [dry-run] UPDATE: {metric} where existing row has bad value and joblog has > 0")
         return 0
 
     conn = _open_db()
     try:
         with conn.cursor() as cur:
-            cur.execute(insert_sql)
-            inserted = cur.rowcount
+            inserted = 0
+            if do_insert:
+                cur.execute(insert_sql)
+                inserted = cur.rowcount
             cur.execute(update_sql)
             updated = cur.rowcount
         log(f"[middleware-{metric}] inserted {inserted} new toolstart row(s), "
