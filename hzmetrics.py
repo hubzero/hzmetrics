@@ -2791,6 +2791,11 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
         start_d = today.replace(day=1)
         end_d = today + timedelta(days=1)
 
+    # PHP findWeeks() starts a week BEFORE the month begins (the legacy
+    # boundary convention) — shift start_d back one day to match.
+    if start_d is not None:
+        start_d = start_d - timedelta(days=1)
+
     # SQL predicates — PHP uses `datecol >= start AND datecol < end`
     parts = []
     params = []
