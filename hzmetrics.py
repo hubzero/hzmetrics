@@ -26,6 +26,7 @@ Usage:
   hzmetrics.py fill-ipcountry {metrics|hub} <table> [DATE_OR_RANGE]
   hzmetrics.py gen-tool-stats [YYYY-MM]
   hzmetrics.py gen-tool-tops  [YYYY-MM]
+  hzmetrics.py gen-tool-toplists [YYYY-MM]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -3478,6 +3479,121 @@ def cmd_gen_tool_tops(args):
         return do_gen_tool_tops(args.yearmonth, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# gen-tool-toplists  (per-period ranked lists across all tools into
+#                     hub.jos_stats_topvals; ports gen_tool_toplists.php)
+# ---------------------------------------------------------------------------
+
+# (top_code, total label, resource_stats_tools metric column, total source)
+#   total source:
+#     'sessionlog' → COUNT(DISTINCT user) from metrics.sessionlog_metrics
+#     'sum'        → SUM(<col>)            from hub.resource_stats_tools
+TOPLISTS_SPEC = [
+    (2, 'Total Simulation Users',            'users',    'sessionlog'),
+    (5, 'Total Simulation Runs',             'jobs',     'sum'),
+    (6, 'Total Simulation Wall Time',        'tot_wall', 'sum'),
+    (7, 'Total Simulation CPU Time',         'tot_cpu',  'sum'),
+    (8, 'Total Simulation Interaction Time', 'tot_view', 'sum'),
+]
+GEN_TOOL_TOPLISTS_PERIODS = (0, 1, 3, 12, 13, 14)
+
+def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
+    """Per-period top-tool ranked lists into hub.jos_stats_topvals.
+    Direct port of gen_tool_toplists.php.
+
+    For each of five "top" codes (2 users, 5 jobs, 6 wall, 7 cpu, 8 view)
+    × six period codes (0/1/3/12/13/14):
+      1. DELETE existing stats_topvals rows for (top, period, datetime)
+      2. Compute total across the period and INSERT rank=0 "Total …" row
+      3. SELECT all tool resources for that period+datetime ordered by
+         the metric DESC; INSERT each as rank=1,2,… with name = "<resid>
+         ~ <title>".
+    """
+    cfg = db_config()
+    hub_db     = cfg.get('hub_db', '')
+    metrics_db = cfg.get('metrics_db', '')
+    db_prefix  = cfg.get('db_prefix', 'jos_')
+    if not hub_db or not metrics_db:
+        msg = "[gen-tool-toplists] missing hub_db / metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if yearmonth:
+        ym = yearmonth[:7]
+    else:
+        today = date.today()
+        ym = f"{today.year:04d}-{today.month:02d}"
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            for top, label, col, total_src in TOPLISTS_SPEC:
+                for period in GEN_TOOL_TOPLISTS_PERIODS:
+                    dstart, dstop = period_dates(ym, period)
+                    dthis = f"{ym}-00 00:00:00"
+
+                    if dry_run:
+                        log(f"  [dry-run] top={top} ({label}) period={period} "
+                            f"window={dstart}..{dstop}")
+                        continue
+
+                    # 1. clear prior rows
+                    cur.execute(
+                        f"DELETE FROM {hub_db}.{db_prefix}stats_topvals "
+                        f"WHERE top = %s AND datetime = %s AND period = %s",
+                        (top, dthis, period))
+
+                    # 2. compute total
+                    if total_src == 'sessionlog':
+                        cur.execute(
+                            f"SELECT COUNT(DISTINCT user) FROM {metrics_db}.sessionlog_metrics "
+                            f"WHERE start > %s AND start < %s",
+                            (dstart, dstop))
+                    else:  # 'sum'
+                        cur.execute(
+                            f"SELECT SUM({col}) FROM {hub_db}.{db_prefix}resource_stats_tools "
+                            f"WHERE period = %s AND datetime = %s",
+                            (period, dthis))
+                    total = cur.fetchone()[0] or 0
+
+                    cur.execute(
+                        f"INSERT INTO {hub_db}.{db_prefix}stats_topvals "
+                        f"(top, datetime, period, rank, name, value) "
+                        f"VALUES (%s, %s, %s, %s, %s, %s)",
+                        (top, dthis, period, 0, label, total))
+
+                    # 3. ranked list
+                    cur.execute(
+                        f"SELECT res.title, rt.resid, rt.{col} AS cnt "
+                        f"FROM {hub_db}.{db_prefix}resource_stats_tools AS rt, "
+                        f"{hub_db}.{db_prefix}resources AS res "
+                        f"WHERE res.id = rt.resid AND res.published = 1 "
+                        f"AND period = %s AND datetime = %s "
+                        f"ORDER BY cnt DESC",
+                        (period, dthis))
+                    rank = 1
+                    for title, resid, cnt in cur.fetchall():
+                        cur.execute(
+                            f"INSERT INTO {hub_db}.{db_prefix}stats_topvals "
+                            f"(top, datetime, period, rank, name, value) "
+                            f"VALUES (%s, %s, %s, %s, %s, %s)",
+                            (top, dthis, period, rank, f"{resid} ~ {title}", cnt or 0))
+                        rank += 1
+        log("[gen-tool-toplists] done")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_gen_tool_toplists(args):
+    with log_open() as lf:
+        return do_gen_tool_toplists(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -3660,6 +3776,14 @@ def main():
         help="path to staged auth log, or '-' for stdin")
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
+
+    p_gtl = sub.add_parser("gen-tool-toplists",
+        help="Per-period ranked lists across all tools into hub.jos_stats_topvals "
+             "(ports gen_tool_toplists.php)")
+    p_gtl.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to process (default: current month)")
+    p_gtl.add_argument("--dry-run", action="store_true",
+        help="Report what would be regenerated without DELETE/INSERT")
 
     p_gtt = sub.add_parser("gen-tool-tops",
         help="Top-N breakdowns (country / domain / orgtype) per tool stat row "
@@ -3850,6 +3974,8 @@ def main():
         cmd_gen_tool_stats(args)
     elif args.command == "gen-tool-tops":
         cmd_gen_tool_tops(args)
+    elif args.command == "gen-tool-toplists":
+        cmd_gen_tool_toplists(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
