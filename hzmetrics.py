@@ -2249,9 +2249,16 @@ def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
                 action = m.group(5).strip()
             if not user:
                 user = "-"
-            if action not in ("login", "simulation"):
-                skipped_action += 1
-                continue
+            # Legacy 1018cc2^ inserts every action type — no insert-time filter
+            # to (login, simulation) here.  Action narrowing happens later via
+            # migration #4 which purges non-(login,simulation) rows from
+            # userlogin.  Keep insert-time behaviour byte-identical to pre-port.
+            #
+            # To restore the post-1018cc2 in-line filter (saves disk + later
+            # purge work) re-enable the next 3 lines:
+            #     if action not in ("login", "simulation"):
+            #         skipped_action += 1
+            #         continue
             if user in ("hubstatus", "hubadmin"):
                 skipped_filter += 1
                 continue
@@ -2967,12 +2974,23 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
         f"ip={len(ip_filters)} ua={len(ua_filters)} url={len(url_filters)} "
         f"bot_useragents={len(bot_uas)}")
 
+    # Legacy 1018cc2^ does NOT set dnload at import time (the column itself
+    # didn't exist yet — was added by the 1018cc2 refactor).  Insert without
+    # the dnload column to preserve byte-for-byte parity; backfill-dnload
+    # populates it in a separate pass.
+    #
+    # To restore the post-1018cc2 in-line dnload set (saves a backfill pass),
+    # swap to the commented INSERT below and re-enable the `dnload` field +
+    # `_is_download_url(url)` evaluation in the row append:
+    #     INSERT INTO web (..., item_name, dnload) VALUES (... ,%s, %s)
+    #     dnload = 1 if _is_download_url(url) else 0
+    #     rows_buf.append((..., item_name, dnload))
     insert_sql = (
         "INSERT INTO web "
         "(datetime, content, ip, uidNumber, apache_pid, referrer, useragent, "
         "joomla_sessionid, site_cookie, auth_type, component_name, view_name, "
-        "task_name, action_name, item_name, dnload) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        "task_name, action_name, item_name) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     )
 
     rows_buf = []
@@ -2984,6 +3002,7 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
     skipped_status = 0
     skipped_filter = 0
     skipped_url = 0
+    # dnload_set retained for parity with the post-1018cc2 commented INSERT.
     dnload_set = 0
 
     conn = _open_db(metrics_db)
@@ -3086,16 +3105,13 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
                         skipped_url += 1
                         continue
 
-                    dnload = 1 if _is_download_url(url) else 0
-                    if dnload:
-                        dnload_set += 1
-
+                    # Legacy 1018cc2^ omits dnload at insert time — see the
+                    # insert_sql comment block above for the post-1018cc2 form.
                     rows_buf.append((
                         f"{datestamp} {timestamp}",
                         url, ip, uid, pid, referrer, useragent,
                         joomla_id, st_cookie, auth_type,
                         comp_name, view_name, task_name, actn_name, item_name,
-                        dnload,
                     ))
 
                     if len(rows_buf) >= batch_size and not dry_run:
