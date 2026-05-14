@@ -89,4 +89,31 @@ for anchor in "${ANCHORS[@]}"; do
     [ "$a_fail" -eq 0 ] && echo "  PASS  anchor=$anchor"
 done
 
+# ──────────────────────────────────────────────────────────────────────
+# Phase 2: delegate to the other summary-writing tests at each anchor.
+# Each delegated run.sh resets its own DB and loads its own fixture, so
+# the anchors are fully isolated.  We only check exit code here — the
+# delegated test's per-row diff is its own responsibility.
+#
+# port_gen_tool_toplists/seed.sql was extended with cross-month
+# sessionlog rows specifically so each anchor month has non-zero
+# aspectnotebook activity.  Without that, empty anchors all-zero out
+# the cnt column and legacy's ORDER BY cnt DESC (no tie-breaker)
+# picks a different rank order than the new port — a known legacy
+# non-determinism we can sidestep but not bug-for-bug match.
+# ──────────────────────────────────────────────────────────────────────
+echo
+echo "=== delegated sweeps over andmore_usage / gen_tool_stats / gen_tool_toplists ==="
+for port in port_andmore_usage port_gen_tool_stats port_gen_tool_toplists; do
+    for anchor in "${ANCHORS[@]}"; do
+        if "$AB/${port}/run.sh" "$anchor" > "$OUT/${port}_${anchor}.log" 2>&1; then
+            echo "  PASS  ${port} @ ${anchor}"
+        else
+            echo "  FAIL  ${port} @ ${anchor}"
+            tail -20 "$OUT/${port}_${anchor}.log"
+            fail=1
+        fi
+    done
+done
+
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAIL"; exit 1; }

@@ -19,13 +19,29 @@ INSERT INTO sessionlog (sessnum, username, remoteip, exechost, start, appname, w
   (30001, 'alice', '1.1.1.1', 'host1', '2025-07-05 08:00:00', 'aspectnotebook',     100, 50, 25),
   (30002, 'bob',   '2.2.2.1', 'host1', '2025-07-12 09:00:00', 'aspectnotebook_r1', 200, 80, 30),
   (30003, 'carol', '3.3.3.1', 'host1', '2025-07-18 14:00:00', 'aspectnotebook',     150, 60, 20),
-  (30005, 'dave',  '4.4.4.1', 'host2', '2025-07-15 12:00:00', 'burnmannotebook',    300, 200, 40);
+  (30005, 'dave',  '4.4.4.1', 'host2', '2025-07-15 12:00:00', 'burnmannotebook',    300, 200, 40),
+  -- Cross-month rows so every anchor month in port_period_sweep has
+  -- non-zero aspectnotebook activity in its period 1.  Without these,
+  -- empty-data anchors produce all-zero cnt rows whose ORDER BY cnt
+  -- DESC has no tie-breaker — legacy and new pick different orderings
+  -- non-deterministically.  Burnman stays empty at these months so
+  -- Aspect always ranks #1 (cnt=1 vs cnt=0) — a clean differentiation.
+  (30010, 'alice', '1.1.1.1', 'host1', '2024-09-15 10:00:00', 'aspectnotebook',     400, 200, 60),
+  (30011, 'alice', '1.1.1.1', 'host1', '2024-10-15 10:00:00', 'aspectnotebook',     500, 250, 70),
+  (30012, 'alice', '1.1.1.1', 'host1', '2024-12-15 10:00:00', 'aspectnotebook',     600, 300, 80),
+  (30013, 'alice', '1.1.1.1', 'host1', '2025-01-15 10:00:00', 'aspectnotebook',     700, 350, 90),
+  (30014, 'alice', '1.1.1.1', 'host1', '2025-04-15 10:00:00', 'aspectnotebook',     800, 400, 100);
 
 INSERT INTO joblog (sessnum, job, superjob, event, start, walltime, cputime, ncpus, venue, status) VALUES
   (30001, 1, 0, 'started', '2025-07-05 08:00:00', 100, 50, 1, 'default', 0),
   (30002, 1, 0, 'started', '2025-07-12 09:00:00', 200, 80, 2, 'default', 0),
   (30003, 1, 0, 'started', '2025-07-18 14:00:00', 150, 60, 1, 'default', 0),
-  (30005, 1, 0, 'started', '2025-07-15 12:00:00', 300, 200, 4, 'default', 0);
+  (30005, 1, 0, 'started', '2025-07-15 12:00:00', 300, 200, 4, 'default', 0),
+  (30010, 1, 0, 'started', '2024-09-15 10:00:00', 400, 200, 1, 'default', 0),
+  (30011, 1, 0, 'started', '2024-10-15 10:00:00', 500, 250, 1, 'default', 0),
+  (30012, 1, 0, 'started', '2024-12-15 10:00:00', 600, 300, 1, 'default', 0),
+  (30013, 1, 0, 'started', '2025-01-15 10:00:00', 700, 350, 1, 'default', 0),
+  (30014, 1, 0, 'started', '2025-04-15 10:00:00', 800, 400, 1, 'default', 0);
 
 -- Metrics-side enrichment that gen-tool-tops joins through.
 USE foo_metrics_test;
