@@ -22,6 +22,7 @@ Usage:
   hzmetrics.py import-webhits <file>   (file may be '-' for stdin)
   hzmetrics.py fill-domain {metrics|hub} <table>
   hzmetrics.py import-apache <file>    (file may be '-' for stdin)
+  hzmetrics.py andmore-usage [YYYY-MM]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -2574,6 +2575,253 @@ def cmd_import_apache(args):
         return do_import_apache(args.input_file, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# Period date math — shared by andmore-usage and (eventually) summary
+# ---------------------------------------------------------------------------
+
+# Period codes (matches xlogfix_summary.php / xlogfix_andmore_usage.php)
+PERIOD_CAL_YEAR   = 0   # current calendar year through end of <month>
+PERIOD_MONTH      = 1   # the month itself
+PERIOD_QUARTER    = 3   # current quarter through end of <month>
+PERIOD_ROLLING_12 = 12  # 12 months ending after <month>
+PERIOD_FISCAL_YR  = 13  # fiscal year Oct-Sep through end of <month>
+PERIOD_ALL_TIME   = 14  # 1995-01-01 through end of <month>
+
+def period_dates(yearmonth, period):
+    """Compute (start, stop) date strings for a period centered on <yearmonth>.
+
+    yearmonth: 'YYYY-MM' (extra characters tolerated for 'YYYY-MM-DD' or
+        'YYYY-MM-00' inputs).
+    period:    one of the PERIOD_* codes.
+    Returns:   (start_str, stop_str) where start is the inclusive first
+               day of the period and stop is the first day AFTER the
+               period (exclusive).  Both formatted YYYY-MM-DD.
+
+    Ports get_dates_for_period() from func_misc.php.
+    """
+    y = int(yearmonth[0:4])
+    m = int(yearmonth[5:7])
+    if not (1 <= m <= 12):
+        raise ValueError(f"bad month in {yearmonth!r}")
+    # first day of the month AFTER yearmonth
+    if m == 12:
+        ny, nm = y + 1, 1
+    else:
+        ny, nm = y, m + 1
+    stop = f"{ny:04d}-{nm:02d}-01"
+
+    if period == PERIOD_CAL_YEAR:
+        start = f"{y:04d}-01-01"
+    elif period == PERIOD_MONTH:
+        start = f"{y:04d}-{m:02d}-01"
+    elif period == PERIOD_QUARTER:
+        qm = ((m - 1) // 3) * 3 + 1
+        start = f"{y:04d}-{qm:02d}-01"
+    elif period == PERIOD_ROLLING_12:
+        # 12-month window ending at stop; start = stop minus 12 months
+        sm = m - 11
+        sy = y
+        while sm < 1:
+            sm += 12
+            sy -= 1
+        start = f"{sy:04d}-{sm:02d}-01"
+    elif period == PERIOD_FISCAL_YR:
+        start = f"{y if m >= 10 else y-1:04d}-10-01"
+    elif period == PERIOD_ALL_TIME:
+        start = "1995-01-01"
+    else:
+        raise ValueError(f"unknown period code {period}")
+    return start, stop
+
+
+# ---------------------------------------------------------------------------
+# andmore-usage  (per-resource user counts → hub.jos_resource_stats;
+#                 ports xlogfix_andmore_usage.php + helpers from func_andmore.php)
+# ---------------------------------------------------------------------------
+
+ANDMORE_PERIODS = (PERIOD_ROLLING_12, PERIOD_ALL_TIME, PERIOD_MONTH)
+
+def _andmore_child_resources(cur, hub_db, db_prefix, parent_id):
+    """Iteratively collect all descendant resource IDs of parent_id from
+    hub.<prefix>resource_assoc.  Returns a list including parent_id itself."""
+    visited = {int(parent_id)}
+    frontier = {int(parent_id)}
+    while frontier:
+        cur.execute(
+            f"SELECT DISTINCT child_id FROM {hub_db}.{db_prefix}resource_assoc "
+            f"WHERE parent_id IN (" + ",".join(str(i) for i in frontier) + ") "
+            f"AND child_id NOT IN ("  + ",".join(str(i) for i in visited)  + ")"
+        )
+        new_children = {int(r[0]) for r in cur.fetchall()}
+        if not new_children:
+            break
+        visited |= new_children
+        frontier = new_children
+    return sorted(visited)
+
+_ANDMORE_NUMERIC_PATH_RE = re.compile(r'^([0-9]+)(.+)$')
+_ANDMORE_RESOURCES_RE    = re.compile(r'^/resources/(.+)$')
+_ANDMORE_SITE_RESOURCES_RE = re.compile(r'^/site/resources/(.+)$')
+_ANDMORE_LOCAL_RE        = re.compile(r'^/local/(.+)$')
+_ANDMORE_SITE_RE         = re.compile(r'^/site/(.+)$')
+_ANDMORE_TOPICS_RE       = re.compile(r'^/topics/(.+)$')
+_ANDMORE_LM_FILE_RE      = re.compile(r'^lm/(.+)/(.+)\.(.+)$')
+_ANDMORE_LM_RE           = re.compile(r'^lm/(.+)$')
+
+def _andmore_paths(cur, hub_db, db_prefix, resid_list):
+    """Build the SQL WHERE-clause OR chain that matches web.content rows
+    belonging to a given resource ID set.  Faithful port of get_paths()
+    in func_andmore.php — same path-style conditional logic.
+
+    Returns a list of (sql_fragment, value) tuples suitable for parameter
+    binding (sql_fragment uses %s for the value placeholder).  Empty list
+    means no rows would match (no eligible paths).
+    """
+    if not resid_list:
+        return []
+    ids = ",".join(str(i) for i in resid_list)
+    cur.execute(
+        f"SELECT path, id FROM {hub_db}.{db_prefix}resources "
+        f"WHERE path <> '' AND id IN ({ids}) AND path NOT LIKE 'http%'"
+    )
+    fragments = []
+    for path, _rid in cur.fetchall():
+        path = path.replace(' ', '%20')
+        # numeric-leading: e.g. "2010/07/09423/2010.07.21-Lundstrom-NT101.pdf"
+        if _ANDMORE_NUMERIC_PATH_RE.match(path):
+            parts = path.split('/')
+            last_part = parts[-1] if parts else ''
+            second_last = parts[-2] if len(parts) >= 2 else ''
+            if last_part == 'viewer.swf':
+                # /site/resources/{path-without-viewer.swf}%
+                prefix = path[:path.rfind('viewer.swf')]
+                fragments.append(("content LIKE %s", f"/site/resources/{prefix}%"))
+                # The PHP computed $path5 but only added $path4 to match_string.
+            else:
+                # /site/resources/<full path>
+                fragments.append(("content = %s", f"/site/resources/{path}"))
+                # /resources/<numeric-stripped second-last>/download/<last>
+                fragments.append((
+                    "content = %s",
+                    f"/resources/{second_last.lstrip('0')}/download/{last_part}",
+                ))
+                # PHP also computed $path3 but only added $path1 and $path2.
+        else:
+            if (_ANDMORE_RESOURCES_RE.match(path)
+                or _ANDMORE_SITE_RESOURCES_RE.match(path)
+                or _ANDMORE_LOCAL_RE.match(path)
+                or _ANDMORE_SITE_RE.match(path)):
+                fragments.append(("content = %s", path))
+            elif _ANDMORE_TOPICS_RE.match(path):
+                fragments.append(("content LIKE %s", f"{path}%"))
+            elif path.startswith("lm/"):
+                m = _ANDMORE_LM_FILE_RE.match(path)
+                if m:
+                    # strip trailing /<file.ext>, match prefix/%
+                    prefix = path[:path.rfind('/')]
+                    fragments.append(("content LIKE %s", f"{prefix}/%"))
+                else:
+                    fragments.append(("content = %s", f"/site/resources/{path}"))
+            else:
+                fragments.append(("content = %s", f"/site/resources/{path}"))
+    return fragments
+
+def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
+    """Per-resource distinct-user counts → hub.jos_resource_stats.
+    Faithful port of xlogfix_andmore_usage.php.
+
+    For each published resource (jos_resources where published=1,
+    standalone=1, type<>7):
+      - Resolve the resource's URL paths plus all child-resource paths
+      - For each period in (12, 14, 1):
+          users = COUNT(DISTINCT ip, host) over web rows matching any
+                  of the paths within the period's date window
+          INSERT/UPDATE into hub.<prefix>resource_stats.
+    """
+    cfg = db_config()
+    hub_db     = cfg.get("hub_db", "")
+    metrics_db = cfg.get("metrics_db", "")
+    db_prefix  = cfg.get("db_prefix", "jos_")
+    if not hub_db or not metrics_db:
+        msg = "[andmore-usage] missing hub_db / metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    today = date.today()
+    if yearmonth:
+        ym = yearmonth[:7]   # accept YYYY-MM or YYYY-MM-DD
+        processed_on = f"{ym}-01"
+    else:
+        ym = f"{today.year:04d}-{today.month:02d}"
+        processed_on = f"{ym}-01"
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT id, type FROM {hub_db}.{db_prefix}resources "
+                f"WHERE published = 1 AND standalone = 1 AND type <> 7 "
+                f"ORDER BY publish_up DESC"
+            )
+            resources = cur.fetchall()
+            log(f"[andmore-usage] {len(resources)} published resource(s) to score")
+
+            n_done = 0
+            n_skipped_no_paths = 0
+            n_upserts = 0
+            for resid, restype in resources:
+                children = _andmore_child_resources(cur, hub_db, db_prefix, resid)
+                fragments = _andmore_paths(cur, hub_db, db_prefix, children)
+                if not fragments:
+                    n_skipped_no_paths += 1
+                    continue
+
+                # Build the OR chain for the match
+                or_sql = " OR ".join(frag for frag, _ in fragments)
+                or_params = [v for _, v in fragments]
+
+                for period in ANDMORE_PERIODS:
+                    start, stop = period_dates(ym, period)
+                    cur.execute(
+                        f"SELECT COUNT(DISTINCT ip, host) FROM {metrics_db}.web "
+                        f"WHERE ({or_sql}) "
+                        f"AND datetime >= %s AND datetime < %s",
+                        or_params + [start, stop]
+                    )
+                    users = cur.fetchone()[0] or 0
+                    if dry_run:
+                        log(f"  [dry-run] resid={resid} period={period} "
+                            f"window={start}..{stop} users={users}")
+                        continue
+                    cur.execute(
+                        f"INSERT INTO {hub_db}.{db_prefix}resource_stats "
+                        f"(resid, restype, users, datetime, period) "
+                        f"VALUES (%s, %s, %s, %s, %s) "
+                        f"ON DUPLICATE KEY UPDATE users = VALUES(users)",
+                        (resid, restype, users, f"{ym}-00 00:00:00", period)
+                    )
+                    n_upserts += 1
+                n_done += 1
+                if n_done % 50 == 0:
+                    log(f"  ...processed {n_done}/{len(resources)} resources")
+
+            log(f"[andmore-usage] done: {n_done} resource(s) scored, "
+                f"{n_skipped_no_paths} skipped (no eligible paths), "
+                f"{n_upserts} resource_stats upsert(s)")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_andmore_usage(args):
+    with log_open() as lf:
+        return do_andmore_usage(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -2757,6 +3005,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_am = sub.add_parser("andmore-usage",
+        help="Per-resource distinct-user counts into hub.jos_resource_stats "
+             "(ports xlogfix_andmore_usage.php)")
+    p_am.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to score (default: current month)")
+    p_am.add_argument("--dry-run", action="store_true",
+        help="Report counts without UPSERT-ing into resource_stats")
+
     p_ia = sub.add_parser("import-apache",
         help="Parse an apache-format file and INSERT eligible rows into "
              "metrics.web (ports xlogimport_apache.php)")
@@ -2894,6 +3150,8 @@ def main():
         cmd_fill_domain(args)
     elif args.command == "import-apache":
         cmd_import_apache(args)
+    elif args.command == "andmore-usage":
+        cmd_andmore_usage(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
