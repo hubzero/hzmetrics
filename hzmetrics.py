@@ -33,13 +33,83 @@ Usage:
   hzmetrics.py setup-db
 """
 
-import argparse
-import gzip
 import os
-import re
 import shutil
 import subprocess
 import sys
+
+# ---------------------------------------------------------------------------
+# Python version self-relaunch.  hzmetrics.py uses asyncio.run() (3.7+) and
+# match-case / typing features at the 3.10+ level, but Rocky/RHEL 8 ships
+# /usr/bin/python3 as 3.6.  If the current interpreter is too old, re-exec
+# under the first available newer python found on PATH.  Cron / wrappers can
+# safely invoke `python3 /opt/hubzero/bin/hzmetrics.py` regardless.
+# ---------------------------------------------------------------------------
+
+_MIN_PYTHON = (3, 10)
+
+def _relaunch_if_needed():
+    if sys.version_info >= _MIN_PYTHON:
+        return
+
+    # Scan PATH for every `python3.N` interpreter (auto-discovers future
+    # versions — python3.14, python3.20, … — without hard-coding).  Build a
+    # list of (parsed_version, exe_path) tuples, de-duped by realpath so a
+    # symlink farm doesn't probe the same binary twice.
+    import re as _re
+    pat = _re.compile(r"^python3\.(\d+)$")
+    self_real = os.path.realpath(sys.executable)
+    seen = {self_real}
+    cands = []  # list of ((major, minor), exe)
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d:
+            continue
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for name in entries:
+            m = pat.match(name)
+            if not m:
+                continue
+            minor = int(m.group(1))
+            if (3, minor) < _MIN_PYTHON:
+                continue
+            exe = os.path.join(d, name)
+            if not os.access(exe, os.X_OK):
+                continue
+            try:
+                real = os.path.realpath(exe)
+            except OSError:
+                continue
+            if real in seen:
+                continue
+            seen.add(real)
+            cands.append(((3, minor), exe))
+
+    # Try highest version first.
+    cands.sort(reverse=True)
+    for _, exe in cands:
+        # Confirm reality (name → version mismatch can happen with aliases).
+        check = subprocess.run(
+            [exe, "-c", f"import sys; raise SystemExit(sys.version_info < {_MIN_PYTHON})"]
+        )
+        if check.returncode == 0:
+            os.execv(exe, [exe, *sys.argv])
+
+    versions = ", ".join(f"{mj}.{mi}" for (mj, mi), _ in cands) or "none"
+    raise SystemExit(
+        f"hzmetrics.py requires Python {_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+; "
+        f"running {sys.version.split()[0]}.  "
+        f"Newer python3.X on PATH: {versions}."
+    )
+
+_relaunch_if_needed()
+
+
+import argparse
+import gzip
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path

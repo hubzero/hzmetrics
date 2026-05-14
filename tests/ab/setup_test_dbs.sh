@@ -21,18 +21,11 @@ TEST_USER=    # reuses prod app user; CREATE DB happens as root
 ACCESS_CFG="$FIXTURES/test_access.cfg"
 DB_PASS=$(grep "^\$db_pass" "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
 
-# Python interpreter with pymysql + aiodns installed.
-# hzmetrics.py uses asyncio.run() which requires Python >= 3.7, so we
-# default to python3.11 on this Rocky 8 host (the system python3 is 3.6).
-# Override with HZMETRICS_PY for a venv or a different version.
-PY="${HZMETRICS_PY:-python3.11}"
-if ! "$PY" -c 'import pymysql, aiodns' 2>/dev/null; then
-    echo "ERROR: '$PY' is missing pymysql and/or aiodns." >&2
-    echo "  Rocky/RHEL: sudo dnf install python3.11-PyMySQL" >&2
-    echo "             sudo pip3.11 install aiodns" >&2
-    echo "  Or set HZMETRICS_PY to a python interpreter that has both." >&2
-    exit 1
-fi
+# hzmetrics.py self-relaunches under a newer python (3.10+) if invoked
+# under an older one — see _relaunch_if_needed() at the top of hzmetrics.py.
+# So we just use plain `python3` here; the script picks the right one.
+# Override via HZMETRICS_PY for a venv / pinned version.
+PY="${HZMETRICS_PY:-python3}"
 
 # Route hzmetrics.py log writes to a developer-writable file instead of
 # /var/log/hubzero/metrics/manage.log (which only the apache user owns).
