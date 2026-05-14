@@ -30,10 +30,12 @@ run_side() {
         new)    run_new        gen-tool-tops     "$MONTH" > "$OUT/${label}_tops.log" 2>&1 ;;
     esac
 
+    # id here is the FK to jos_resource_stats_tools (NOT an auto-inc of
+    # the topvals row itself), so keep it.  dump_full would strip 'id' —
+    # inline the SELECT instead.
     mysql_test "$HUB_DB" -BN -e "
-        SELECT id, top, rank, name, value
-        FROM jos_resource_stats_tools_topvals
-        ORDER BY id, top, rank, name
+        SELECT id, top, \`rank\`, name, value FROM jos_resource_stats_tools_topvals
+        ORDER BY id, top, \`rank\`, name
     " > "$OUT/${label}_topvals.tsv"
     echo "  wrote $OUT/${label}_topvals.tsv"
 }

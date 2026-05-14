@@ -19,18 +19,10 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    # Strip the auto-incremented id; order by (datetime, ip, content).
-    # Compare every column that the two log formats populate differently:
-    # NEW format sets apache_pid + joomla_sessionid + auth/comp/view/task/
-    # action/item; OLD format leaves all but joomla_sessionid empty.  Any
-    # regex-dispatch bug shows up immediately on these columns.
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, content, ip, host, useragent, dnload,
-               apache_pid, joomla_sessionid,
-               auth_type, component_name, view_name,
-               task_name, action_name, item_name
-        FROM web ORDER BY datetime, ip, content
-    " > "$OUT/${label}_web.tsv"
+    # Every column of web minus the auto-inc id.  Both NEW and OLD apache
+    # log patterns populate (or leave empty) different columns; SELECT *
+    # surfaces any format-dispatch divergence.
+    dump_full web "$METRICS_DB" "datetime, ip, content" > "$OUT/${label}_web.tsv"
     echo "  wrote $OUT/${label}_web.tsv ($(wc -l < $OUT/${label}_web.tsv) row(s))"
 }
 

@@ -27,11 +27,8 @@ run_side() {
             run_new gen-tool-toplists "$MONTH" > "$OUT/${label}_toplists.log" 2>&1
             ;;
     esac
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT top, datetime, period, rank, name, value
-        FROM jos_stats_topvals
-        ORDER BY top, period, rank, name
-    " > "$OUT/${label}_topvals.tsv"
+    dump_full jos_stats_topvals "$HUB_DB" "top, period, \`rank\`, name" \
+        > "$OUT/${label}_topvals.tsv"
     echo "  wrote $OUT/${label}_topvals.tsv"
 }
 

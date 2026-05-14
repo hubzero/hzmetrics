@@ -48,6 +48,41 @@ dump_table_tsv() {
     " > "$out"
 }
 
+# dump_full <table> <db> <order_by_cols> [extra_exclude_csv]
+# Dump every column of a table, in schema order, excluding 'id',
+# 'processed_on', and any extra columns named in <extra_exclude_csv>.
+# Float / double / decimal columns are ROUND()ed to 6 digits to absorb
+# PHP↔Python double-stringification noise.  ORDER BY <order_by_cols>
+# pins row order so the diff is stable.
+dump_full() {
+    local table="$1" db="$2" order_by="$3" extra="${4:-}"
+    local exclude_in="'id','processed_on'"
+    if [ -n "$extra" ]; then
+        local x
+        for x in $(echo "$extra" | tr ',' ' '); do
+            exclude_in="$exclude_in,'$x'"
+        done
+    fi
+    local cols
+    cols=$(mysql_test "$db" -BN -e "
+        SELECT GROUP_CONCAT(
+            CASE
+              WHEN DATA_TYPE IN ('float','double','decimal')
+                THEN CONCAT('ROUND(\`', COLUMN_NAME, '\`, 6)')
+              ELSE CONCAT('\`', COLUMN_NAME, '\`')
+            END
+          ORDER BY ORDINAL_POSITION SEPARATOR ', ')
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='$table'
+          AND COLUMN_NAME NOT IN ($exclude_in)
+    ")
+    if [ -z "$cols" ]; then
+        echo "dump_full: no columns for $db.$table (table missing?)" >&2
+        return 1
+    fi
+    mysql_test "$db" -BN -e "SELECT $cols FROM \`$table\` ORDER BY $order_by"
+}
+
 # Run a legacy PHP script with the test access.cfg in scope.
 # Args: script_relpath_in_legacy/, then script args.
 run_legacy_php() {

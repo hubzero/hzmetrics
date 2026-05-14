@@ -80,42 +80,20 @@ run_side() {
             run_new summarize-month   "$MONTH"                  > "$OUT/${label}_06_summary.log" 2>&1
             ;;
     esac
-    # Capture every output table.  Float columns rounded to 6 digits to
-    # absorb PHP↔Python double-stringification noise.
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, ROUND(value+0.0, 6), valfmt
-        FROM summary_user_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_summary_user.tsv"
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, ROUND(value+0.0, 6), valfmt
-        FROM summary_simusage_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_summary_simusage.tsv"
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, value, valfmt
-        FROM summary_misc_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_summary_misc.tsv"
+    # Full-column dumps; dump_full strips id+processed_on and rounds floats.
+    dump_full summary_user_vals     "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_summary_user.tsv"
+    dump_full summary_simusage_vals "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_summary_simusage.tsv"
+    dump_full summary_misc_vals     "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_summary_misc.tsv"
+    dump_full jos_resource_stats_tools "$HUB_DB" "resid, period" > "$OUT/${label}_stats_tools.tsv"
+    dump_full jos_resource_stats       "$HUB_DB" "resid, period" > "$OUT/${label}_stats.tsv"
+    # topvals.id is a FK to stats_tools.id — both implementations produce
+    # matching auto-inc ids since gen-tool-stats inserts in deterministic
+    # order.  Inline SELECT to keep the id column.
     mysql_test "$HUB_DB" -BN -e "
-        SELECT resid, restype, users, sessions, simulations, jobs,
-               ROUND(avg_wall,6), tot_wall,
-               ROUND(avg_cpu,6),  tot_cpu,
-               ROUND(avg_view,6), tot_view,
-               ROUND(avg_wait,6), tot_wait,
-               avg_cpus, tot_cpus, datetime, period
-        FROM jos_resource_stats_tools ORDER BY resid, period
-    " > "$OUT/${label}_stats_tools.tsv"
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT resid, restype, users, jobs, avg_wall, tot_wall,
-               avg_cpu, tot_cpu, datetime, period
-        FROM jos_resource_stats ORDER BY resid, period
-    " > "$OUT/${label}_stats.tsv"
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT id, top, rank, name, value FROM jos_resource_stats_tools_topvals
-        ORDER BY id, top, rank, name
+        SELECT id, top, \`rank\`, name, value FROM jos_resource_stats_tools_topvals
+        ORDER BY id, top, \`rank\`, name
     " > "$OUT/${label}_tops.tsv"
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT top, datetime, period, rank, name, value FROM jos_stats_topvals
-        ORDER BY top, period, rank, name
-    " > "$OUT/${label}_toplists.tsv"
+    dump_full jos_stats_topvals "$HUB_DB" "top, period, \`rank\`, name" > "$OUT/${label}_toplists.tsv"
     echo "  captured 7 output table TSVs"
 }
 

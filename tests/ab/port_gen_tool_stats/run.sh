@@ -23,25 +23,11 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    # Strip id + processed_on; order by (resid, period) for stable diff.
-    # Float columns are ROUND()ed to 8 digits because PHP and Python
-    # serialise floats with different default precision (PHP: 14 sig figs,
-    # Python: ~17) — the stored DOUBLE bit patterns differ in the trailing
-    # digits but the user-visible values are identical.
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT resid, restype, users, sessions, simulations, jobs,
-               ROUND(avg_wall,8), tot_wall,
-               ROUND(avg_cpu,8),  tot_cpu,
-               ROUND(avg_view,8), tot_view,
-               ROUND(avg_wait,8), tot_wait,
-               avg_cpus, tot_cpus, datetime, period
-        FROM jos_resource_stats_tools ORDER BY resid, period
-    " > "$OUT/${label}_stats_tools.tsv"
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT resid, restype, users, jobs, avg_wall, tot_wall,
-               avg_cpu, tot_cpu, datetime, period
-        FROM jos_resource_stats ORDER BY resid, period
-    " > "$OUT/${label}_stats.tsv"
+    # Full-column dumps excluding id + processed_on; floats ROUND()ed to 6.
+    dump_full jos_resource_stats_tools "$HUB_DB" "resid, period" \
+        > "$OUT/${label}_stats_tools.tsv"
+    dump_full jos_resource_stats       "$HUB_DB" "resid, period" \
+        > "$OUT/${label}_stats.tsv"
     echo "  wrote $OUT/${label}_stats{,_tools}.tsv"
 }
 

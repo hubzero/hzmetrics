@@ -19,10 +19,8 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, uidNumber, user, ip, action FROM userlogin
-        ORDER BY datetime, user
-    " > "$OUT/${label}_userlogin.tsv"
+    dump_full userlogin "$METRICS_DB" "datetime, user, ip, action" \
+        > "$OUT/${label}_userlogin.tsv"
     echo "  wrote $OUT/${label}_userlogin.tsv"
 }
 

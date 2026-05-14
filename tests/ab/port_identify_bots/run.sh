@@ -19,9 +19,8 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT useragent FROM bot_useragents ORDER BY useragent
-    " > "$OUT/${label}_bots.tsv"
+    dump_full bot_useragents "$METRICS_DB" "useragent" \
+        > "$OUT/${label}_bots.tsv"
     echo "  wrote $OUT/${label}_bots.tsv ($(wc -l < $OUT/${label}_bots.tsv) row(s))"
 }
 

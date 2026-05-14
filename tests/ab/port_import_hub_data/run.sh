@@ -20,14 +20,8 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    # Two target tables: sessionlog_metrics + jos_xprofiles_metrics
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT sessnum, user, ip, start, appname FROM sessionlog_metrics ORDER BY sessnum
-    " > "$OUT/${label}_sessionlog.tsv"
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT uidNumber, username, email, orgtype, countryresident, emailConfirmed
-        FROM jos_xprofiles_metrics ORDER BY uidNumber
-    " > "$OUT/${label}_xprofiles.tsv"
+    dump_full sessionlog_metrics  "$METRICS_DB" "sessnum"   > "$OUT/${label}_sessionlog.tsv"
+    dump_full jos_xprofiles_metrics "$METRICS_DB" "uidNumber" > "$OUT/${label}_xprofiles.tsv"
     echo "  wrote $OUT/${label}_{sessionlog,xprofiles}.tsv"
 }
 

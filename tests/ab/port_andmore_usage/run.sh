@@ -21,10 +21,8 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT resid, restype, users, datetime, period
-        FROM jos_resource_stats ORDER BY resid, period
-    " > "$OUT/${label}_stats.tsv"
+    dump_full jos_resource_stats "$HUB_DB" "resid, period" \
+        > "$OUT/${label}_stats.tsv"
     echo "  wrote $OUT/${label}_stats.tsv"
 }
 

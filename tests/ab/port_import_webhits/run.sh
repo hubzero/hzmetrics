@@ -19,9 +19,7 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, hits FROM webhits ORDER BY datetime
-    " > "$OUT/${label}_webhits.tsv"
+    dump_full webhits "$METRICS_DB" "datetime" > "$OUT/${label}_webhits.tsv"
     echo "  wrote $OUT/${label}_webhits.tsv"
 }
 

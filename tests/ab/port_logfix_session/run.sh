@@ -21,20 +21,17 @@ run_side() {
         cat "$OUT/${label}_stdout.log"
         return 1
     }
-    # websessions: id is auto-assigned (MAX(id)+1, +2, ...) but identical
-    # ordering between sides; compare directly.
+    # websessions: id is explicit (MAX(id)+1 sequence) and deterministic
+    # across both sides — keep it.  Inline SELECT to preserve id.
     mysql_test "$METRICS_DB" -BN -e "
-        SELECT id, datetime, ip, host, duration, domain, jobs, webevents
+        SELECT id, datetime, ipcountry, ip, host, domain,
+               duration, jobs, webevents
         FROM websessions ORDER BY id
     " > "$OUT/${label}_websessions.tsv"
-    # web.sessionid should be stamped on the events.
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, ip, content, sessionid FROM web ORDER BY datetime, ip
-    " > "$OUT/${label}_web.tsv"
-    # toolstart.sessionid stamping.
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, ip, host, sessionid FROM toolstart ORDER BY datetime, ip
-    " > "$OUT/${label}_toolstart.tsv"
+    # web + toolstart: full-column dumps; logfix-session only writes
+    # sessionid on existing rows so order is stable by row identity.
+    dump_full web "$METRICS_DB" "datetime, ip, content" > "$OUT/${label}_web.tsv"
+    dump_full toolstart "$METRICS_DB" "datetime, ip, host" > "$OUT/${label}_toolstart.tsv"
     echo "  wrote websessions, web, toolstart tsvs"
 }
 

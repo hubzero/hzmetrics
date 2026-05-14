@@ -27,11 +27,9 @@ run_side() {
     # Each side will pick an auto-increment id that differs between runs
     # (legacy and new INSERT in different orders), so we strip the id and
     # order by (datetime, user, ip).
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT datetime, user, ip, tool, execunit, walltime, cputime
-        FROM toolstart
-        ORDER BY datetime, user, ip, walltime, cputime
-    " > "$OUT/${label}_after_${METRIC}.tsv"
+    dump_full toolstart "$METRICS_DB" \
+        "datetime, user, ip, walltime, cputime" \
+        > "$OUT/${label}_after_${METRIC}.tsv"
     echo "  wrote $OUT/${label}_after_${METRIC}.tsv"
 }
 

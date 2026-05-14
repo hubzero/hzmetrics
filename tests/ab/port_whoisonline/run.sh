@@ -35,11 +35,12 @@ run_side() {
     else
         : > "$OUT/${label}_whoisonline.xml"
     fi
-    mysql_test "$HUB_DB" -BN -e "
-        SELECT ip, username, guest, userid, host, domain,
-               countrySHORT, countryLONG, ipCITY, ipLATITUDE, ipLONGITUDE, bot
-        FROM jos_session_geo ORDER BY ip
-    " > "$OUT/${label}_session_geo.tsv"
+    # jos_session_geo: full-column dump.  'time' is a UNIX_TIMESTAMP-as-
+    # varchar(14) set at seed-load — slightly different between the two
+    # runs because of when seed.sql loaded.  Exclude as noise.  session_id
+    # is PK but varies between sessions; keep it as the ORDER BY anchor.
+    dump_full jos_session_geo "$HUB_DB" "ip, session_id" "time" \
+        > "$OUT/${label}_session_geo.tsv"
     echo "  wrote $OUT/${label}_whoisonline.xml + session_geo.tsv"
 }
 

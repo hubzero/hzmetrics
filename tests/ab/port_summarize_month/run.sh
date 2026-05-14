@@ -23,18 +23,9 @@ run_side() {
         tail -20 "$OUT/${label}_stdout.log"
         return 1
     }
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, ROUND(value+0.0, 6) AS value, valfmt
-        FROM summary_user_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_user.tsv"
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, ROUND(value+0.0, 6) AS value, valfmt
-        FROM summary_simusage_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_simusage.tsv"
-    mysql_test "$METRICS_DB" -BN -e "
-        SELECT rowid, colid, datetime, period, value, valfmt
-        FROM summary_misc_vals ORDER BY rowid, colid, period
-    " > "$OUT/${label}_misc.tsv"
+    dump_full summary_user_vals     "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_user.tsv"
+    dump_full summary_simusage_vals "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_simusage.tsv"
+    dump_full summary_misc_vals     "$METRICS_DB" "rowid, colid, period" > "$OUT/${label}_misc.tsv"
     echo "  wrote {user,simusage,misc} TSVs"
 }
 
