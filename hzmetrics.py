@@ -3891,21 +3891,29 @@ def _propagate_to_resource_stats(cur, hub_db, db_prefix, dthis, period, resid):
         f"WHERE datetime = %s AND period = %s AND resid = %s",
         (dthis, period, resid))
     rows = cur.fetchall()
+    # PHP `dbquote()` quotes floats as strings — MySQL parses '488.5' and
+    # rounds to INT half-away-from-zero (→ 489).  pymysql sends Python floats
+    # as numeric literals — MySQL rounds those banker's-style (→ 488).
+    # To match the legacy round, stringify floats before sending.
+    def _stringify(row):
+        return tuple(str(v) if isinstance(v, float) else v for v in row)
+
     for row in rows:
+        row = _stringify(row)
         if existing_id is None:
             cur.execute(
                 f"INSERT INTO {hub_db}.{db_prefix}resource_stats "
                 f"(resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, "
                 f"datetime, period, processed_on) "
                 f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
-                tuple(row) + (dthis, period))
+                row + (dthis, period))
         else:
             cur.execute(
                 f"UPDATE {hub_db}.{db_prefix}resource_stats "
                 f"SET resid=%s, restype=%s, users=%s, jobs=%s, "
                 f"avg_wall=%s, tot_wall=%s, avg_cpu=%s, tot_cpu=%s, "
                 f"processed_on=NOW() WHERE id = %s",
-                tuple(row) + (existing_id,))
+                row + (existing_id,))
 
 def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
     """For each tool resource (jos_resources.type=7), aggregate session and
