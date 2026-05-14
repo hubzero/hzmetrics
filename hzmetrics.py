@@ -4239,6 +4239,879 @@ def cmd_logfix_session(args):
         return do_logfix_session(args.month, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# summarize-month  (port of xlogfix_summary.php — the period summary table)
+#
+# Writes three summary tables: summary_user_vals (rowids 1,2,3,4,6,7,8),
+# summary_simusage_vals (rowids 1..10), and summary_misc_vals (rowids 1..8).
+# Each cell is keyed by (rowid, colid, datetime, period); the writer is a
+# DELETE + INSERT pair so the run is idempotent.
+#
+# Known carry-over quirks preserved bug-for-bug for A/B parity:
+#   * int_users rowid=3 (registered counterpart for interactive users) uses
+#     a userlogin_lite query with NO date filter — values inflate as the
+#     userlogin_lite table grows from prior runs.  Documented in CLAUDE.md.
+#   * The same "no date filter" shape applies to int_users rowid=4 download
+#     counterpart.
+#   * jos_xprofiles_metrics reflects the current state of profiles, not the
+#     state at activity time (rebuild on each summary by import-hub-data).
+# ---------------------------------------------------------------------------
+
+SUMMARY_PERIODS_DEFAULT = (
+    PERIOD_ROLLING_12, PERIOD_MONTH, PERIOD_CAL_YEAR,
+    PERIOD_QUARTER,    PERIOD_FISCAL_YR, PERIOD_ALL_TIME,
+)
+
+SUMMARY_SECTIONS = (
+    "reg", "int", "dl", "total", "sim", "sim-usage", "misc",
+)
+
+# Org bucket lists (educational + "non-other" = edu + gov + industry).
+_EDU_ORGTYPES = (
+    "universityundergraduate", "universitygraduate", "universityfaculty",
+    "universitystaff", "precollegestudent", "precollegefacultystaff",
+    "university", "educational", "precollege",
+)
+_NON_OTHER_ORGTYPES = _EDU_ORGTYPES + ("government", "industry")
+_EDU_ORGTYPES_SQL       = '"' + '","'.join(_EDU_ORGTYPES) + '"'
+_NON_OTHER_ORGTYPES_SQL = '"' + '","'.join(_NON_OTHER_ORGTYPES) + '"'
+
+# valfmt pattern for the standard 11-column residency+orgtype block.
+_USERVAL_FMTS = {1:1, 2:1, 3:2, 4:2, 5:2, 6:2, 7:1, 8:2, 9:2, 10:2, 11:2}
+
+
+def _summary_get_dates(dthis_, period):
+    """Mirror get_dates() in func_misc.php — accept YYYY-MM-DD or YYYY-MM
+    (DD must not be '00').  Returns (dstart, dstop, dthis_zero_day_str)."""
+    m1 = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", dthis_)
+    m2 = re.fullmatch(r"(\d{4})-(\d{2})",         dthis_)
+    if m1 and m1.group(3) != "00":
+        yearmonth = f"{m1.group(1)}-{m1.group(2)}"
+        dthis_zero = f"{m1.group(1)}-{m1.group(2)}-00"
+    elif m2:
+        yearmonth = m2.group(0)
+        dthis_zero = f"{m2.group(1)}-{m2.group(2)}-00"
+    else:
+        raise ValueError(f"summarize-month: invalid date {dthis_!r}")
+    dstart, dstop = period_dates(yearmonth, period)
+    return dstart, dstop, dthis_zero
+
+
+def _summary_rebuild_userlogin_lite(cur, metrics_db):
+    """DROP/CREATE/INDEX userlogin_lite from userlogin where action IN
+    (login, simulation).  Done once at the start of a summary run."""
+    cur.execute(f"DROP TABLE IF EXISTS {metrics_db}.userlogin_lite")
+    cur.execute(
+        f"CREATE TABLE {metrics_db}.userlogin_lite "
+        f"SELECT * FROM {metrics_db}.userlogin "
+        f'WHERE action = "login" OR action = "simulation"'
+    )
+    cur.execute(f"ALTER TABLE {metrics_db}.userlogin_lite ADD INDEX (`uidNumber`)")
+    cur.execute(f"ALTER TABLE {metrics_db}.userlogin_lite ADD INDEX (datetime, `user`)")
+
+
+def _summary_get_rappture_tools(cur, hub_db, db_prefix):
+    """Build a comma-quoted alias list for the appname IN clause used by
+    sim_usage.  Ports get_rappture_tools() + get_tool_versions_aliases().
+
+    Step 1: seed with "workspace" and every directory found under /apps
+    (excluding /apps/share and /apps/share64) that has a tool.xml.
+    Step 2: expand by adding every distinct jos_tool_version.instance whose
+    toolname is in the seed list (excluding %\\_dev instances).
+    Returns the SQL fragment ready to drop inside `appname IN (...)`.
+    """
+    seeds = ["workspace"]
+    try:
+        out = subprocess.run(
+            ["/bin/bash", "-c",
+             "find /apps -maxdepth 4 -path /apps/share -prune "
+             "-o -path /apps/share64 -prune "
+             "-o -name tool.xml -print 2>/dev/null"],
+            capture_output=True, text=True, timeout=60,
+        )
+        for line in out.stdout.splitlines():
+            parts = line.split("/")
+            # /apps/<tool>/...  → index 2 is the tool dir
+            if len(parts) >= 3 and parts[2]:
+                seeds.append(parts[2])
+    except Exception:
+        pass
+    # Dedup, preserving order.
+    seen = set()
+    seeds = [s for s in seeds if not (s in seen or seen.add(s))]
+    aliases = list(seeds)
+
+    if seeds:
+        placeholders = ",".join(["%s"] * len(seeds))
+        cur.execute(
+            f"SELECT DISTINCT instance FROM {hub_db}.{db_prefix}tool_version "
+            f"WHERE toolname IN ({placeholders}) AND instance NOT LIKE %s",
+            (*seeds, "%\\_dev"),
+        )
+        for (inst,) in cur.fetchall():
+            if inst:
+                aliases.append(inst)
+    # Quote and join.
+    return '"' + '","'.join(aliases) + '"'
+
+
+def _summary_continents(cur, metrics_db):
+    """Return {'AS': '"CN","JP",...', 'EU': '...', 'NOT_AS_EU': '...'} —
+    each value ready to drop inside an `IN (...)` clause.  Cached once
+    per run; the PHP rebuilds them per cell."""
+    out = {}
+    for label, where in (
+        ('AS',        'continent="AS"'),
+        ('EU',        'continent="EU"'),
+        ('NOT_AS_EU', 'continent NOT IN ("EU","AS")'),
+    ):
+        cur.execute(
+            f"SELECT country FROM {metrics_db}.country_continent WHERE {where}")
+        out[label] = '"' + '","'.join(
+            r[0] for r in cur.fetchall() if r[0]
+        ) + '"'
+    return out
+
+
+def _summary_build_login_ips(cur, metrics_db, dstart, dstop):
+    """Materialise the registered-user IP set into login_ips_tmp and
+    return a SELECT subquery ready to drop inside `ip NOT IN (...)`.
+    Seeds with 127.0.0.1.  Ports build_login_ips_table() in func_misc."""
+    cur.execute(f"DROP TEMPORARY TABLE IF EXISTS {metrics_db}.login_ips_tmp")
+    cur.execute(
+        f"CREATE TEMPORARY TABLE {metrics_db}.login_ips_tmp "
+        f"(ip VARCHAR(45), INDEX (ip))")
+    cur.execute(
+        f"INSERT INTO {metrics_db}.login_ips_tmp (ip) VALUES (%s)",
+        ("127.0.0.1",))
+    cur.execute(
+        f"SELECT DISTINCT ip FROM {metrics_db}.userlogin_lite "
+        f'WHERE action IN ("login","simulation") '
+        f"  AND datetime > %s AND datetime < %s",
+        (dstart, dstop))
+    rows = [r[0] for r in cur.fetchall() if r[0]]
+    if rows:
+        # Batch INSERT in chunks to keep packet size sane.
+        for i in range(0, len(rows), 5000):
+            chunk = rows[i:i+5000]
+            placeholders = ",".join(["(%s)"] * len(chunk))
+            cur.execute(
+                f"INSERT INTO {metrics_db}.login_ips_tmp (ip) VALUES {placeholders}",
+                chunk)
+    return f"SELECT ip FROM {metrics_db}.login_ips_tmp"
+
+
+def _summary_build_dl_users_period(cur, metrics_db, dstart, dstop):
+    """Materialise dl_users_period_tmp — DISTINCT (ip, host, ipcountry) of
+    websessions that have at least one matching dnload=1 web row in the
+    period window, with the standard websession-duration/jobs/login_ips
+    filter applied.  JOIN drives from the small web(dnload=1) side."""
+    cur.execute(f"DROP TEMPORARY TABLE IF EXISTS {metrics_db}.dl_users_period_tmp")
+    cur.execute(
+        f"CREATE TEMPORARY TABLE {metrics_db}.dl_users_period_tmp "
+        f"SELECT DISTINCT ws.ip, ws.host, ws.ipcountry "
+        f"FROM {metrics_db}.web AS w "
+        f"INNER JOIN {metrics_db}.websessions AS ws ON ws.id = w.sessionid "
+        f"WHERE w.dnload = 1 "
+        f"  AND ws.datetime > %s AND ws.datetime < %s "
+        f'  AND ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" '
+        f"  AND ws.ip NOT IN (SELECT ip FROM {metrics_db}.login_ips_tmp)",
+        (dstart, dstop))
+    cur.execute(
+        f"ALTER TABLE {metrics_db}.dl_users_period_tmp ADD INDEX (ipcountry)")
+
+
+def _summary_build_download_sessions(cur, metrics_db, dstart, dstop):
+    """Materialise download_sessions_tmp — DISTINCT sessionid of every
+    web row with dnload=1 in the period.  Returns False if empty."""
+    cur.execute(f"DROP TEMPORARY TABLE IF EXISTS {metrics_db}.download_sessions_tmp")
+    cur.execute(
+        f"CREATE TEMPORARY TABLE {metrics_db}.download_sessions_tmp "
+        f"(id INT, INDEX (id))")
+    cur.execute(
+        f"INSERT INTO {metrics_db}.download_sessions_tmp (id) "
+        f"SELECT DISTINCT sessionid FROM {metrics_db}.web "
+        f"WHERE dnload = 1 AND datetime > %s AND datetime < %s "
+        f"  AND sessionid IS NOT NULL",
+        (dstart, dstop))
+    if cur.rowcount == 0:
+        return False
+    return True
+
+
+def _summary_get_ip_list(cur, sql, params=()):
+    """Run a SELECT ip … query, prepend '127.0.0.1', return a comma-quoted
+    list for IN ().  Returns '' (empty string) if nothing matches."""
+    cur.execute(sql, params)
+    ips = ['127.0.0.1'] + [r[0] for r in cur.fetchall() if r[0]]
+    return '"' + '","'.join(ips) + '"'
+
+
+def _summary_delete_record(cur, table, rowid, colid, dthis, period):
+    cur.execute(
+        f"DELETE FROM {table} WHERE rowid = %s AND colid = %s "
+        f"AND datetime = %s AND period = %s",
+        (rowid, colid, dthis, period))
+
+
+def _summary_insert_record(cur, table, rowid, colid, dthis, period, value, valfmt):
+    cur.execute(
+        f"INSERT INTO {table} VALUES (%s, %s, %s, %s, %s, %s)",
+        (rowid, colid, dthis, period, value, valfmt))
+
+
+def _summary_write_cell(cur, table, rowid, colid, dthis, period, value, valfmt):
+    _summary_delete_record(cur, table, rowid, colid, dthis, period)
+    _summary_insert_record(cur, table, rowid, colid, dthis, period, value, valfmt)
+
+
+def _summary_11col_cells(country_col, orgtype_col, continents):
+    """Return [(colid, extra_where_predicate), ...] for the standard
+    11-column residency+orgtype layout — same for reg_users and sim_users."""
+    return [
+        (1,  ""),
+        (2,  f'{country_col} <> ""'),
+        (3,  f'{country_col} = "US"'),
+        (4,  f'{country_col} IN ({continents["AS"]})'),
+        (5,  f'{country_col} IN ({continents["EU"]})'),
+        (6,  f'{country_col} <> "" AND {country_col} IN ({continents["NOT_AS_EU"]}) '
+             f'AND {country_col} <> "US"'),
+        (7,  f'{orgtype_col} <> ""'),
+        (8,  f'{orgtype_col} IN ({_EDU_ORGTYPES_SQL})'),
+        (9,  f'{orgtype_col} = "industry"'),
+        (10, f'{orgtype_col} = "government"'),
+        (11, f'{orgtype_col} NOT IN ({_NON_OTHER_ORGTYPES_SQL}) '
+             f'AND {orgtype_col} <> ""'),
+    ]
+
+
+def _summary_reg_users(cur, hub_db, metrics_db, db_prefix,
+                      dthis, dstart, dstop, period, continents):
+    """summary_user_vals rowid=6 — registered users × 11 cols (port of reg_users)."""
+    table = f"{metrics_db}.summary_user_vals"
+    rowid = 6
+    base = (
+        f"FROM {metrics_db}.userlogin_lite AS ul, "
+        f"     {metrics_db}.{db_prefix}xprofiles_metrics AS u "
+        f"WHERE u.username = ul.user "
+        f"  AND ul.datetime > %s AND ul.datetime < %s "
+        f'  AND ul.action IN ("login","simulation")'
+    )
+    def cell(extra):
+        sql = f"SELECT COUNT(DISTINCT ul.user) {base}"
+        if extra:
+            sql += f" AND {extra}"
+        cur.execute(sql, (dstart, dstop))
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    for colid, extra in _summary_11col_cells("u.countryresident", "u.orgtype", continents):
+        _summary_write_cell(cur, table, rowid, colid, dthis, period,
+                            cell(extra), _USERVAL_FMTS[colid])
+
+
+def _summary_sim_users(cur, metrics_db, dthis, dstart, dstop, period, continents):
+    """summary_user_vals rowid=2 — simulation users × 11 cols.
+
+    Reads toolstart directly; countryresident / orgtype are already filled
+    in by fill-user-info, so no JOIN needed."""
+    table = f"{metrics_db}.summary_user_vals"
+    rowid = 2
+    base = (
+        f"FROM {metrics_db}.toolstart "
+        f"WHERE success = 1 "
+        f"  AND datetime > %s AND datetime < %s"
+    )
+    def cell(extra):
+        sql = f"SELECT COUNT(DISTINCT user) {base}"
+        if extra:
+            sql += f" AND {extra}"
+        cur.execute(sql, (dstart, dstop))
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    for colid, extra in _summary_11col_cells("countryresident", "orgtype", continents):
+        _summary_write_cell(cur, table, rowid, colid, dthis, period,
+                            cell(extra), _USERVAL_FMTS[colid])
+
+
+def _summary_total_users(cur, metrics_db, dthis, period):
+    """summary_user_vals rowid=1 — derived per-cell SUM of rows 6, 7, 8
+    after they have been written.  Mirrors total_users() exactly."""
+    table = f"{metrics_db}.summary_user_vals"
+    rowid = 1
+    for colid in range(1, 12):
+        valfmt = 1 if colid in (1, 2, 7) else 2
+        cur.execute(
+            f"SELECT SUM(value) FROM {table} "
+            f"WHERE valfmt = %s AND colid = %s AND period = %s "
+            f"  AND datetime = %s AND rowid IN (6,7,8)",
+            (valfmt, colid, period, dthis))
+        r = cur.fetchone()
+        v = (r[0] or 0) if r else 0
+        _summary_write_cell(cur, table, rowid, colid, dthis, period, v, valfmt)
+
+
+_ORG_CLASS_BUCKET = {1: "edu", 2: "ind", 3: "gov", 6: "other"}
+
+
+def _summary_int_users(cur, metrics_db, dthis, dstart, dstop, period,
+                      continents, login_ips_subq):
+    """summary_user_vals rowid=7 (unregistered interactive) + rowid=3
+    (registered-user counterpart) × 11 cols.
+
+    KNOWN BUG (carried over from PHP for A/B parity): the rowid=3
+    userlogin_lite intersect query has no date filter, so the row=3
+    counts inflate as userlogin_lite grows across runs.
+    """
+    table = f"{metrics_db}.summary_user_vals"
+
+    # --- helper: residency-style cell for rowid=7 (websessions side) ---
+    def ws_cell_7(country_extra):
+        sql = (
+            f"SELECT COUNT(DISTINCT ip, host) AS users "
+            f"FROM {metrics_db}.websessions "
+            f"WHERE datetime > %s AND datetime < %s "
+            f'  AND duration >= "900" AND jobs = "0" '
+            f"  AND ip NOT IN ({login_ips_subq}) "
+        )
+        if country_extra:
+            sql += f" AND {country_extra}"
+        cur.execute(sql, (dstart, dstop))
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    # --- helper: registered-counterpart delta for rowid=3 ---
+    def ul_delta_3(country_extra):
+        # IP list of interactive sessions matching country_extra (no login_ips filter).
+        ip_sql = (
+            f"SELECT DISTINCT ip FROM {metrics_db}.websessions "
+            f"WHERE datetime > %s AND datetime < %s "
+            f'  AND jobs = "0" AND duration >= "900"'
+        )
+        if country_extra:
+            ip_sql += f" AND {country_extra}"
+        ip_list = _summary_get_ip_list(cur, ip_sql, (dstart, dstop))
+        if not ip_list:
+            return 0
+        # Bug-for-bug: no date filter here.
+        cur.execute(
+            f"SELECT COUNT(DISTINCT user) FROM {metrics_db}.userlogin_lite AS ul "
+            f'WHERE (ul.action = "login" OR ul.action = "simulation") '
+            f"  AND ul.ip IN ({ip_list})")
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    # --- residency cols 1..6 ---
+    residency = [
+        (1, ""),
+        (2, 'ipcountry <> "" AND ipcountry <> "-"'),
+        (3, 'ipcountry = "US"'),
+        (4, f'ipcountry IN ({continents["AS"]})'),
+        (5, f'ipcountry IN ({continents["EU"]})'),
+        (6, f'ipcountry IN ({continents["NOT_AS_EU"]}) AND ipcountry <> "US"'),
+    ]
+    for colid, country_extra in residency:
+        valfmt = _USERVAL_FMTS[colid]
+        v7 = ws_cell_7(country_extra)
+        _summary_write_cell(cur, table, 7, colid, dthis, period, v7, valfmt)
+        v3 = v7 + ul_delta_3(country_extra)
+        _summary_write_cell(cur, table, 3, colid, dthis, period, v3, valfmt)
+
+    # --- organization cols 7..11: one GROUP BY query each side ---
+    # rowid=7: websession-side bucket counts.
+    cur.execute(
+        f"SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class "
+        f"FROM {metrics_db}.websessions AS ws "
+        f"LEFT OUTER JOIN {metrics_db}.domainclass AS dc ON ws.domain = dc.domain "
+        f"LEFT OUTER JOIN {metrics_db}.domainclasses AS dcs ON dc.class = dcs.class "
+        f'WHERE ws.duration >= "900" AND ws.jobs = "0" '
+        f"  AND ws.datetime > %s AND ws.datetime < %s "
+        f'  AND dc.class > "0" AND dc.class <> "4" '
+        f"  AND ws.ip NOT IN ({login_ips_subq}) "
+        f"GROUP BY class ORDER BY class",
+        (dstart, dstop))
+    buckets7 = {"edu": 0, "ind": 0, "gov": 0, "other": 0}
+    identified7 = 0
+    for cnt, cls in cur.fetchall():
+        cnt = int(cnt or 0)
+        cls_str = str(cls) if cls is not None else ""
+        if cls_str in ("1", "2", "3", "6"):
+            buckets7[_ORG_CLASS_BUCKET[int(cls_str)]] = cnt
+        identified7 += cnt
+    _summary_write_cell(cur, table, 7, 7,  dthis, period, identified7,       1)
+    _summary_write_cell(cur, table, 7, 8,  dthis, period, buckets7["edu"],   2)
+    _summary_write_cell(cur, table, 7, 9,  dthis, period, buckets7["ind"],   2)
+    _summary_write_cell(cur, table, 7, 10, dthis, period, buckets7["gov"],   2)
+    _summary_write_cell(cur, table, 7, 11, dthis, period, buckets7["other"], 2)
+
+    # rowid=3: registered-user side — JOIN userlogin_lite to websessions on ip.
+    cur.execute(
+        f"SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class "
+        f"FROM {metrics_db}.userlogin_lite AS ul "
+        f"LEFT OUTER JOIN {metrics_db}.websessions AS ws ON ul.ip = ws.ip "
+        f"LEFT OUTER JOIN {metrics_db}.domainclass  AS dc ON ws.domain = dc.domain "
+        f"LEFT OUTER JOIN {metrics_db}.domainclasses AS dcs ON dc.class = dcs.class "
+        f'WHERE ws.jobs = "0" AND ws.duration >= "900" '
+        f"  AND ws.datetime > %s AND ws.datetime < %s "
+        f'  AND dc.class > "0" AND dc.class <> "4" '
+        f'  AND (ul.action = "login" OR ul.action = "simulation") '
+        f"GROUP BY class ORDER BY class",
+        (dstart, dstop))
+    buckets3 = {"edu": 0, "ind": 0, "gov": 0, "other": 0}
+    identified3 = 0
+    for cnt, cls in cur.fetchall():
+        cnt = int(cnt or 0)
+        cls_str = str(cls) if cls is not None else ""
+        if cls_str in ("1", "2", "3", "6"):
+            buckets3[_ORG_CLASS_BUCKET[int(cls_str)]] = cnt
+        identified3 += cnt
+    _summary_write_cell(cur, table, 3, 7,  dthis, period, identified3,       1)
+    _summary_write_cell(cur, table, 3, 8,  dthis, period, buckets3["edu"],   2)
+    _summary_write_cell(cur, table, 3, 9,  dthis, period, buckets3["ind"],   2)
+    _summary_write_cell(cur, table, 3, 10, dthis, period, buckets3["gov"],   2)
+    _summary_write_cell(cur, table, 3, 11, dthis, period, buckets3["other"], 2)
+
+
+def _summary_download_users(cur, metrics_db, dthis, dstart, dstop, period,
+                           continents, login_ips_subq):
+    """summary_user_vals rowid=8 (download users, websession side) +
+    rowid=4 (registered-user counterpart).  Uses dl_users_period_tmp
+    and download_sessions_tmp (built ahead of this call by the orchestrator).
+
+    KNOWN BUG (carried over from PHP for A/B parity): the rowid=4
+    userlogin_lite intersect query has no date filter.
+    """
+    table = f"{metrics_db}.summary_user_vals"
+
+    def dl_cell_8(country_extra):
+        sql = (
+            f"SELECT COUNT(DISTINCT ip, host) AS users "
+            f"FROM {metrics_db}.dl_users_period_tmp"
+        )
+        if country_extra:
+            sql += f" WHERE {country_extra}"
+        cur.execute(sql)
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    def ul_delta_4(country_extra):
+        ip_sql = f"SELECT DISTINCT ip FROM {metrics_db}.dl_users_period_tmp"
+        if country_extra:
+            ip_sql += f" WHERE {country_extra}"
+        ip_list = _summary_get_ip_list(cur, ip_sql)
+        if not ip_list:
+            return 0
+        cur.execute(
+            f"SELECT COUNT(DISTINCT user) FROM {metrics_db}.userlogin_lite AS ul "
+            f'WHERE (ul.action = "login" OR ul.action = "simulation") '
+            f"  AND ul.ip IN ({ip_list})")
+        r = cur.fetchone()
+        return (r[0] or 0) if r else 0
+
+    residency = [
+        (1, ""),
+        (2, 'ipcountry <> "" AND ipcountry <> "-"'),
+        (3, 'ipcountry = "US"'),
+        (4, f'ipcountry IN ({continents["AS"]})'),
+        (5, f'ipcountry IN ({continents["EU"]})'),
+        (6, f'ipcountry IN ({continents["NOT_AS_EU"]}) AND ipcountry <> "US"'),
+    ]
+    for colid, country_extra in residency:
+        valfmt = _USERVAL_FMTS[colid]
+        v8 = dl_cell_8(country_extra)
+        _summary_write_cell(cur, table, 8, colid, dthis, period, v8, valfmt)
+        v4 = v8 + ul_delta_4(country_extra)
+        _summary_write_cell(cur, table, 4, colid, dthis, period, v4, valfmt)
+
+    # Organization breakdown — restrict to websessions whose id is in
+    # download_sessions_tmp (rebuilt fresh per period).
+    has_dl_sess = _summary_build_download_sessions(cur, metrics_db, dstart, dstop)
+
+    # rowid=8 buckets — websessions side.
+    buckets8 = {"edu": 0, "ind": 0, "gov": 0, "other": 0}
+    identified8 = 0
+    if has_dl_sess:
+        cur.execute(
+            f"SELECT COUNT(DISTINCT ws.ip, ws.host) AS users, dc.class AS class "
+            f"FROM {metrics_db}.websessions AS ws "
+            f"LEFT OUTER JOIN {metrics_db}.domainclass AS dc ON ws.domain = dc.domain "
+            f"LEFT OUTER JOIN {metrics_db}.domainclasses AS dcs ON dc.class = dcs.class "
+            f'WHERE ws.duration >= "0" AND ws.duration < "900" AND ws.jobs = "0" '
+            f"  AND ws.datetime > %s AND ws.datetime < %s "
+            f'  AND dc.class > "0" AND dc.class <> "4" '
+            f"  AND ws.ip NOT IN ({login_ips_subq}) "
+            f"  AND ws.id IN (SELECT id FROM {metrics_db}.download_sessions_tmp) "
+            f"GROUP BY class ORDER BY class",
+            (dstart, dstop))
+        for cnt, cls in cur.fetchall():
+            cnt = int(cnt or 0)
+            cls_str = str(cls) if cls is not None else ""
+            if cls_str in ("1", "2", "3", "6"):
+                buckets8[_ORG_CLASS_BUCKET[int(cls_str)]] = cnt
+            identified8 += cnt
+    _summary_write_cell(cur, table, 8, 7,  dthis, period, identified8,       1)
+    _summary_write_cell(cur, table, 8, 8,  dthis, period, buckets8["edu"],   2)
+    _summary_write_cell(cur, table, 8, 9,  dthis, period, buckets8["ind"],   2)
+    _summary_write_cell(cur, table, 8, 10, dthis, period, buckets8["gov"],   2)
+    _summary_write_cell(cur, table, 8, 11, dthis, period, buckets8["other"], 2)
+
+    # rowid=4 buckets — userlogin_lite intersect via ws.ip.
+    buckets4 = {"edu": 0, "ind": 0, "gov": 0, "other": 0}
+    identified4 = 0
+    if has_dl_sess:
+        cur.execute(
+            f"SELECT COUNT(DISTINCT ul.user) AS users, dc.class AS class "
+            f"FROM {metrics_db}.userlogin_lite AS ul "
+            f"LEFT OUTER JOIN {metrics_db}.websessions AS ws ON ul.ip = ws.ip "
+            f"LEFT OUTER JOIN {metrics_db}.domainclass  AS dc ON ws.domain = dc.domain "
+            f"LEFT OUTER JOIN {metrics_db}.domainclasses AS dcs ON dc.class = dcs.class "
+            f'WHERE ws.jobs = "0" AND ws.duration >= "0" '
+            f"  AND ws.datetime > %s AND ws.datetime < %s "
+            f'  AND dc.class > "0" AND dc.class <> "4" '
+            f"  AND ws.id IN (SELECT id FROM {metrics_db}.download_sessions_tmp) "
+            f'  AND (ul.action = "login" OR ul.action = "simulation") '
+            f"GROUP BY class ORDER BY class",
+            (dstart, dstop))
+        for cnt, cls in cur.fetchall():
+            cnt = int(cnt or 0)
+            cls_str = str(cls) if cls is not None else ""
+            if cls_str in ("1", "2", "3", "6"):
+                buckets4[_ORG_CLASS_BUCKET[int(cls_str)]] = cnt
+            identified4 += cnt
+    _summary_write_cell(cur, table, 4, 7,  dthis, period, identified4,       1)
+    _summary_write_cell(cur, table, 4, 8,  dthis, period, buckets4["edu"],   2)
+    _summary_write_cell(cur, table, 4, 9,  dthis, period, buckets4["ind"],   2)
+    _summary_write_cell(cur, table, 4, 10, dthis, period, buckets4["gov"],   2)
+    _summary_write_cell(cur, table, 4, 11, dthis, period, buckets4["other"], 2)
+
+
+def _summary_sim_usage(cur, hub_db, metrics_db, dthis, dstart, dstop, period,
+                      rappture_tools_sql):
+    """summary_simusage_vals rowid=1..10 — counts and time aggregates."""
+    table = f"{metrics_db}.summary_simusage_vals"
+    colid = 1
+
+    cur.execute(
+        f"SELECT COUNT(DISTINCT user) FROM {metrics_db}.toolstart "
+        f"WHERE success=1 AND datetime > %s AND datetime < %s",
+        (dstart, dstop))
+    sim_users = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 1, colid, dthis, period, sim_users, 3)
+    if not sim_users:
+        return
+
+    cur.execute(
+        f"SELECT COUNT(user) FROM {metrics_db}.toolstart "
+        f"WHERE success=1 AND datetime > %s AND datetime < %s",
+        (dstart, dstop))
+    sim_jobs = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 2, colid, dthis, period, sim_jobs, 4)
+
+    # CPU Time — Non-Rappture + Rappture (joblog side).
+    cur.execute(
+        f"SELECT COALESCE(SUM(cputime),0) FROM {hub_db}.sessionlog "
+        f"WHERE start > %s AND start < %s "
+        f"  AND appname NOT IN ({rappture_tools_sql})",
+        (dstart, dstop))
+    cpu_non_rapp = (cur.fetchone() or (0,))[0] or 0
+    cur.execute(
+        f"SELECT COALESCE(SUM(j.cputime),0) "
+        f"FROM {hub_db}.joblog j, {hub_db}.sessionlog s "
+        f"WHERE s.sessnum = j.sessnum "
+        f"  AND s.start > %s AND s.start < %s "
+        f'  AND j.event <> "[waiting]" AND j.job > 0 '
+        f'  AND s.username <> "gridstat" AND s.username NOT LIKE "hctest%%" '
+        f"  AND s.appname IN ({rappture_tools_sql})",
+        (dstart, dstop))
+    cpu_rapp = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 3, colid, dthis, period,
+                        cpu_non_rapp + cpu_rapp, 5)
+
+    cur.execute(
+        f"SELECT SUM(walltime) FROM {hub_db}.sessionlog "
+        f"WHERE start > %s AND start < %s "
+        f'  AND username <> "gridstat" AND username NOT LIKE "hctest%%"',
+        (dstart, dstop))
+    walltime = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 4, colid, dthis, period, walltime, 5)
+
+    cur.execute(
+        f"SELECT SUM(viewtime) FROM {hub_db}.sessionlog "
+        f"WHERE start > %s AND start < %s "
+        f'  AND username <> "gridstat" AND username NOT LIKE "hctest%%"',
+        (dstart, dstop))
+    viewtime = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 5, colid, dthis, period, viewtime, 5)
+
+    cur.execute(
+        f"SELECT COUNT(*) FROM ("
+        f"  SELECT DISTINCT username AS users, SUM(cputime) AS total_cputime "
+        f"  FROM {hub_db}.sessionlog "
+        f"  WHERE start > %s AND start < %s "
+        f"  GROUP BY users "
+        f'  HAVING total_cputime >= "600" '
+        f'    AND username <> "gridstat" AND username NOT LIKE "hctest%%"'
+        f") AS SUBTABLE",
+        (dstart, dstop))
+    cpu_10min = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 6, colid, dthis, period, cpu_10min, 3)
+
+    avg_jobs = sim_jobs / sim_users
+    _summary_write_cell(cur, table, 7, colid, dthis, period, avg_jobs, 4)
+
+    # Average days between first and last simulation × 86400 = seconds.
+    cur.execute(
+        f"SELECT SUM(TO_DAYS(w.window_max) - TO_DAYS(a.alltime_min)) AS total_days "
+        f"FROM ("
+        f"  SELECT user, MAX(datetime) AS window_max "
+        f"  FROM {metrics_db}.toolstart "
+        f'  WHERE success = 1 AND datetime > %s AND datetime > "1995-01-01" '
+        f"    AND datetime < %s "
+        f"  GROUP BY user HAVING COUNT(*) > 1"
+        f") AS w "
+        f"JOIN ("
+        f"  SELECT user, MIN(datetime) AS alltime_min "
+        f"  FROM {metrics_db}.toolstart "
+        f'  WHERE success = 1 AND datetime > "1995-01-01" '
+        f"  GROUP BY user"
+        f") AS a ON a.user = w.user "
+        f"WHERE TO_DAYS(w.window_max) > TO_DAYS(a.alltime_min)",
+        (dstart, dstop))
+    total_days = int((cur.fetchone() or (0,))[0] or 0)
+    avg_days = (total_days / sim_users) * 86400
+    _summary_write_cell(cur, table, 8, colid, dthis, period, avg_days, 5)
+
+    cur.execute(
+        f"SELECT COUNT(*) FROM ("
+        f"  SELECT DISTINCT user AS USERS, COUNT(*) AS sims "
+        f"  FROM {metrics_db}.toolstart "
+        f"  WHERE success=1 AND datetime > %s AND datetime < %s "
+        f'  GROUP BY users HAVING sims >= 10'
+        f") AS SUBTABLE",
+        (dstart, dstop))
+    repeat_10 = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 9, colid, dthis, period, repeat_10, 3)
+
+    # Repeat users with > 3 months between first and last simulation.
+    cur.execute(
+        f"SELECT COUNT(*) AS repeat_users FROM ("
+        f"  SELECT w.user,"
+        f"    TO_DAYS(w.window_max) - TO_DAYS(a.alltime_min) AS spread,"
+        f"    TO_DAYS(a.alltime_min) AS min_days "
+        f"  FROM ("
+        f"    SELECT user, MAX(datetime) AS window_max "
+        f"    FROM {metrics_db}.toolstart "
+        f"    WHERE success = 1 AND datetime > %s AND datetime < %s "
+        f"    GROUP BY user"
+        f"  ) AS w "
+        f"  JOIN ("
+        f"    SELECT user, MIN(datetime) AS alltime_min "
+        f"    FROM {metrics_db}.toolstart "
+        f"    WHERE success = 1 "
+        f"    GROUP BY user"
+        f"  ) AS a ON a.user = w.user"
+        f") AS sub "
+        f"WHERE sub.spread >= 90 AND sub.min_days > 0",
+        (dstart, dstop))
+    repeat_3mo = (cur.fetchone() or (0,))[0] or 0
+    _summary_write_cell(cur, table, 10, colid, dthis, period, repeat_3mo, 3)
+
+
+def _summary_misc_usage(cur, metrics_db, db_prefix,
+                       dthis, dstart, dstop, period):
+    """summary_misc_vals rowid=1..8 — domains, sessions, hits, new accounts."""
+    table = f"{metrics_db}.summary_misc_vals"
+    colid = 1
+
+    def one(rowid, valfmt, sql, params):
+        cur.execute(sql, params)
+        r = cur.fetchone()
+        v = (r[0] if r and r[0] is not None else 0)
+        _summary_write_cell(cur, table, rowid, colid, dthis, period, v, valfmt)
+
+    one(1, 1,
+        f"SELECT COUNT(DISTINCT domain) FROM {metrics_db}.websessions "
+        f"WHERE datetime > %s AND datetime < %s",
+        (dstart, dstop))
+    one(2, 1,
+        f"SELECT COUNT(datetime) AS sessions FROM {metrics_db}.websessions "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND (duration >= "900" OR jobs > "0")',
+        (dstart, dstop))
+    one(3, 5,
+        f"SELECT SUM(duration) FROM {metrics_db}.websessions "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND (duration >= "900" OR jobs > "0")',
+        (dstart, dstop))
+    one(4, 1,
+        f"SELECT COUNT(DISTINCT ip, host) FROM {metrics_db}.websessions "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND (duration >= "0" OR jobs > "0")',
+        (dstart, dstop))
+    one(5, 1,
+        f"SELECT COUNT(datetime) FROM {metrics_db}.websessions "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND (duration >= "0" OR jobs > "0")',
+        (dstart, dstop))
+    one(6, 1,
+        f"SELECT COUNT(DISTINCT uidNumber) "
+        f"FROM {metrics_db}.{db_prefix}xprofiles_metrics "
+        f"WHERE registerDate > %s AND registerDate < %s",
+        (dstart, dstop))
+
+    # Max user logins on a single day, stored as 'N users on YYYY-MM-DD'.
+    cur.execute(
+        f"SELECT LEFT(datetime,10) AS day, COUNT(DISTINCT user) AS logins "
+        f"FROM {metrics_db}.userlogin_lite "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND action IN ("login","simulation") '
+        f"GROUP BY day ORDER BY logins DESC LIMIT 1",
+        (dstart, dstop))
+    row = cur.fetchone()
+    if row:
+        data = f"{row[1]} users on {row[0]}"
+    else:
+        # PHP leaves $ondate/$maxusers unset → notice-suppressed null
+        # concatenation produced "0 users on " — preserve that.
+        data = " users on "
+    _summary_write_cell(cur, table, 7, colid, dthis, period, data, 6)
+
+    one(8, 1,
+        f"SELECT SUM(hits) FROM {metrics_db}.webhits "
+        f"WHERE datetime > %s AND datetime < %s",
+        (dstart, dstop))
+
+
+def do_summarize_month(yearmonth=None, *, only=None, periods=None,
+                       logfile=None, dry_run=False):
+    """Port of xlogfix_summary.php.  Drops/rebuilds userlogin_lite, loads
+    the rappture-tool alias set and the AS/EU/NOT-AS-EU country lists,
+    then loops the six periods and writes summary_*_vals for each.
+
+    only:    iterable subset of SUMMARY_SECTIONS (default: all)
+    periods: iterable subset of period codes (default: SUMMARY_PERIODS_DEFAULT)
+    """
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if not yearmonth:
+        # PHP default: last month.
+        today = date.today()
+        if today.month == 1:
+            yearmonth = f"{today.year - 1:04d}-12"
+        else:
+            yearmonth = f"{today.year:04d}-{today.month - 1:02d}"
+    dthis_input = f"{yearmonth}-01"
+
+    sections = tuple(only) if only else SUMMARY_SECTIONS
+    bad = [s for s in sections if s not in SUMMARY_SECTIONS]
+    if bad:
+        raise ValueError(f"summarize-month: unknown sections {bad}; "
+                         f"valid: {SUMMARY_SECTIONS}")
+    period_codes = tuple(periods) if periods else SUMMARY_PERIODS_DEFAULT
+
+    cfg = db_config()
+    hub_db     = cfg.get('hub_db', '')
+    metrics_db = cfg.get('metrics_db', '')
+    db_prefix  = cfg.get('db_prefix', 'jos_')
+    if not hub_db or not metrics_db:
+        log("[summarize-month] missing hub_db / metrics_db in access.cfg")
+        return 2
+
+    log(f"[summarize-month] month={yearmonth} sections={','.join(sections)} "
+        f"periods={','.join(str(p) for p in period_codes)}")
+
+    if dry_run:
+        for p in period_codes:
+            dstart, dstop, dthis = _summary_get_dates(dthis_input, p)
+            log(f"  [dry-run] period={p} dthis={dthis} {dstart} .. {dstop}")
+        return 0
+
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            # One-shot prep.
+            log("[summarize-month] rebuilding userlogin_lite")
+            _summary_rebuild_userlogin_lite(cur, metrics_db)
+
+            need_sim_usage = "sim-usage" in sections
+            rappture_tools_sql = ""
+            if need_sim_usage:
+                log("[summarize-month] loading rappture tool aliases")
+                rappture_tools_sql = _summary_get_rappture_tools(
+                    cur, hub_db, db_prefix)
+
+            log("[summarize-month] caching country/continent lists")
+            continents = _summary_continents(cur, metrics_db)
+
+            for period in period_codes:
+                dstart, dstop, dthis = _summary_get_dates(dthis_input, period)
+                log(f"  period={period} dthis={dthis} {dstart} .. {dstop}")
+
+                # login_ips_tmp is rebuilt per-period (the IN-clause shrinks
+                # over short periods).  Always needed by int_users / dl users
+                # rowid=7,8 sections; cheap, so build unconditionally.
+                login_ips_subq = _summary_build_login_ips(
+                    cur, metrics_db, dstart, dstop)
+
+                # dl_users_period_tmp is only needed for the "dl" section.
+                if "dl" in sections:
+                    _summary_build_dl_users_period(
+                        cur, metrics_db, dstart, dstop)
+
+                # Order matches the PHP: reg, int, dl, total, sim, sim-usage, misc.
+                if "reg" in sections:
+                    _summary_reg_users(
+                        cur, hub_db, metrics_db, db_prefix,
+                        dthis, dstart, dstop, period, continents)
+                if "int" in sections:
+                    _summary_int_users(
+                        cur, metrics_db,
+                        dthis, dstart, dstop, period,
+                        continents, login_ips_subq)
+                if "dl" in sections:
+                    _summary_download_users(
+                        cur, metrics_db,
+                        dthis, dstart, dstop, period,
+                        continents, login_ips_subq)
+                if "total" in sections:
+                    _summary_total_users(cur, metrics_db, dthis, period)
+                if "sim" in sections:
+                    _summary_sim_users(
+                        cur, metrics_db,
+                        dthis, dstart, dstop, period, continents)
+                if "sim-usage" in sections:
+                    _summary_sim_usage(
+                        cur, hub_db, metrics_db,
+                        dthis, dstart, dstop, period, rappture_tools_sql)
+                if "misc" in sections:
+                    _summary_misc_usage(
+                        cur, metrics_db, db_prefix,
+                        dthis, dstart, dstop, period)
+
+        log("[summarize-month] done")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_summarize_month(args):
+    only = None
+    if args.only:
+        only = tuple(s.strip() for s in args.only.split(",") if s.strip())
+    periods = None
+    if args.periods:
+        periods = tuple(int(p) for p in args.periods.split(",") if p.strip())
+    with log_open() as lf:
+        return do_summarize_month(
+            args.yearmonth,
+            only=only, periods=periods,
+            logfile=lf, dry_run=args.dry_run,
+        )
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -4441,6 +5314,21 @@ def main():
         help="Month to process (default: current month)")
     p_ls.add_argument("--dry-run", action="store_true",
         help="Show the week boundaries; don't INSERT/UPDATE")
+
+    p_sm = sub.add_parser("summarize-month",
+        help="Compute the per-period summary_*_vals tables for a month "
+             "(port of xlogfix_summary.php)")
+    p_sm.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to score (default: last month)")
+    p_sm.add_argument("--only", default=None, metavar="LIST",
+        help="Comma-separated subset of sections to run. "
+             "Choices: reg,int,dl,total,sim,sim-usage,misc (default: all)")
+    p_sm.add_argument("--periods", default=None, metavar="LIST",
+        help="Comma-separated subset of period codes to run. "
+             "Codes: 0=cal-year, 1=month, 3=quarter, 12=rolling-12, "
+             "13=fiscal-year, 14=all-time (default: all six)")
+    p_sm.add_argument("--dry-run", action="store_true",
+        help="Show period windows; don't run any worker")
 
     p_gtl = sub.add_parser("gen-tool-toplists",
         help="Per-period ranked lists across all tools into hub.jos_stats_topvals "
@@ -4647,6 +5535,8 @@ def main():
         cmd_middleware_cpu(args)
     elif args.command == "logfix-session":
         cmd_logfix_session(args)
+    elif args.command == "summarize-month":
+        cmd_summarize_month(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
