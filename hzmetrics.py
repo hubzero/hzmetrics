@@ -23,6 +23,7 @@ Usage:
   hzmetrics.py fill-domain {metrics|hub} <table>
   hzmetrics.py import-apache <file>    (file may be '-' for stdin)
   hzmetrics.py andmore-usage [YYYY-MM]
+  hzmetrics.py fill-ipcountry {metrics|hub} <table> [DATE_OR_RANGE]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -1010,7 +1011,7 @@ def months_with_missing_geo():
 
 def do_fill_geo(month_str, logfile, dry_run=False):
     for db, table in IPCOUNTRY_TABLES:
-        run([METRICS / "xlogfix_ipcountry.php", db, table, month_str], logfile, dry_run)
+        do_fill_ipcountry(db, table, month_str, logfile=logfile, dry_run=dry_run)
 
 def cmd_fill_geo(args):
     dry_run = args.dry_run
@@ -2822,6 +2823,249 @@ def cmd_andmore_usage(args):
         return do_andmore_usage(args.yearmonth, logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# fill-ipcountry  (assign ipcountry by IP geo lookup; direct port of
+#                  xlogfix_ipcountry.php + get_ip_geodata helper).
+#
+# Per-IP, per-row semantics preserved exactly:
+#   for each ~7-day chunk in the period (findWeeks shape):
+#     SELECT DISTINCT(ip), COUNT(*) FROM <table> WHERE date in chunk
+#       AND ipcountry IS NULL/empty ORDER BY hits desc
+#     for each IP:
+#       geo = get_ip_geodata(ip)
+#       if geo.countrySHORT not in ('', '-'):
+#         UPDATE <table> SET ipcountry=country WHERE ip=ip AND ipcountry IS NULL/empty
+#
+# Optimization (bulk cache, async HTTP, temp-table+JOIN UPDATE) is intentionally
+# deferred to a follow-up commit so this port's A/B equivalence with the PHP
+# can be argued from byte-identical SQL semantics first.
+# ---------------------------------------------------------------------------
+
+IPCOUNTRY_URL     = "http://hubzero.org/ipinfo/v1"
+IPCOUNTRY_HUB_KEY = "_HUBZERO_OPNSRC_V1_"
+IPCOUNTRY_TIMEOUT = 5     # seconds; PHP relies on default_socket_timeout (~60s)
+
+def _ip2long(ip_str):
+    """Convert dotted-quad IPv4 to 32-bit int.  Returns None on bad input.
+    Matches PHP ip2long() behavior for valid v4 addresses."""
+    try:
+        parts = ip_str.split('.')
+        if len(parts) != 4:
+            return None
+        n = 0
+        for p in parts:
+            v = int(p)
+            if not (0 <= v <= 255):
+                return None
+            n = (n << 8) | v
+        return n
+    except (ValueError, AttributeError):
+        return None
+
+def _ipgeo_defaults(n_ip):
+    """Default geo_data dict (every field '-') matching the PHP."""
+    return {
+        'n_ip':         n_ip,
+        'countrySHORT': '-',
+        'countryLONG':  '-',
+        'ipREGION':     '-',
+        'ipCITY':       '-',
+        'ipLATITUDE':   '-',
+        'ipLONGITUDE':  '-',
+    }
+
+def _get_ip_geodata(conn, ip, *, url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
+                   timeout=IPCOUNTRY_TIMEOUT, ttl_days=90):
+    """Look up geo data for one IP.  Mirrors get_ip_geodata() in
+    func_misc.php — checks the hub's metrics_ipgeo_cache (90-day TTL),
+    falls through to HTTP, INSERTs into the cache on success."""
+    n_ip = _ip2long(ip)
+    geo = _ipgeo_defaults(n_ip)
+    if n_ip is None:
+        return geo
+
+    cfg = db_config()
+    hub_db    = cfg.get('hub_db', '')
+    db_prefix = cfg.get('db_prefix', 'jos_')
+
+    # --- cache lookup ---
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT countrySHORT, countryLONG, ipREGION, ipCITY, "
+            f"ipLATITUDE, ipLONGITUDE, lookup_datetime "
+            f"FROM {hub_db}.{db_prefix}metrics_ipgeo_cache "
+            f"WHERE ip = %s "
+            f"AND TO_DAYS(CURDATE()) - TO_DAYS(lookup_datetime) <= %s",
+            (n_ip, ttl_days),
+        )
+        row = cur.fetchone()
+        if row:
+            geo['countrySHORT'] = row[0]
+            geo['countryLONG']  = row[1]
+            geo['ipREGION']     = row[2]
+            geo['ipCITY']       = row[3]
+            geo['ipLATITUDE']   = row[4]
+            geo['ipLONGITUDE']  = row[5]
+            return geo
+
+    # --- HTTP fallback ---
+    import urllib.request, xml.etree.ElementTree as ET
+    full_url = f"{url}/?&hub_key={hub_key}&n_ip={n_ip}"
+    try:
+        with urllib.request.urlopen(full_url, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+            root = ET.fromstring(text)
+    except (urllib.request.URLError, ET.ParseError, TimeoutError, OSError) as e:
+        print(f"Warning: could not connect to {url}: {e}", flush=True)
+        return geo
+
+    status = (root.findtext('status') or '').strip()
+    ipset  = root.find('ipset')
+    if status == '_SUCCESS_' and ipset is not None and \
+       (ipset.findtext('n_ip') or '').strip() == str(n_ip):
+        geo['n_ip']         = int(ipset.findtext('n_ip') or n_ip)
+        geo['countrySHORT'] = (ipset.findtext('countryCode') or '-').strip() or '-'
+        geo['countryLONG']  = (ipset.findtext('countryName') or '-').strip() or '-'
+        geo['ipREGION']     = (ipset.findtext('region')      or '-').strip() or '-'
+        geo['ipCITY']       = (ipset.findtext('city')        or '-').strip() or '-'
+        geo['ipLATITUDE']   = (ipset.findtext('lat')         or '-').strip() or '-'
+        geo['ipLONGITUDE']  = (ipset.findtext('long')        or '-').strip() or '-'
+        if geo['countrySHORT'] != '-':
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO {hub_db}.{db_prefix}metrics_ipgeo_cache "
+                    f"(ip, countrySHORT, countryLONG, ipREGION, ipCITY, "
+                    f"ipLATITUDE, ipLONGITUDE) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                    f"ON DUPLICATE KEY UPDATE "
+                    f"countrySHORT=VALUES(countrySHORT), "
+                    f"countryLONG=VALUES(countryLONG), "
+                    f"ipREGION=VALUES(ipREGION), "
+                    f"ipCITY=VALUES(ipCITY), "
+                    f"ipLATITUDE=VALUES(ipLATITUDE), "
+                    f"ipLONGITUDE=VALUES(ipLONGITUDE)",
+                    (n_ip, geo['countrySHORT'], geo['countryLONG'],
+                     geo['ipREGION'], geo['ipCITY'],
+                     geo['ipLATITUDE'], geo['ipLONGITUDE']),
+                )
+    elif status == '_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_':
+        print("Warning: HUBzero.org IP-Geo location key invalid for this host. "
+              "Check the hub registration / hub_key setting.", flush=True)
+    return geo
+
+FILL_IPCOUNTRY_TABLES = ("web", "websessions", "toolstart", "sessionlog_metrics")
+
+def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
+                      url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
+                      timeout=IPCOUNTRY_TIMEOUT, logfile=None, dry_run=False):
+    """Direct port of xlogfix_ipcountry.php.  Per-IP / per-row, per-week-chunk
+    SQL semantics preserved exactly — optimization is a separate concern.
+    """
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    hub_db     = cfg.get("hub_db", "")
+    if not metrics_db:
+        msg = "[fill-ipcountry] missing metrics_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if db_key == "metrics":
+        db_name = metrics_db
+    elif db_key == "hub":
+        db_name = hub_db
+    else:
+        msg = f"[fill-ipcountry] unknown db_key {db_key!r}"
+        print(msg, flush=True)
+        return 2
+
+    d_col = "start" if table == "sessionlog_metrics" else "datetime"
+
+    if all_dates:
+        msg = "[fill-ipcountry] --all not supported; specify a date or range"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if date_spec:
+        try:
+            start_d, end_d = parse_date_range(date_spec)
+        except ValueError as e:
+            msg = f"[fill-ipcountry] {e}"
+            print(msg, flush=True)
+            if logfile: logfile.write(msg + "\n")
+            return 2
+        if start_d is None or end_d is None:
+            msg = "[fill-ipcountry] open-ended ranges not supported"
+            print(msg, flush=True)
+            if logfile: logfile.write(msg + "\n")
+            return 2
+    else:
+        today = date.today()
+        start_d = today.replace(day=1)
+        end_d   = today + timedelta(days=1)
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    chunks = list(_findweeks(start_d, end_d))
+    log(f"[fill-ipcountry] {db_name}.{table} {start_d}..{end_d}: "
+        f"{len(chunks)} week chunk(s); url={url}")
+
+    conn = _open_db()
+    try:
+        total_select = 0
+        total_update = 0
+        for c_start, c_end in chunks:
+            with conn.cursor() as cur:
+                # PHP SQL uses `> start AND <= end` (findWeeks boundary)
+                cur.execute(
+                    f"SELECT DISTINCT(ip) AS n_ip, COUNT(*) AS hits "
+                    f"FROM {db_name}.{table} "
+                    f"WHERE {d_col} > %s AND {d_col} <= %s "
+                    f"AND (ipcountry = '' OR ipcountry IS NULL) "
+                    f"GROUP BY n_ip ORDER BY hits DESC",
+                    (c_start, c_end),
+                )
+                rows = cur.fetchall()
+            total_select += len(rows)
+            if not rows:
+                continue
+
+            log(f"  chunk {c_start}..{c_end}: {len(rows)} distinct IP(s)")
+            if dry_run:
+                continue
+
+            for ip, _hits in rows:
+                geo = _get_ip_geodata(conn, ip, url=url, hub_key=hub_key, timeout=timeout)
+                country = geo['countrySHORT']
+                if country and country != '-':
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"UPDATE {db_name}.{table} "
+                            f"SET ipcountry = %s "
+                            f"WHERE (ipcountry = '' OR ipcountry IS NULL) "
+                            f"AND ip = %s",
+                            (country, ip),
+                        )
+                        total_update += cur.rowcount
+        log(f"[fill-ipcountry] done: {total_select} IP(s) considered, "
+            f"{total_update} row(s) updated")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_fill_ipcountry(args):
+    with log_open() as lf:
+        return do_fill_ipcountry(
+            args.db_key, args.table, args.date_spec,
+            all_dates=args.all,
+            url=args.url, hub_key=args.hub_key, timeout=args.timeout,
+            logfile=lf, dry_run=args.dry_run,
+        )
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -3005,6 +3249,26 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_ic = sub.add_parser("fill-ipcountry",
+        help="Look up ipcountry for unresolved rows and bulk-update target table "
+             "(direct port of xlogfix_ipcountry.php)")
+    p_ic.add_argument("db_key", choices=["metrics", "hub"],
+        help="Target DB ('metrics' or 'hub')")
+    p_ic.add_argument("table", choices=list(FILL_IPCOUNTRY_TABLES),
+        help="Target table")
+    p_ic.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
+        help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' (default: current month)")
+    p_ic.add_argument("--all", action="store_true",
+        help="Not supported here — geo lookup needs a bounded window")
+    p_ic.add_argument("--url", default=IPCOUNTRY_URL,
+        help=f"hubzero ipinfo endpoint (default {IPCOUNTRY_URL})")
+    p_ic.add_argument("--hub-key", default=IPCOUNTRY_HUB_KEY, dest="hub_key",
+        help=f"hub_key parameter (default {IPCOUNTRY_HUB_KEY})")
+    p_ic.add_argument("--timeout", type=float, default=IPCOUNTRY_TIMEOUT,
+        help=f"HTTP timeout seconds (default {IPCOUNTRY_TIMEOUT})")
+    p_ic.add_argument("--dry-run", action="store_true",
+        help="Show what would be looked up; don't HTTP / UPDATE")
+
     p_am = sub.add_parser("andmore-usage",
         help="Per-resource distinct-user counts into hub.jos_resource_stats "
              "(ports xlogfix_andmore_usage.php)")
@@ -3152,6 +3416,8 @@ def main():
         cmd_import_apache(args)
     elif args.command == "andmore-usage":
         cmd_andmore_usage(args)
+    elif args.command == "fill-ipcountry":
+        cmd_fill_ipcountry(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
