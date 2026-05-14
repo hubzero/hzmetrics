@@ -2243,7 +2243,7 @@ def cmd_import_hub_data(args):
 # Old format: 2007-05-17 11:06:39 username 128.210.189.195 login
 # New format: 2009-01-17 11:06:39 1234 [username] 128.210.189.195 login
 _AUTH_PAT_NEW = re.compile(
-    r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+\[(.+)\]\s+([\.\d]+)\s+(\w+)\s*$'
+    r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\[.+\])\s+([\.\d]+)\s+(\w+)\s*$'
 )
 _AUTH_PAT_OLD = re.compile(
     r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+)\s+([\.\d]+)\s+(\w+)\s*$'
@@ -2304,7 +2304,10 @@ def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
             if m:
                 dt = f"{m.group(1)} {m.group(2)}"
                 uid = int(m.group(3))
-                user = m.group(4).strip()
+                # Legacy: ltrim($x, '[') + rtrim($x, ']') — strips ALL
+                # leading '[' and ALL trailing ']' (charlist semantics).
+                # Python's lstrip / rstrip with a charset behave identically.
+                user = m.group(4).strip().lstrip('[').rstrip(']')
                 ip = m.group(5).strip()
                 action = m.group(6).strip()
             else:

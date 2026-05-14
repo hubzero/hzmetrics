@@ -10,3 +10,26 @@
 2025-07-22 13:00:00 1008 [carol] 3.3.3.1 simulation
 malformed line that should be skipped
 2025-07-23 14:00:00 1009 [] 7.7.7.1 login
+# ---- additional edge cases ----
+# pattern_2 (no brackets, no uid) — various action types
+2025-07-24 08:00:00 erin 8.8.1.1 login
+2025-07-24 08:00:01 frank 8.8.1.2 simulation
+2025-07-24 08:00:02 grace 8.8.1.3 logout
+2025-07-24 08:00:03 helen 8.8.1.4 detect
+2025-07-24 08:00:04 ivan 8.8.1.5 invalid
+# pattern_1 with username containing spaces inside brackets
+2025-07-24 09:00:00 1010 [user with space] 9.9.1.1 login
+# pattern_1 with username containing brackets char (still inside)
+2025-07-24 09:00:01 1011 [user[sub]] 9.9.1.2 simulation
+# pattern_2 — username with hyphens / dots
+2025-07-24 10:00:00 user.name 9.9.2.1 login
+2025-07-24 10:00:01 user-name 9.9.2.2 simulation
+2025-07-24 10:00:02 user_name 9.9.2.3 login
+# IP edge: another excluded-list IP
+2025-07-24 11:00:00 1020 [excluded2] 52.17.98.131 login
+# Date boundary — June 30 23:59:59 (day-before-month NOT applied here, this is a single insert; legacy includes it)
+2025-06-30 23:59:59 1100 [boundary] 10.0.1.1 login
+# Date boundary — August 1 00:00:00 (just after month)
+2025-08-01 00:00:00 1101 [post] 10.0.1.2 login
+# Multiple spaces between fields
+2025-07-25 08:00:00   1200    [whitespace]    11.1.1.1    login
