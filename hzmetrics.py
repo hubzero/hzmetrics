@@ -3984,6 +3984,261 @@ def cmd_middleware_cpu(args):
         return do_middleware_cpu(logfile=lf, dry_run=args.dry_run)
 
 
+# ---------------------------------------------------------------------------
+# logfix-session  (port of logfix_session.pl — web → websessions coalescer)
+# ---------------------------------------------------------------------------
+
+_SESSION_INACTIVE_SECS = 1800
+
+def _iphost_jobs(conn_write, s_id, ip, host, dstart, dstop):
+    """Direct port of iphost_jobs() in logfix_session.pl.
+
+    Find successful toolstart rows for the session's IP/host in
+    [dstart, dstop + 1799s], stamp their sessionid, return the count.
+    """
+    if not ip and not host:
+        return 0
+    where_parts = [
+        "datetime >= %s",
+        "UNIX_TIMESTAMP(datetime) <= UNIX_TIMESTAMP(%s) + 1799",
+        "success = '1'",
+    ]
+    params = [dstart, dstop]
+    if ip and host:
+        where_parts.append("(ip = %s OR host = %s)")
+        params.extend([ip, host])
+    elif ip:
+        where_parts.append("ip = %s")
+        params.append(ip)
+    else:
+        where_parts.append("host = %s")
+        params.append(host)
+    where = " AND ".join(where_parts)
+
+    with conn_write.cursor() as cur:
+        cur.execute(f"SELECT id FROM toolstart WHERE {where}", params)
+        ids = [r[0] for r in cur.fetchall()]
+        if not ids:
+            return 0
+        placeholders = ",".join(["%s"] * len(ids))
+        cur.execute(
+            f"UPDATE toolstart SET sessionid = %s WHERE id IN ({placeholders})",
+            [s_id, *ids],
+        )
+    return len(ids)
+
+
+def _emit_websession(conn_write, s_id, s_datetime, s_ip, s_host,
+                     s_duration, s_domain, s_jobs, s_webevents, event_ids):
+    """INSERT IGNORE the websessions row and UPDATE web.sessionid for events."""
+    with conn_write.cursor() as cur:
+        cur.execute(
+            "INSERT IGNORE INTO websessions "
+            "(id, datetime, ip, host, duration, domain, jobs, webevents) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (s_id, s_datetime, s_ip or "", s_host or "",
+             s_duration, s_domain or "", s_jobs, s_webevents),
+        )
+        if event_ids:
+            placeholders = ",".join(["%s"] * len(event_ids))
+            cur.execute(
+                f"UPDATE web SET sessionid = %s WHERE id IN ({placeholders})",
+                [s_id, *event_ids],
+            )
+
+
+def do_logfix_session(month=None, *, logfile=None, dry_run=False):
+    """Direct port of logfix_session.pl.
+
+    Walks the 4 fixed week ranges (day 1-8, 9-16, 17-24, 25-1 of next month);
+    in each, streams web rows ordered by (ip, host, datetime) and emits a
+    websessions row whenever IP/host changes or there is a >1800s gap.
+    Bug-for-bug quirks preserved:
+      * 'video' tracking is dead in the Perl — variables exist but never
+        update, so the second timeout clause always fires when the gap
+        condition does.
+      * s_webevents is reset to 0 on session start but never incremented;
+        always 0 in INSERTs.
+      * The last in-flight session of week 3 is never flushed (loop ends
+        without an emit if state is still set).
+      * INSERT IGNORE on websessions, so duplicate ids are silently dropped.
+    """
+    import pymysql.cursors
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if month:
+        try:
+            y, m = month.split("-")
+            year = int(y); mon = int(m)
+        except Exception:
+            raise ValueError(
+                f"logfix-session: bad month {month!r}; expected YYYY-MM")
+    else:
+        now = datetime.now()
+        year, mon = now.year, now.month
+
+    # Build the 4 week ranges exactly as the Perl does (note the trailing
+    # week crosses month/year boundaries; we keep the same integer math).
+    weekbegin = [f"{year}-{mon}-1"]
+    weekend   = []
+    firstday    = 1
+    lastweekday = firstday + 7
+    weekend.append(f"{year}-{mon}-{lastweekday}")
+    cur_y, cur_m = year, mon
+    for i in range(1, 4):
+        firstday += 8
+        weekbegin.append(f"{cur_y}-{cur_m}-{firstday}")
+        if i < 3:
+            lastweekday = firstday + 7
+            weekend.append(f"{cur_y}-{cur_m}-{lastweekday}")
+        else:
+            if cur_m > 11:
+                cur_m = 1
+                cur_y += 1
+            else:
+                cur_m += 1
+            weekend.append(f"{cur_y}-{cur_m}-1")
+
+    log(f"[logfix-session] month={year:04d}-{mon:02d}")
+    for i in range(4):
+        log(f"  week {i}: {weekbegin[i]} .. {weekend[i]}")
+
+    if dry_run:
+        log("  [dry-run] not executing")
+        return 0
+
+    metrics_db = db_config().get('metrics_db', '')
+    if not metrics_db:
+        log("[logfix-session] missing metrics_db in access.cfg")
+        return 2
+
+    conn_read  = _open_db(metrics_db)
+    conn_write = _open_db(metrics_db)
+
+    total_sessions = 0
+    total_events   = 0
+    total_jobs     = 0
+
+    try:
+        with conn_write.cursor() as cur:
+            cur.execute("SELECT MAX(id) FROM websessions")
+            row = cur.fetchone()
+            s_id = int(row[0]) if row and row[0] else 0
+
+        for w in range(4):
+            select_sql = (
+                "SELECT id, datetime, content, ip, host, domain, "
+                "       UNIX_TIMESTAMP(datetime) "
+                "FROM web "
+                "WHERE datetime >= %s AND datetime < %s "
+                "  AND (sessionid = '0' OR sessionid IS NULL) "
+                "  AND (ip <> '' OR (host <> '' AND host <> '?' AND host IS NOT NULL)) "
+                "ORDER BY ip, host, datetime"
+            )
+
+            # Per-week state.  Perl uses lexical 'my $s_datetime ...' but its
+            # initial value carries across weeks within the same script run;
+            # the Perl resets s_datetime via the empty-string sentinel after
+            # each emit, so a fresh week with the sentinel set still works
+            # correctly.  We start each week with the sentinel set.
+            s_datetime       = None          # None = no active session
+            s_datetimeint    = 0
+            s_ip             = ""
+            s_host           = ""
+            s_domain         = ""
+            s_webevents      = 0
+            s_videoend       = 0
+            s_events         = []
+            prev_datetime    = None
+            prev_datetimeint = 0
+            week_sessions    = 0
+            week_events      = 0
+
+            cur_read = conn_read.cursor(pymysql.cursors.SSCursor)
+            try:
+                cur_read.execute(select_sql, (weekbegin[w], weekend[w]))
+                for row in cur_read:
+                    rid, dt, content, ip, host, domain, dtint = row
+                    ip     = ip or ""
+                    host   = host or ""
+                    domain = domain or ""
+                    dtint  = int(dtint) if dtint is not None else 0
+
+                    # End-of-session check.  Perl operator precedence:
+                    #   $s_datetime && ($s_ip && $s_ip ne $ip)
+                    #     || (!$s_ip && $s_host && $s_host ne $host)
+                    end_found = False
+                    if s_datetime is not None and (
+                        (s_ip and s_ip != ip)
+                        or (not s_ip and s_host and s_host != host)
+                    ):
+                        end_found = True
+                    elif (s_ip or s_host) \
+                         and (dtint - prev_datetimeint > _SESSION_INACTIVE_SECS) \
+                         and (dtint - s_videoend       > _SESSION_INACTIVE_SECS):
+                        end_found = True
+
+                    if end_found:
+                        if s_videoend > prev_datetimeint:
+                            prev_datetimeint = s_videoend
+                        s_duration = prev_datetimeint - s_datetimeint
+                        s_id += 1
+                        n_jobs = _iphost_jobs(
+                            conn_write, s_id, s_ip, s_host,
+                            s_datetime, prev_datetime)
+                        _emit_websession(
+                            conn_write, s_id, s_datetime,
+                            s_ip, s_host, s_duration, s_domain,
+                            n_jobs, s_webevents, s_events)
+                        week_sessions += 1
+                        week_events   += len(s_events)
+                        total_jobs    += n_jobs
+                        s_datetime = None
+
+                    if s_datetime is None:
+                        s_webevents  = 0
+                        s_videoend   = 0
+                        s_datetime   = dt
+                        s_datetimeint = dtint
+                        s_ip      = ""
+                        s_host    = ""
+                        s_domain  = ""
+                        s_events  = []
+
+                    if not s_ip and ip:
+                        s_ip = ip
+                    if not s_host and host:
+                        s_host = host
+                    if not s_domain and domain:
+                        s_domain = domain
+
+                    prev_datetime    = dt
+                    prev_datetimeint = dtint
+                    s_events.append(rid)
+            finally:
+                cur_read.close()
+
+            log(f"  week {w}: emitted {week_sessions} session(s), "
+                f"stamped {week_events} web event(s)")
+            total_sessions += week_sessions
+            total_events   += week_events
+
+        log(f"[logfix-session] total: {total_sessions} session(s), "
+            f"{total_events} web event(s), {total_jobs} toolstart job(s) linked")
+        return 0
+    finally:
+        conn_write.close()
+        conn_read.close()
+
+
+def cmd_logfix_session(args):
+    with log_open() as lf:
+        return do_logfix_session(args.month, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -4178,6 +4433,14 @@ def main():
              "(direct port of xlogfix_middleware_cpu.pl)")
     p_mc.add_argument("--dry-run", action="store_true",
         help="Show statements without executing")
+
+    p_ls = sub.add_parser("logfix-session",
+        help="Coalesce web rows into websessions in 4 fixed week windows "
+             "of the month (direct port of logfix_session.pl)")
+    p_ls.add_argument("month", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to process (default: current month)")
+    p_ls.add_argument("--dry-run", action="store_true",
+        help="Show the week boundaries; don't INSERT/UPDATE")
 
     p_gtl = sub.add_parser("gen-tool-toplists",
         help="Per-period ranked lists across all tools into hub.jos_stats_topvals "
@@ -4382,6 +4645,8 @@ def main():
         cmd_middleware_wall(args)
     elif args.command == "middleware-cpu":
         cmd_middleware_cpu(args)
+    elif args.command == "logfix-session":
+        cmd_logfix_session(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
