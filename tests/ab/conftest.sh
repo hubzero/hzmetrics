@@ -95,6 +95,11 @@ run_legacy_perl() {
     HZMETRICS_ACCESS_CFG="$ACCESS_CFG" perl "$LEGACY_DIR/$script" "$@"
 }
 
+run_legacy_sh() {
+    local script="$1"; shift
+    HZMETRICS_ACCESS_CFG="$ACCESS_CFG" bash "$LEGACY_DIR/$script" "$@"
+}
+
 # Run the new hzmetrics.py with the test access.cfg in scope.
 run_new() {
     HZMETRICS_ACCESS_CFG="$ACCESS_CFG" \
