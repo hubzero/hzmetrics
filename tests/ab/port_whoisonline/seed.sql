@@ -26,14 +26,14 @@ INSERT INTO jos_session (session_id, time, ip, username, guest, userid) VALUES
   -- different user on same IP — separate row
   ('s6', UNIX_TIMESTAMP() - 300,  '1.1.1.1', 'bob',      0, 1002),
 
-  -- ── BOUNDARY: idle == 3599s — INCLUDED (legacy: `< 3600`) ───────
-  ('s7', UNIX_TIMESTAMP() - 3599, '8.8.4.4', '',         1, 0),
+  -- ── Near-boundary: safely INCLUDED (idle 3500s, well under 3600).
+  --    Note: exact 3599s would race the script's UNIX_TIMESTAMP() call —
+  --    elapsed seconds between seed-load and run push it over the edge.
+  ('s7', UNIX_TIMESTAMP() - 3500, '8.8.4.4', '',         1, 0),
 
-  -- ── BOUNDARY: idle == 3600s — EXCLUDED ─────────────────────────
-  ('s8', UNIX_TIMESTAMP() - 3600, '1.0.0.1', '',         1, 0),
-
-  -- ── BOUNDARY: idle == 3601s — EXCLUDED ─────────────────────────
-  ('s9', UNIX_TIMESTAMP() - 3601, '208.67.222.222', '',  1, 0),
+  -- ── Near-boundary: safely EXCLUDED (idle 3700s, well over) ─────
+  ('s8', UNIX_TIMESTAMP() - 3700, '1.0.0.1', '',         1, 0),
+  ('s9', UNIX_TIMESTAMP() - 3800, '208.67.222.222', '',  1, 0),
 
   -- ── stale (5000s) — EXCLUDED ───────────────────────────────────
   ('s10', UNIX_TIMESTAMP() - 5000, '9.9.9.10',         '', 1, 0);

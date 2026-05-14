@@ -30,7 +30,7 @@ run_side() {
     mysql_test "$METRICS_DB" -BN -e "
         SELECT datetime, user, ip, tool, execunit, walltime, cputime
         FROM toolstart
-        ORDER BY datetime, user, ip
+        ORDER BY datetime, user, ip, walltime, cputime
     " > "$OUT/${label}_after_${METRIC}.tsv"
     echo "  wrote $OUT/${label}_after_${METRIC}.tsv"
 }
