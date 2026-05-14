@@ -1112,12 +1112,276 @@ def cmd_backfill_dnload(args):
 
 
 # ---------------------------------------------------------------------------
-# whoisonline  (real-time session geo map; normally called every 5 min)
+# whoisonline  (real-time session geo map; normally called every 5 min;
+#               ports xlogfix_whoisonline.php)
 # ---------------------------------------------------------------------------
 
+WHOISONLINE_IDLE_TIME = 3600    # seconds — matches PHP (the in-code comment
+                                # says "30 mins" but the actual value is 60).
+
+# Hardcoded force-list of bot/crawler domains, matched as host-suffix.
+# Verbatim from xlogfix_whoisonline.php's get_domain() — same order, same
+# values (the PHP author seemed to intend this as "domains that must
+# always collapse to this token regardless of subdomain depth").
+_WHOISONLINE_FORCE_DOMAINS = [
+    "brain.grub.org", "crawl.yahoo.net", "crawl8-public.alexa.com",
+    "hanta.yahoo.com", "idle.eidetica.com", "morgue1.corp.yahoo.com",
+    "msnbot.msn.com", "panchma.tivra.com", "tpiol.tpiol.com",
+    "xs4.kso.co.uk", "zeus.nj.nec.com", "punch.purdue.edu",
+    "san2.attens.net", "search.msn.com", "sac.overture.com",
+    "66.237.109.194.ptr.us.xo.net",
+    "67.108.223.130.ptr.us.xo.net",
+    "67.106.152.131.ptr.us.xo.net",
+]
+
+def _whoisonline_get_domain(ip, host):
+    """Variant of get_domain() used by whoisonline.  Differs from
+    xlogfix_domain.php's get_domain in three ways: returns '(unknown)'
+    instead of '?', treats ip==host (resolver returned no PTR / echoed
+    the IP) as '(unknown)', and checks the FORCE-list of bot domains
+    as a host-suffix match before the standard TLD-promotion logic."""
+    if not host or ip == host:
+        return '(unknown)'
+    for forced in _WHOISONLINE_FORCE_DOMAINS:
+        if host.endswith(forced):
+            return forced
+    result = get_domain(host)
+    return '(unknown)' if (not result or result == '?') else result
+
+def _whoisonline_checkforbot(conn, metrics_db, domain):
+    """Is `domain` listed in metrics.exclude_list with type='domain'?
+    Returns 1 or 0 (PHP int convention)."""
+    if not domain:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {metrics_db}.exclude_list "
+            f"WHERE filter = %s AND type = 'domain'",
+            (domain,))
+        return 1 if (cur.fetchone()[0] or 0) > 0 else 0
+
+def _whoisonline_get_count(conn, hub_db, db_prefix, domain, lat, lng):
+    """Build the per-(domain, location) info-segment string for the XML.
+    Mirrors get_count() in the PHP — same three COUNT queries
+    (users/guests/bots), same '_br_' separator codes."""
+    info = ''
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(DISTINCT username) FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE guest = 0 AND domain = %s "
+            f"AND ipLATITUDE = %s AND ipLONGITUDE = %s LIMIT 1",
+            (domain, lat, lng))
+        users = cur.fetchone()[0] or 0
+        if users:
+            info += f"_br_ - Users: {users}"
+
+        cur.execute(
+            f"SELECT COUNT(DISTINCT ip) FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE guest = 1 AND domain = %s AND bot = 0 "
+            f"AND ipLATITUDE = %s AND ipLONGITUDE = %s LIMIT 1",
+            (domain, lat, lng))
+        guests = cur.fetchone()[0] or 0
+        if guests:
+            info += f"_br_ - Guests: {guests}"
+
+        cur.execute(
+            f"SELECT COUNT(DISTINCT ip) FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE guest = 1 AND domain = %s AND bot = 1 "
+            f"AND ipLATITUDE = %s AND ipLONGITUDE = %s LIMIT 1",
+            (domain, lat, lng))
+        bots = cur.fetchone()[0] or 0
+        if bots:
+            info += f"_br_ - Bots: {bots}"
+    return info + "_br_" if info else "_br_"
+
+def _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng):
+    """Build the per-location info string: one segment per domain at
+    that lat/lng, each with user/guest/bot counts.  Mirrors get_hosts()."""
+    info = ''
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT(domain) FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE ipLATITUDE = %s AND ipLONGITUDE = %s",
+            (lat, lng))
+        domains = [r[0] for r in cur.fetchall()]
+    for d in domains:
+        info += "_b_" + (str(d) if d is not None else "")
+        info += "_bb_" + _whoisonline_get_count(conn, hub_db, db_prefix, d, lat, lng)
+    # PHP does rtrim($info, '_br_').  rtrim with a string arg in PHP
+    # strips any of the characters in the set — buggy here, but the
+    # effect is "strip trailing _br_-like characters", which we
+    # approximate as "strip a trailing _br_ if present".
+    while info.endswith('_br_'):
+        info = info[:-4]
+    return info
+
+def do_whoisonline(*, logfile=None, dry_run=False):
+    """Refresh hub.jos_session_geo from jos_session, resolve DNS / domain /
+    GeoIP for new IPs, and rewrite the whoisonline.xml file consumed by
+    the hub's Google Maps widget.  Direct port of xlogfix_whoisonline.php.
+    """
+    cfg = db_config()
+    hub_db    = cfg.get('hub_db', '')
+    db_prefix = cfg.get('db_prefix', 'jos_')
+    hub_dir   = cfg.get('hub_dir', '')
+    metrics_db = cfg.get('metrics_db', '')
+    if not hub_db or not hub_dir:
+        msg = "[whoisonline] missing hub_db / hub_dir in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    map_dir = Path(hub_dir) / "app/site/stats/maps"
+    if not map_dir.is_dir():
+        map_dir = Path(hub_dir) / "site/stats/maps"
+    xml_file = map_dir / "whoisonline.xml"
+    if not map_dir.is_dir():
+        msg = f"[whoisonline] map dir missing: {map_dir}"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if dry_run:
+        log(f"[whoisonline] dry-run: would update {hub_db}.{db_prefix}session_geo "
+            f"and write {xml_file}")
+        return 0
+
+    conn = _open_db()
+    try:
+        # 1. clear stale sessions
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE (UNIX_TIMESTAMP() - time) > %s",
+                (WHOISONLINE_IDLE_TIME,))
+
+        # 2. populate from jos_session
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT IGNORE INTO {hub_db}.{db_prefix}session_geo "
+                f"(ip, session_id, username, time, guest, userid) "
+                f"SELECT ip, session_id, username, time, guest, userid "
+                f"FROM {hub_db}.{db_prefix}session "
+                f"WHERE (UNIX_TIMESTAMP() - time) < %s "
+                f"GROUP BY ip, username",
+                (WHOISONLINE_IDLE_TIME,))
+
+        # 3. propagate known (host, domain) for IPs already resolved
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT ip, host, domain FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE host <> '' AND host <> '(unknown)'")
+            for ip, host, domain in cur.fetchall():
+                cur.execute(
+                    f"UPDATE {hub_db}.{db_prefix}session_geo "
+                    f"SET host = %s, domain = %s WHERE ip = %s",
+                    (host, domain, ip))
+
+        # 4. DNS lookup for unresolved IPs (batched via aiodns rather than
+        #    the PHP's per-IP fork/exec to `host`).
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT ip FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE (host = '' OR host IS NULL) AND ip <> ''")
+            unresolved = [r[0] for r in cur.fetchall()]
+
+        if unresolved:
+            log(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
+            import asyncio
+            try:
+                pairs = asyncio.run(_resolve_ips_async(
+                    unresolved,
+                    DNS_NAMESERVER,
+                    min(len(unresolved), DNS_CONCURRENCY),
+                    DNS_TIMEOUT))
+            except ImportError as e:
+                msg = (f"[whoisonline] aiodns unavailable ({e}); skipping DNS step")
+                log(msg)
+                pairs = [(ip, ip) for ip in unresolved]
+            with conn.cursor() as cur:
+                for ip, host in pairs:
+                    host = host if host and host != '?' else ip
+                    domain = _whoisonline_get_domain(ip, host)
+                    cur.execute(
+                        f"UPDATE {hub_db}.{db_prefix}session_geo "
+                        f"SET host = %s, domain = %s WHERE ip = %s",
+                        (host, domain, ip))
+
+        # 5. GeoIP for sessions without ipLATITUDE
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT(ip), domain, bot "
+                f"FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE ipLATITUDE IS NULL")
+            geo_targets = list(cur.fetchall())
+
+        if geo_targets:
+            log(f"[whoisonline] geo lookups for {len(geo_targets)} IP(s)")
+        for n_ip, domain, bot in geo_targets:
+            if not bot:
+                bot = _whoisonline_checkforbot(conn, metrics_db, domain)
+            data = _get_ip_geodata(conn, n_ip)
+            if not data:
+                continue
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {hub_db}.{db_prefix}session_geo "
+                    f"SET countrySHORT=%s, countryLONG=%s, ipREGION=%s, "
+                    f"ipCITY=%s, ipLATITUDE=%s, ipLONGITUDE=%s, bot=%s "
+                    f"WHERE ip = %s",
+                    (data['countrySHORT'], data['countryLONG'],
+                     data['ipREGION'], data['ipCITY'],
+                     data['ipLATITUDE'], data['ipLONGITUDE'],
+                     bot, n_ip))
+
+        # 6. Write the XML for Google Maps consumption
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT ipLATITUDE, ipLONGITUDE, ipCITY, ipREGION, countrySHORT "
+                f"FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE ipLATITUDE <> '' "
+                f"GROUP BY ipLATITUDE, ipLONGITUDE")
+            locations = list(cur.fetchall())
+
+        xml_lines = ["<markers>"]
+        for lat, lng, city, region, country in locations:
+            city_str = f"_b_{city}, {region}, {country}_bb_"
+            info = _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng)
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT bot FROM {hub_db}.{db_prefix}session_geo "
+                    f"WHERE ipLATITUDE = %s AND ipLONGITUDE = %s "
+                    f"ORDER BY bot DESC LIMIT 1",
+                    (lat, lng))
+                row = cur.fetchone()
+                bot = (row[0] if row else 0) or 0
+            xml_lines.append(
+                f'<marker lat="{lat}" lng="{lng}" '
+                f'info = "{city_str}_hr_{info}" bot = "{bot}"/>'
+            )
+        xml_lines.append("</markers>")
+        xml_file.write_text("\n".join(xml_lines) + "\n")
+        log(f"[whoisonline] wrote {xml_file} ({len(locations)} marker(s))")
+
+        # 7. Final stale-session cleanup (PHP runs clear_stale_sessions twice)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE (UNIX_TIMESTAMP() - time) > %s",
+                (WHOISONLINE_IDLE_TIME,))
+
+        return 0
+    finally:
+        conn.close()
+
+
 def cmd_whoisonline(args):
-    with log_open() as logfile:
-        run([METRICS / "xlogfix_whoisonline.php"], logfile, args.dry_run)
+    with log_open() as lf:
+        return do_whoisonline(logfile=lf, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1131,7 +1395,7 @@ def cmd_tick(args):
     at_metrics_tick = (datetime.now().minute == 30)
 
     # Always update the who-is-online map — fast, no lock needed.
-    run([METRICS / "xlogfix_whoisonline.php"], logfile=None, dry_run=args.dry_run)
+    do_whoisonline(logfile=None, dry_run=args.dry_run)
 
     # At :30 past each hour, attempt a full metrics run.
     # cmd_run acquires its own lock, so concurrent ticks fast-exit there.
