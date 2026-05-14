@@ -34,21 +34,58 @@ Usage:
 """
 
 import argparse
+import gzip
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-METRICS     = Path("/opt/hubzero/bin/metrics")
-HTTPD_DAILY = Path("/var/log/httpd/daily")
-HZ_DAILY    = Path("/var/log/hubzero/daily")
-LOG         = Path("/var/log/hubzero/metrics/manage.log")
+
+def _pipeline_paths():
+    """Detect site name and APACHELOGDIR from /etc/hubzero.conf and the
+    presence of /etc/apache2 vs /etc/httpd.  Falls back to safe defaults
+    so the module still imports outside a deployed hub host."""
+    site = "hub"
+    try:
+        with open("/etc/hubzero.conf") as f:
+            for line in f:
+                m = re.match(r"\s*site\s*=\s*(\S+)", line)
+                if m:
+                    site = m.group(1).strip()
+                    break
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+    if Path("/etc/apache2").is_dir():
+        apache_log_dir = Path("/var/log/apache2")
+    else:
+        apache_log_dir = Path("/var/log/httpd")
+    return {
+        "site":            site,
+        "apache_log_dir": apache_log_dir,
+        "cms_log_dir":    Path("/var/log/hubzero"),
+        "metrics_log_dir": Path("/var/log/hubzero/metrics"),
+    }
+
+
+_PIPELINE_PATHS    = _pipeline_paths()
+SITE               = _PIPELINE_PATHS["site"]
+APACHE_LOG_DIR     = _PIPELINE_PATHS["apache_log_dir"]
+CMS_LOG_DIR        = _PIPELINE_PATHS["cms_log_dir"]
+HTTPD_DAILY        = APACHE_LOG_DIR / "daily"
+HZ_DAILY           = CMS_LOG_DIR / "daily"
+HTTPD_IMPORTED     = APACHE_LOG_DIR / "imported"
+HZ_IMPORTED        = CMS_LOG_DIR / "imported"
+HZ_METRICS_STAGING = _PIPELINE_PATHS["metrics_log_dir"]
+STAGED_APACHE      = HZ_METRICS_STAGING / "_hub_apache.log"
+STAGED_AUTH        = HZ_METRICS_STAGING / "_hub_auth.log"
+
+LOG         = HZ_METRICS_STAGING / "manage.log"
 LOCK_FILE   = Path("/var/run/hzmetrics/hzmetrics.pid")
 STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
-SITE        = ""
 
 
 # ---------------------------------------------------------------------------
@@ -750,20 +787,188 @@ IPCOUNTRY_TABLES = [
 # pipeline steps
 # ---------------------------------------------------------------------------
 
-def do_import_day(date_str, logfile, dry_run=False):
+def _stream_decompress(src_path, out_fileobj):
+    """zcat -f equivalent — copy bytes from src_path to out_fileobj,
+    decompressing gzip on the fly.  1 MiB chunks."""
+    opener = gzip.open if src_path.suffix == ".gz" else open
+    with opener(src_path, "rb") as src:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            out_fileobj.write(chunk)
+
+
+def _gzip_in_place(path):
+    """gzip --quiet equivalent.  Writes path.gz, preserves mtime, removes
+    the original.  Returns the new .gz path."""
+    gz = path.with_name(path.name + ".gz")
+    with open(path, "rb") as src, gzip.open(gz, "wb") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+    shutil.copystat(path, gz)
+    path.unlink()
+    return gz
+
+
+def _numbered_backup_dst(dst):
+    """Pick the first non-conflicting name in the form dst.~N~ —
+    matches `mv --backup=numbered`."""
+    if not dst.exists():
+        return dst
+    n = 1
+    while True:
+        candidate = dst.with_name(f"{dst.name}.~{n}~")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def do_fetch_logs(date_filter=None, *, logfile=None, dry_run=False):
+    """Concatenate dated daily logs into the metrics staging files.
+
+    Port of import/__fetch_apache_and_auth_log.sh.  With date_filter=None
+    we glob all files in daily/; with date_filter='YYYYMMDD' we keep
+    only files whose name contains that substring (catch-up mode).
+    """
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if date_filter:
+        apache_pat  = f"{SITE}-access*log*{date_filter}*"
+        cmsauth_pat = f"cmsauth*log*{date_filter}*"
+    else:
+        apache_pat  = f"{SITE}-access*log*"
+        cmsauth_pat = "cmsauth*log*"
+
+    apache_files  = sorted(HTTPD_DAILY.glob(apache_pat))
+    cmsauth_files = sorted(HZ_DAILY.glob(cmsauth_pat))
+
+    log(f"[fetch-logs] {HTTPD_DAILY}/{apache_pat}: {len(apache_files)} file(s)")
+    log(f"[fetch-logs] {HZ_DAILY}/{cmsauth_pat}: {len(cmsauth_files)} file(s)")
+
     if dry_run:
-        # show the actual files that would be fetched
-        access = sorted(HTTPD_DAILY.glob(f"{SITE}-access*log*{date_str}*"))
-        cmsauth = sorted(HZ_DAILY.glob(f"cmsauth*log*{date_str}*"))
+        for f in apache_files + cmsauth_files:
+            log(f"  [dry-run] would zcat: {f}")
+        return 0
+
+    HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
+
+    if apache_files:
+        with open(STAGED_APACHE, "wb") as out:
+            for f in apache_files:
+                _stream_decompress(f, out)
+        log(f"  -> {STAGED_APACHE}")
+    if cmsauth_files:
+        with open(STAGED_AUTH, "wb") as out:
+            for f in cmsauth_files:
+                _stream_decompress(f, out)
+        log(f"  -> {STAGED_AUTH}")
+    return 0
+
+
+def do_archive_logs(date_filter=None, *, logfile=None, dry_run=False):
+    """gzip each daily log in place and move it to imported/.
+
+    Port of import/__archive_apache_and_auth_log.sh.  Handles four globs:
+    {site}-access*, new-{site}-access*, cmsauth*, cmsdebug*.
+    """
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    def pat(base):
+        return f"{base}{date_filter}*" if date_filter else base
+
+    groups = [
+        (HTTPD_DAILY, HTTPD_IMPORTED, pat(f"{SITE}-access*log*")),
+        (HTTPD_DAILY, HTTPD_IMPORTED, pat(f"new-{SITE}-access*log*")),
+        (HZ_DAILY,    HZ_IMPORTED,    pat("cmsauth*log*")),
+        (HZ_DAILY,    HZ_IMPORTED,    pat("cmsdebug*log*")),
+    ]
+    for src_dir, dst_dir, p in groups:
+        files = sorted(src_dir.glob(p))
+        if not files:
+            continue
+        log(f"[archive-logs] {src_dir}/{p}: {len(files)} file(s)")
+        if dry_run:
+            for f in files:
+                log(f"  [dry-run] would gzip+move: {f} -> {dst_dir}/")
+            continue
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            gz = f if f.suffix == ".gz" else _gzip_in_place(f)
+            dst = _numbered_backup_dst(dst_dir / gz.name)
+            shutil.move(str(gz), str(dst))
+            log(f"  archived: {f.name} -> {dst}")
+    return 0
+
+
+def do_import_staged_logs(*, logfile=None, dry_run=False):
+    """Run the import-* stages against the staged log files, then move
+    each staged file to _prev_*.log.  Port of
+    import/__import_apache_and_auth_log.sh.
+    """
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    if not dry_run:
+        HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
+
+    if STAGED_APACHE.exists():
+        log(f"[import-staged] {STAGED_APACHE}")
+        do_import_webhits(str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
+        do_identify_bots( str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
+        do_import_apache( str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
+        if not dry_run:
+            prev = HZ_METRICS_STAGING / "_prev_hub_apache.log"
+            STAGED_APACHE.replace(prev)
+            log(f"  -> {prev}")
+    else:
+        log(f"[import-staged] {STAGED_APACHE}: not present, skipping")
+
+    if STAGED_AUTH.exists():
+        log(f"[import-staged] {STAGED_AUTH}")
+        do_import_auth(str(STAGED_AUTH), logfile=logfile, dry_run=dry_run)
+        if not dry_run:
+            prev = HZ_METRICS_STAGING / "_prev_hub_auth.log"
+            STAGED_AUTH.replace(prev)
+            log(f"  -> {prev}")
+    else:
+        log(f"[import-staged] {STAGED_AUTH}: not present, skipping")
+    return 0
+
+
+def do_import_day(date_str, logfile, dry_run=False):
+    """Fetch, import, then archive logs for a single day.  date_str is
+    'YYYYMMDD'."""
+    if dry_run:
+        access  = sorted(HTTPD_DAILY.glob(f"{SITE}-access*log*{date_str}*"))
+        cmsauth = sorted(HZ_DAILY.glob(   f"cmsauth*log*{date_str}*"))
         for f in access + cmsauth:
             print(f"    [dry-run] would fetch: {f}")
         if not access:
             print(f"    [dry-run] WARNING: no access log found for {date_str} in {HTTPD_DAILY}")
         if not cmsauth:
             print(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in {HZ_DAILY}")
-    run([METRICS / "import" / "__fetch_apache_and_auth_log.sh",   date_str], logfile, dry_run)
-    run([METRICS / "import" / "__import_apache_and_auth_log.sh"],            logfile, dry_run)
-    run([METRICS / "import" / "__archive_apache_and_auth_log.sh", date_str], logfile, dry_run)
+    do_fetch_logs(       date_str, logfile=logfile, dry_run=dry_run)
+    do_import_staged_logs(         logfile=logfile, dry_run=dry_run)
+    do_archive_logs(     date_str, logfile=logfile, dry_run=dry_run)
+
+
+def cmd_fetch_logs(args):
+    with log_open() as lf:
+        return do_fetch_logs(args.date or None, logfile=lf, dry_run=args.dry_run)
+
+
+def cmd_archive_logs(args):
+    with log_open() as lf:
+        return do_archive_logs(args.date or None, logfile=lf, dry_run=args.dry_run)
 
 def _stage_banner(name, logfile):
     """Mark a pipeline stage boundary in stdout + logfile."""
@@ -5373,6 +5578,24 @@ def main():
     p_ls.add_argument("--dry-run", action="store_true",
         help="Show the week boundaries; don't INSERT/UPDATE")
 
+    p_fl = sub.add_parser("fetch-logs",
+        help="Concatenate daily apache/cmsauth logs into staging files "
+             "(port of __fetch_apache_and_auth_log.sh)")
+    p_fl.add_argument("date", nargs="?", default=None, metavar="YYYYMMDD",
+        help="Only fetch files whose name contains this substring "
+             "(default: every file in daily/)")
+    p_fl.add_argument("--dry-run", action="store_true",
+        help="List matched files; don't read/write anything")
+
+    p_al = sub.add_parser("archive-logs",
+        help="gzip daily logs in place and move them to imported/ "
+             "(port of __archive_apache_and_auth_log.sh)")
+    p_al.add_argument("date", nargs="?", default=None, metavar="YYYYMMDD",
+        help="Only archive files whose name contains this substring "
+             "(default: every file in daily/)")
+    p_al.add_argument("--dry-run", action="store_true",
+        help="List matched files; don't gzip/move anything")
+
     p_sm = sub.add_parser("summarize-month",
         help="Compute the per-period summary_*_vals tables for a month "
              "(port of xlogfix_summary.php)")
@@ -5595,6 +5818,10 @@ def main():
         cmd_logfix_session(args)
     elif args.command == "summarize-month":
         cmd_summarize_month(args)
+    elif args.command == "fetch-logs":
+        cmd_fetch_logs(args)
+    elif args.command == "archive-logs":
+        cmd_archive_logs(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
