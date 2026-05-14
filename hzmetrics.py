@@ -24,6 +24,7 @@ Usage:
   hzmetrics.py import-apache <file>    (file may be '-' for stdin)
   hzmetrics.py andmore-usage [YYYY-MM]
   hzmetrics.py fill-ipcountry {metrics|hub} <table> [DATE_OR_RANGE]
+  hzmetrics.py gen-tool-stats [YYYY-MM]
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
 """
@@ -3066,6 +3067,265 @@ def cmd_fill_ipcountry(args):
         )
 
 
+# ---------------------------------------------------------------------------
+# gen-tool-stats  (per-tool resource_stats_tools + resource_stats;
+#                  direct port of gen_tool_stats.php)
+# ---------------------------------------------------------------------------
+
+GEN_TOOL_STATS_PERIODS = (0, 1, 3, 12, 13, 14)
+
+def _get_tool_versions_aliases(cur, hub_db, db_prefix, alias):
+    """Build the list of acceptable appname values for matching a tool's
+    sessions: starts with the alias itself, then adds every distinct
+    instance from jos_tool_version where toolname=alias (excluding _dev
+    instances).  Ports get_tool_versions_aliases() in func_misc.php."""
+    out = [alias]
+    cur.execute(
+        f"SELECT DISTINCT instance FROM {hub_db}.{db_prefix}tool_version "
+        f"WHERE toolname = %s AND instance NOT LIKE %s",
+        (alias, '%\\_dev'),
+    )
+    for (inst,) in cur.fetchall():
+        if inst:
+            out.append(inst)
+    return out
+
+def _compute_tool_stats(cur, hub_db, aliases, dstart, dstop):
+    """Aggregate sessionlog+joblog metrics for an alias set in a date range.
+    Returns a dict matching the columns in resource_stats_tools."""
+    stats = {k: 0 for k in (
+        'users', 'sessions', 'simulations', 'jobs',
+        'avg_wall', 'tot_wall', 'avg_cpu', 'tot_cpu',
+        'avg_view', 'tot_view', 'avg_wait', 'tot_wait',
+        'avg_cpus', 'tot_cpus',
+    )}
+    placeholders = ",".join(["%s"] * len(aliases))
+    base_args = tuple(aliases) + (dstart, dstop)
+
+    # users
+    cur.execute(
+        f"SELECT COUNT(DISTINCT username) FROM {hub_db}.sessionlog "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s",
+        base_args)
+    stats['users'] = cur.fetchone()[0] or 0
+    if not stats['users']:
+        return stats   # PHP bails here too — all the rest stay 0
+
+    # jobs (job > 0, event != '[waiting]')
+    cur.execute(
+        f"SELECT COUNT(*) FROM {hub_db}.joblog AS j, {hub_db}.sessionlog AS s "
+        f"WHERE s.sessnum = j.sessnum AND s.appname IN ({placeholders}) "
+        f"AND s.start > %s AND s.start < %s "
+        f"AND j.event <> '[waiting]' AND j.job > 0",
+        base_args)
+    stats['jobs'] = cur.fetchone()[0] or 0
+
+    # sessions
+    cur.execute(
+        f"SELECT COUNT(*) FROM {hub_db}.sessionlog "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s",
+        base_args)
+    stats['sessions'] = cur.fetchone()[0] or 0
+
+    # simulations (event != 'application', superjob = 0)
+    cur.execute(
+        f"SELECT COUNT(*) FROM {hub_db}.sessionlog AS s, {hub_db}.joblog AS j "
+        f"WHERE s.sessnum = j.sessnum AND s.appname IN ({placeholders}) "
+        f"AND s.start > %s AND s.start < %s "
+        f"AND j.event <> 'application' AND j.superjob = 0",
+        base_args)
+    stats['simulations'] = cur.fetchone()[0] or 0
+
+    sims = stats['simulations']
+
+    # walltime
+    cur.execute(
+        f"SELECT COALESCE(SUM(walltime), 0) FROM {hub_db}.sessionlog "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s",
+        base_args)
+    stats['tot_wall'] = float(cur.fetchone()[0] or 0)
+    if stats['tot_wall'] and sims:
+        stats['avg_wall'] = stats['tot_wall'] / sims
+
+    # cputime (job > 0, event != '[waiting]')
+    cur.execute(
+        f"SELECT COALESCE(SUM(j.cputime), 0) FROM {hub_db}.joblog AS j, "
+        f"{hub_db}.sessionlog AS s WHERE s.sessnum = j.sessnum "
+        f"AND s.appname IN ({placeholders}) "
+        f"AND s.start > %s AND s.start < %s "
+        f"AND j.event <> '[waiting]' AND j.job > 0",
+        base_args)
+    stats['tot_cpu'] = float(cur.fetchone()[0] or 0)
+    if stats['tot_cpu'] and sims:
+        stats['avg_cpu'] = stats['tot_cpu'] / sims
+
+    # viewtime
+    cur.execute(
+        f"SELECT COALESCE(SUM(viewtime), 0) FROM {hub_db}.sessionlog "
+        f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s",
+        base_args)
+    stats['tot_view'] = float(cur.fetchone()[0] or 0)
+    if stats['tot_view'] and sims:
+        stats['avg_view'] = stats['tot_view'] / sims
+
+    # waittime (event == '[waiting]', job > 0)
+    cur.execute(
+        f"SELECT COALESCE(SUM(j.walltime), 0) FROM {hub_db}.joblog AS j, "
+        f"{hub_db}.sessionlog AS s WHERE s.sessnum = j.sessnum "
+        f"AND s.appname IN ({placeholders}) "
+        f"AND s.start > %s AND s.start < %s "
+        f"AND j.event = '[waiting]' AND j.job > 0",
+        base_args)
+    stats['tot_wait'] = float(cur.fetchone()[0] or 0)
+    if stats['tot_wait'] and sims:
+        stats['avg_wait'] = stats['tot_wait'] / sims
+
+    # ncpus
+    cur.execute(
+        f"SELECT SUM(j.ncpus) FROM {hub_db}.sessionlog AS s, "
+        f"{hub_db}.joblog AS j WHERE s.sessnum = j.sessnum "
+        f"AND s.appname IN ({placeholders}) "
+        f"AND s.start > %s AND s.start < %s",
+        base_args)
+    stats['tot_cpus'] = int(cur.fetchone()[0] or 0)
+    if stats['tot_cpus'] and sims:
+        stats['avg_cpus'] = round(stats['tot_cpus'] / sims)
+
+    return stats
+
+def _upsert_tool_stats_row(cur, hub_db, db_prefix, resid, stats, dthis, period, existing_id):
+    if existing_id is None:
+        cur.execute(
+            f"INSERT INTO {hub_db}.{db_prefix}resource_stats_tools "
+            f"(resid, restype, users, sessions, simulations, jobs, "
+            f"avg_wall, tot_wall, avg_cpu, tot_cpu, avg_view, tot_view, "
+            f"avg_wait, tot_wait, avg_cpus, tot_cpus, datetime, period, processed_on) "
+            f"VALUES (%s, '7', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+            (resid, stats['users'], stats['sessions'], stats['simulations'],
+             stats['jobs'], stats['avg_wall'], stats['tot_wall'],
+             stats['avg_cpu'], stats['tot_cpu'], stats['avg_view'],
+             stats['tot_view'], stats['avg_wait'], stats['tot_wait'],
+             stats['avg_cpus'], stats['tot_cpus'], dthis, period))
+    else:
+        cur.execute(
+            f"UPDATE {hub_db}.{db_prefix}resource_stats_tools "
+            f"SET users=%s, sessions=%s, simulations=%s, jobs=%s, "
+            f"avg_wall=%s, tot_wall=%s, avg_cpu=%s, tot_cpu=%s, "
+            f"avg_view=%s, tot_view=%s, avg_wait=%s, tot_wait=%s, "
+            f"avg_cpus=%s, tot_cpus=%s, processed_on=NOW() "
+            f"WHERE id = %s",
+            (stats['users'], stats['sessions'], stats['simulations'],
+             stats['jobs'], stats['avg_wall'], stats['tot_wall'],
+             stats['avg_cpu'], stats['tot_cpu'], stats['avg_view'],
+             stats['tot_view'], stats['avg_wait'], stats['tot_wait'],
+             stats['avg_cpus'], stats['tot_cpus'], existing_id))
+
+def _propagate_to_resource_stats(cur, hub_db, db_prefix, dthis, period, resid):
+    """Mirror the PHP's update_stats() — copy the (resid, restype, users,
+    jobs, avg_wall, tot_wall, avg_cpu, tot_cpu) subset from
+    resource_stats_tools into resource_stats."""
+    cur.execute(
+        f"SELECT id FROM {hub_db}.{db_prefix}resource_stats "
+        f"WHERE restype = '7' AND datetime = %s AND period = %s AND resid = %s",
+        (dthis, period, resid))
+    existing = cur.fetchone()
+    existing_id = existing[0] if existing else None
+
+    cur.execute(
+        f"SELECT resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu "
+        f"FROM {hub_db}.{db_prefix}resource_stats_tools "
+        f"WHERE datetime = %s AND period = %s AND resid = %s",
+        (dthis, period, resid))
+    rows = cur.fetchall()
+    for row in rows:
+        if existing_id is None:
+            cur.execute(
+                f"INSERT INTO {hub_db}.{db_prefix}resource_stats "
+                f"(resid, restype, users, jobs, avg_wall, tot_wall, avg_cpu, tot_cpu, "
+                f"datetime, period, processed_on) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                tuple(row) + (dthis, period))
+        else:
+            cur.execute(
+                f"UPDATE {hub_db}.{db_prefix}resource_stats "
+                f"SET resid=%s, restype=%s, users=%s, jobs=%s, "
+                f"avg_wall=%s, tot_wall=%s, avg_cpu=%s, tot_cpu=%s, "
+                f"processed_on=NOW() WHERE id = %s",
+                tuple(row) + (existing_id,))
+
+def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
+    """For each tool resource (jos_resources.type=7), aggregate session and
+    job metrics across the standard period codes and UPSERT into
+    hub.<prefix>resource_stats_tools, then propagate the subset to
+    hub.<prefix>resource_stats.  Direct port of gen_tool_stats.php.
+    """
+    cfg = db_config()
+    hub_db    = cfg.get('hub_db', '')
+    db_prefix = cfg.get('db_prefix', 'jos_')
+    if not hub_db:
+        msg = "[gen-tool-stats] missing hub_db in access.cfg"
+        print(msg, flush=True)
+        if logfile: logfile.write(msg + "\n")
+        return 2
+
+    if yearmonth:
+        ym = yearmonth[:7]   # accept YYYY-MM or YYYY-MM-DD
+    else:
+        today = date.today()
+        ym = f"{today.year:04d}-{today.month:02d}"
+    dthis = f"{ym}-00 00:00:00"   # matches PHP get_dates()['dthis']
+
+    def log(s):
+        print(s, flush=True)
+        if logfile: logfile.write(s + "\n")
+
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT id, alias FROM {hub_db}.{db_prefix}resources "
+                f"WHERE type = '7' AND alias <> '' ORDER BY title"
+            )
+            tools = list(cur.fetchall())
+            log(f"[gen-tool-stats] {len(tools)} tool resource(s); month {ym}")
+
+            for resid, alias in tools:
+                aliases = _get_tool_versions_aliases(cur, hub_db, db_prefix, alias)
+                if not aliases:
+                    continue
+
+                for period in GEN_TOOL_STATS_PERIODS:
+                    dstart, dstop = period_dates(ym, period)
+
+                    cur.execute(
+                        f"SELECT id FROM {hub_db}.{db_prefix}resource_stats_tools "
+                        f"WHERE restype = '7' AND datetime = %s AND resid = %s AND period = %s",
+                        (dthis, resid, period))
+                    existing = cur.fetchone()
+                    existing_id = existing[0] if existing else None
+
+                    stats = _compute_tool_stats(cur, hub_db, aliases, dstart, dstop)
+
+                    if dry_run:
+                        log(f"  [dry-run] resid={resid} alias={alias!r} period={period} "
+                            f"window={dstart}..{dstop} users={stats['users']} "
+                            f"sims={stats['simulations']} jobs={stats['jobs']}")
+                        continue
+
+                    _upsert_tool_stats_row(cur, hub_db, db_prefix,
+                                           resid, stats, dthis, period, existing_id)
+                    _propagate_to_resource_stats(cur, hub_db, db_prefix,
+                                                 dthis, period, resid)
+        log(f"[gen-tool-stats] done")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_gen_tool_stats(args):
+    with log_open() as lf:
+        return do_gen_tool_stats(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+
+
 def cmd_resolve_dns(args):
     with log_open() as lf:
         return do_resolve_dns(
@@ -3249,6 +3509,14 @@ def main():
     p_iauth.add_argument("--dry-run", action="store_true",
         help="Parse and report counts, but don't INSERT")
 
+    p_gts = sub.add_parser("gen-tool-stats",
+        help="Per-tool session/job aggregates into hub.jos_resource_stats_tools "
+             "and resource_stats (ports gen_tool_stats.php)")
+    p_gts.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
+        help="Month to score (default: current month)")
+    p_gts.add_argument("--dry-run", action="store_true",
+        help="Report computed counts without UPSERT")
+
     p_ic = sub.add_parser("fill-ipcountry",
         help="Look up ipcountry for unresolved rows and bulk-update target table "
              "(direct port of xlogfix_ipcountry.php)")
@@ -3418,6 +3686,8 @@ def main():
         cmd_andmore_usage(args)
     elif args.command == "fill-ipcountry":
         cmd_fill_ipcountry(args)
+    elif args.command == "gen-tool-stats":
+        cmd_gen_tool_stats(args)
     elif args.command == "clean-bots":
         cmd_clean_bots(args)
     elif args.command == "resolve-dns":
