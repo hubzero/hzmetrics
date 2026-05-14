@@ -1,0 +1,3 @@
+# Per-test working dirs — populated at run time, never checked in.
+_out/
+_out_*/
