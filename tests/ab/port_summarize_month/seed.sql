@@ -100,7 +100,21 @@ INSERT INTO toolstart (datetime, success, user, ip, tool, walltime, cputime,
   -- alice 2nd sim — repeat user
   ('2025-07-20 08:00:00', 1, 'alice', '1.1.1.1', 'aspectnotebook',  300, 200,  'US', 'US', 'university'),
   -- cross-month rows for period 12/14
-  ('2024-12-15 08:00:00', 1, 'alice', '1.1.1.1', 'aspectnotebook', 1000, 500,  'US', 'US', 'university');
+  ('2024-12-15 08:00:00', 1, 'alice', '1.1.1.1', 'aspectnotebook', 1000, 500,  'US', 'US', 'university'),
+  -- Power user: 12 sims in July — exercises the "Repeat Users with >= 10
+  -- Simulation Jobs" branch (sim_usage rowid=9).
+  ('2025-07-02 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-03 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-04 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-05 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-06 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-07 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-08 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-09 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-10 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-11 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-12 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university'),
+  ('2025-07-13 08:00:00', 1, 'iris',  '20.0.0.1', 'aspectnotebook', 50, 25, 'IN', 'IN', 'university');
 
 -- web rows: dnload=1 (downloads) for dl_users path
 INSERT INTO web (datetime, ip, content, host, domain, dnload, sessionid) VALUES
@@ -111,23 +125,37 @@ INSERT INTO web (datetime, ip, content, host, domain, dnload, sessionid) VALUES
   -- another downloader for variety across countries
   ('2025-07-19 10:00:00', '7.7.7.1', '/resources/789/download/c.nc',  'guest5.example.cn',  'example.cn',  1, 104);
 
+-- websessions use domains drawn from the reference domainclass table so
+-- the int_users / dl_users GROUP BY produces non-zero counts for each of
+-- the org-class buckets (Edu/Industry/Government/Other):
+--   class=1 (Edu)      aamu.edu
+--   class=2 (Industry) ericsson.ca
+--   class=3 (Gov)      cnea.gov.ar
+--   class=6 (Other)    hhpublications.com
 INSERT INTO websessions (id, datetime, ip, host, duration, domain, jobs, webevents, ipcountry) VALUES
-  -- registered alice interactive — IP in login_ips, excluded from int_users
-  (100, '2025-07-10 08:00:00', '1.1.1.1', 'alice.example.com',  1500, 'example.com', 0, 8, 'US'),
-  -- unregistered interactive long (US)
-  (101, '2025-07-10 08:00:00', '3.3.3.1', 'guest1.example.com', 1500, 'example.com', 0, 6, 'US'),
-  -- unregistered download GB
-  (102, '2025-07-12 11:00:00', '4.4.4.1', 'guest2.example.org',  100, 'example.org', 0, 1, 'GB'),
-  -- unregistered download US
-  (103, '2025-07-15 14:00:00', '5.5.5.1', 'guest3.example.com',   50, 'example.com', 0, 1, 'US'),
-  -- short visit FR
-  (104, '2025-07-18 16:00:00', '6.6.6.1', 'guest4.example.com',  200, 'example.com', 0, 1, 'FR'),
-  -- unregistered download CN
-  (105, '2025-07-19 10:00:00', '7.7.7.1', 'guest5.example.cn',    80, 'example.cn',  0, 1, 'CN'),
-  -- BR session (OTHER continent)
-  (106, '2025-07-21 12:00:00', '9.0.0.1', 'guest6.example.br',  1200, 'example.br',  0, 4, 'BR'),
-  -- session with jobs > 0 — counted in different buckets
-  (107, '2025-07-22 14:00:00', '1.0.0.1', 'guest7.example.io',  2000, 'example.io',  3, 5, 'AU');
+  -- registered alice interactive — IP in login_ips, excluded from rowid=7
+  (100, '2025-07-10 08:00:00', '1.1.1.1', 'alice.aamu.edu',     1500, 'aamu.edu',           0, 8, 'US'),
+  -- unregistered interactive long, EDU domain → class=1
+  (101, '2025-07-10 08:00:00', '3.3.3.1', 'guest1.aamu.edu',    1500, 'aamu.edu',           0, 6, 'US'),
+  -- unregistered download, INDUSTRY → class=2
+  (102, '2025-07-12 11:00:00', '4.4.4.1', 'guest2.ericsson.ca', 100,  'ericsson.ca',        0, 1, 'GB'),
+  -- unregistered download, US edu (different inst from 101 — separate count) → class=1
+  (103, '2025-07-15 14:00:00', '5.5.5.1', 'guest3.a-star.edu.sg', 50, 'a-star.edu.sg',      0, 1, 'US'),
+  -- short visit, GOV → class=3
+  (104, '2025-07-18 16:00:00', '6.6.6.1', 'guest4.cnea.gov.ar',  200, 'cnea.gov.ar',        0, 1, 'FR'),
+  -- unregistered download, EDU CN → class=1
+  (105, '2025-07-19 10:00:00', '7.7.7.1', 'guest5.aamu.edu',     80,  'aamu.edu',           0, 1, 'CN'),
+  -- BR session, OTHER → class=6
+  (106, '2025-07-21 12:00:00', '9.0.0.1', 'guest6.hhpublications.com', 1200, 'hhpublications.com', 0, 4, 'BR'),
+  -- session with jobs > 0, INDUSTRY → class=2
+  (107, '2025-07-22 14:00:00', '1.0.0.1', 'guest7.ericsson.ca', 2000, 'ericsson.ca',        3, 5, 'AU'),
+  -- Additional unregistered LONG-duration interactive sessions (jobs=0,
+  -- duration>=900) to populate every Edu/Industry/Gov bucket in rowid=7
+  -- cols 8/9/10.  These IPs are NOT in login_ips_tmp (no userlogin rows).
+  (108, '2025-07-23 08:00:00', '30.0.0.1', 'guest8.aamu.edu',         1100, 'aamu.edu',     0, 4, 'US'),  -- class=1 Edu (in addition to 101)
+  (109, '2025-07-23 09:00:00', '30.0.0.2', 'guest9.ericsson.ca',      1500, 'ericsson.ca',  0, 4, 'GB'),  -- class=2 Industry
+  (110, '2025-07-23 10:00:00', '30.0.0.3', 'guest10.cnea.gov.ar',     1300, 'cnea.gov.ar',  0, 5, 'AR'),  -- class=3 Government
+  (111, '2025-07-23 11:00:00', '30.0.0.4', 'guest11.hhpublications.com', 950, 'hhpublications.com', 0, 3, 'IT'); -- class=6 Other
 
 -- webhits across multiple days — misc_usage rowid=8 SUM
 INSERT INTO webhits (datetime, hits) VALUES
