@@ -24,4 +24,16 @@ if ! "$DIR/fuzz_logfix_session.sh" 20 100 1; then
     fail=1
 fi
 
+echo
+echo "── fuzz_import_apache (20 iter × 100 lines) ──"
+if ! "$DIR/fuzz_import_apache.sh" 20 100 1; then
+    fail=1
+fi
+
+echo
+echo "── fuzz_import_auth (20 iter × 100 lines) ──"
+if ! "$DIR/fuzz_import_auth.sh" 20 100 1; then
+    fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAIL"; exit 1; }
