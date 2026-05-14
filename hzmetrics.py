@@ -4783,18 +4783,32 @@ def _summary_11col_cells(country_col, orgtype_col, continents):
 
 def _summary_reg_users(cur, hub_db, metrics_db, db_prefix,
                       dthis, dstart, dstop, period, continents):
-    """summary_user_vals rowid=6 — registered users × 11 cols (port of reg_users)."""
+    """summary_user_vals rowid=6 — registered users × 11 cols (port of reg_users).
+
+    col=1 (Total) is a no-JOIN count from userlogin_lite — matches the
+    legacy PHP which queries userlogin_lite directly without the
+    xprofiles_metrics JOIN.  cols 2..11 add the xprofiles_metrics JOIN
+    for residency / orgtype filters.
+    """
     table = f"{metrics_db}.summary_user_vals"
     rowid = 6
-    base = (
+    base_join = (
         f"FROM {metrics_db}.userlogin_lite AS ul, "
         f"     {metrics_db}.{db_prefix}xprofiles_metrics AS u "
         f"WHERE u.username = ul.user "
         f"  AND ul.datetime > %s AND ul.datetime < %s "
         f'  AND ul.action IN ("login","simulation")'
     )
-    def cell(extra):
-        sql = f"SELECT COUNT(DISTINCT ul.user) {base}"
+    base_no_join = (
+        f"FROM {metrics_db}.userlogin_lite "
+        f"WHERE datetime > %s AND datetime < %s "
+        f'  AND action IN ("login","simulation")'
+    )
+    def cell(extra, joined=True):
+        if joined:
+            sql = f"SELECT COUNT(DISTINCT ul.user) {base_join}"
+        else:
+            sql = f"SELECT COUNT(DISTINCT user) {base_no_join}"
         if extra:
             sql += f" AND {extra}"
         cur.execute(sql, (dstart, dstop))
@@ -4802,8 +4816,9 @@ def _summary_reg_users(cur, hub_db, metrics_db, db_prefix,
         return (r[0] or 0) if r else 0
 
     for colid, extra in _summary_11col_cells("u.countryresident", "u.orgtype", continents):
+        joined = colid != 1
         _summary_write_cell(cur, table, rowid, colid, dthis, period,
-                            cell(extra), _USERVAL_FMTS[colid])
+                            cell(extra, joined), _USERVAL_FMTS[colid])
 
 
 def _summary_sim_users(cur, metrics_db, dthis, dstart, dstop, period, continents):
