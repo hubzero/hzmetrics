@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Ignore everything under tests/ by default, but whitelist the A/B harness
+tests/*
+!tests/legacy/
+!tests/ab/

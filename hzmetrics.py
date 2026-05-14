@@ -1213,10 +1213,16 @@ def cmd_process(args):
 ACCESS_CFG = Path("/etc/hubzero-metrics/access.cfg")
 
 def db_config():
-    """Parse every $name = '…'; assignment in /etc/hubzero-metrics/access.cfg
+    """Parse every $name = '…'; assignment in the access.cfg PHP file
     into a dict.  Defined variables typically include hub_dir, hub_db,
-    metrics_db, db_host, db_user, db_pass, db_prefix."""
-    text = ACCESS_CFG.read_text()
+    metrics_db, db_host, db_user, db_pass, db_prefix.
+
+    The cfg path defaults to /etc/hubzero-metrics/access.cfg but can be
+    overridden via the HZMETRICS_ACCESS_CFG environment variable — used
+    by the A/B test harness to point at a cfg that names the test DBs.
+    """
+    cfg_path = Path(os.environ.get("HZMETRICS_ACCESS_CFG", str(ACCESS_CFG)))
+    text = cfg_path.read_text()
     return {m.group(1): m.group(2)
             for m in re.finditer(r"\$([\w_]+)\s*=\s*'([^']*)'", text)}
 
