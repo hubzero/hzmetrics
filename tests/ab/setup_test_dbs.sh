@@ -21,13 +21,16 @@ TEST_USER=    # reuses prod app user; CREATE DB happens as root
 ACCESS_CFG="$FIXTURES/test_access.cfg"
 DB_PASS=$(grep "^\$db_pass" "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
 
-# Python with pymysql / aiodns / aiohttp installed.  hzmetrics.py needs these
-# but the system python on this host doesn't have them; reuse the dns_benchmark
-# venv (or override via HZMETRICS_PY).
-PY="${HZMETRICS_PY:-$REPO/tests/dns_benchmark/venv/bin/python}"
-if [ ! -x "$PY" ]; then
-    echo "ERROR: Python with pymysql not found at $PY" >&2
-    echo "Set HZMETRICS_PY to a python that has pymysql/aiodns/aiohttp installed." >&2
+# Python interpreter with pymysql + aiodns installed.
+# hzmetrics.py uses asyncio.run() which requires Python >= 3.7, so we
+# default to python3.11 on this Rocky 8 host (the system python3 is 3.6).
+# Override with HZMETRICS_PY for a venv or a different version.
+PY="${HZMETRICS_PY:-python3.11}"
+if ! "$PY" -c 'import pymysql, aiodns' 2>/dev/null; then
+    echo "ERROR: '$PY' is missing pymysql and/or aiodns." >&2
+    echo "  Rocky/RHEL: sudo dnf install python3.11-PyMySQL" >&2
+    echo "             sudo pip3.11 install aiodns" >&2
+    echo "  Or set HZMETRICS_PY to a python interpreter that has both." >&2
     exit 1
 fi
 

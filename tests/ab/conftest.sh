@@ -17,7 +17,7 @@ HUB_DB=$( grep "^\$hub_db"     "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
 METRICS_DB=$(grep "^\$metrics_db" "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
 
 # Python that has pymysql / aiodns / aiohttp installed.
-PY="${HZMETRICS_PY:-$REPO/tests/dns_benchmark/venv/bin/python}"
+PY="${HZMETRICS_PY:-python3.11}"
 
 export HZMETRICS_ACCESS_CFG="$ACCESS_CFG"
 export HZMETRICS_LOG="${HZMETRICS_LOG:-/tmp/hzmetrics-ab.log}"
