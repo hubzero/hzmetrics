@@ -765,12 +765,70 @@ def do_import_day(date_str, logfile, dry_run=False):
     run([METRICS / "import" / "__import_apache_and_auth_log.sh"],            logfile, dry_run)
     run([METRICS / "import" / "__archive_apache_and_auth_log.sh", date_str], logfile, dry_run)
 
+def _stage_banner(name, logfile):
+    """Mark a pipeline stage boundary in stdout + logfile."""
+    line = f"\n=== {name} ==="
+    print(line, flush=True)
+    if logfile:
+        logfile.write(line + "\n")
+        logfile.flush()
+
+
+def _do_tool_metrics_stage(month_str, logfile, dry_run):
+    """Run the per-month tool-metrics enrichment + stats chain in-process.
+    Direct port of __process_tool_metrics.sh."""
+    _stage_banner("tool-metrics", logfile)
+    do_import_hub_data(logfile=logfile, dry_run=dry_run)
+    do_resolve_dns("metrics", "sessionlog_metrics", month_str,
+                   logfile=logfile, dry_run=dry_run)
+    do_fill_domain("metrics", "sessionlog_metrics", month_str,
+                   logfile=logfile, dry_run=dry_run)
+    do_fill_user_info("metrics", "sessionlog_metrics", month_str,
+                      logfile=logfile, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
+                      logfile=logfile, dry_run=dry_run)
+    do_gen_tool_stats(month_str,    logfile=logfile, dry_run=dry_run)
+    do_gen_tool_tops(month_str,     logfile=logfile, dry_run=dry_run)
+    do_gen_tool_toplists(month_str, logfile=logfile, dry_run=dry_run)
+
+
+def _do_usage_metrics_stage(month_str, logfile, dry_run):
+    """Run the per-month web / toolstart / websessions enrichment chain
+    in-process.  Direct port of __process_usage_metrics.sh."""
+    _stage_banner("usage-metrics", logfile)
+    do_import_hub_data(logfile=logfile, dry_run=dry_run)
+    do_middleware_wall(logfile=logfile, dry_run=dry_run)
+    do_middleware_cpu( logfile=logfile, dry_run=dry_run)
+    do_resolve_dns("metrics", "web",       month_str, logfile=logfile, dry_run=dry_run)
+    do_resolve_dns("metrics", "toolstart", month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_domain("metrics", "web",       month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_domain("metrics", "toolstart", month_str, logfile=logfile, dry_run=dry_run)
+    do_logfix_session(month_str, logfile=logfile, dry_run=dry_run)
+    do_clean_bots("web",         month_str, logfile=logfile, dry_run=dry_run)
+    do_clean_bots("websessions", month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_user_info("metrics", "toolstart",   month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "web",         month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "websessions", month_str, logfile=logfile, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "toolstart",   month_str, logfile=logfile, dry_run=dry_run)
+
+
+def _do_summary_stage(month_str, logfile, dry_run):
+    """Run the per-month rolling-window summary stage in-process.
+    Direct port of __process_usage_metrics_summary.sh."""
+    _stage_banner("summary", logfile)
+    do_import_hub_data(logfile=logfile, dry_run=dry_run)
+    do_summarize_month(month_str, logfile=logfile, dry_run=dry_run)
+    do_andmore_usage( month_str, logfile=logfile, dry_run=dry_run)
+
+
 def do_analyze(month_str, logfile, dry_run=False):
-    run([METRICS / "__process_tool_metrics.sh",  month_str], logfile, dry_run)
-    run([METRICS / "__process_usage_metrics.sh", month_str], logfile, dry_run)
+    month_str = month_str or None
+    _do_tool_metrics_stage(month_str,  logfile, dry_run)
+    _do_usage_metrics_stage(month_str, logfile, dry_run)
+
 
 def do_summarize(month_str, logfile, dry_run=False):
-    run([METRICS / "__process_usage_metrics_summary.sh", month_str], logfile, dry_run)
+    _do_summary_stage(month_str or None, logfile, dry_run)
 
 
 # ---------------------------------------------------------------------------
