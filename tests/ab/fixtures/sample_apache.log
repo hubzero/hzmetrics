@@ -48,3 +48,16 @@ malformed line — should be skipped
 2025-06-30 23:59:59 EDT 3000050 - "GET /events/boundary-june HTTP/1.1" 200 100 100.4.1.1 "-" "Mozilla/5.0" TLSv1.3 0 100 - - - - - - - - -
 # ---------- date boundary (Aug 1 00:00 — should NOT be picked up for July) ----------
 2025-08-01 00:00:01 EDT 3000051 - "GET /events/boundary-aug HTTP/1.1" 200 100 100.4.1.2 "-" "Mozilla/5.0" TLSv1.3 0 100 - - - - - - - - -
+# ---------- OLD log format (pre-2024 /hubzero output) ----------
+# 4 tokens before quoted firstline: date, time, dispatcher, field4
+# 11..14: sslport, ts, tms, rest (assigned to st_cookie)
+2018-03-15 12:34:56 EDT - "GET /resources/oldformat/index.html HTTP/1.1" 200 5500 200.1.1.1 "-" "Mozilla/4.0 (compatible)" TLSv1.2 0 5500 oldcookiestr
+2018-04-20 09:00:00 EDT pid42 "POST /resources/old/upload HTTP/1.1" 200 1200 200.1.1.2 "https://.org/" "Mozilla/5.0 (X11; Linux)" TLSv1.0 1 1200 longoldcookie
+# OLD format with bot useragent — should still be excluded
+2018-05-01 10:00:00 EDT - "GET /resources/oldformat/bot-hit HTTP/1.1" 200 500 200.1.1.3 "-" "Googlebot/2.1 (+http://www.google.com/bot.html)" TLSv1.0 0 500 -
+# OLD format hitting an excluded URL (/api/) — should be filtered out
+2018-05-02 11:00:00 EDT - "GET /api/v1/old HTTP/1.1" 200 100 200.1.1.4 "-" "curl/7.20" TLSv1.0 0 100 -
+# OLD format with non-200 status — filtered out
+2018-05-03 12:00:00 EDT - "GET /events/oldnotfound HTTP/1.1" 404 200 200.1.1.5 "-" "Mozilla/4.0" TLSv1.0 0 200 -
+# OLD format date inside July 2025 (verifies date matching works for OLD too)
+2025-07-29 09:00:00 EDT - "GET /resources/within-month-old-format/index.html HTTP/1.1" 200 6000 200.2.1.1 "-" "Mozilla/4.0 (compatible)" TLSv1.0 0 6000 cookieX
