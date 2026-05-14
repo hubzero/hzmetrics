@@ -4425,6 +4425,20 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
             row = cur.fetchone()
             s_id = int(row[0]) if row and row[0] else 0
 
+        # Session state spans weeks: Perl declares state vars at script scope
+        # so an in-flight session at the end of one week can be flushed by an
+        # IP change in the next.  We init once, not per-iteration.
+        s_datetime       = None          # None = no active session
+        s_datetimeint    = 0
+        s_ip             = ""
+        s_host           = ""
+        s_domain         = ""
+        s_webevents      = 0
+        s_videoend       = 0
+        s_events         = []
+        prev_datetime    = None
+        prev_datetimeint = 0
+
         for w in range(4):
             select_sql = (
                 "SELECT id, datetime, content, ip, host, domain, "
@@ -4436,21 +4450,6 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
                 "ORDER BY ip, host, datetime"
             )
 
-            # Per-week state.  Perl uses lexical 'my $s_datetime ...' but its
-            # initial value carries across weeks within the same script run;
-            # the Perl resets s_datetime via the empty-string sentinel after
-            # each emit, so a fresh week with the sentinel set still works
-            # correctly.  We start each week with the sentinel set.
-            s_datetime       = None          # None = no active session
-            s_datetimeint    = 0
-            s_ip             = ""
-            s_host           = ""
-            s_domain         = ""
-            s_webevents      = 0
-            s_videoend       = 0
-            s_events         = []
-            prev_datetime    = None
-            prev_datetimeint = 0
             week_sessions    = 0
             week_events      = 0
 
