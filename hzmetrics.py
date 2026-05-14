@@ -3388,9 +3388,19 @@ def cmd_andmore_usage(args):
 # can be argued from byte-identical SQL semantics first.
 # ---------------------------------------------------------------------------
 
-IPCOUNTRY_URL     = "http://hubzero.org/ipinfo/v1"
+IPCOUNTRY_URL     = "https://help.hubzero.org/ipinfo/v1"
 IPCOUNTRY_HUB_KEY = "_HUBZERO_OPNSRC_V1_"
 IPCOUNTRY_TIMEOUT = 5     # seconds; PHP relies on default_socket_timeout (~60s)
+
+# Fallback chain tried in order if the primary endpoint times out / errors.
+# help.hubzero.org is the documented home; hubzero.org still serves a copy.
+# https is preferred but http remains as a final fallback for legacy plumbing.
+IPCOUNTRY_FALLBACKS = (
+    "https://help.hubzero.org/ipinfo/v1",
+    "https://hubzero.org/ipinfo/v1",
+    "http://help.hubzero.org/ipinfo/v1",
+    "http://hubzero.org/ipinfo/v1",
+)
 
 def _ip2long(ip_str):
     """Convert dotted-quad IPv4 to 32-bit int.  Returns None on bad input.
@@ -3456,14 +3466,23 @@ def _get_ip_geodata(conn, ip, *, url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
             return geo
 
     # --- HTTP fallback ---
+    # Build the endpoint list: the explicitly-given `url` first, then
+    # IPCOUNTRY_FALLBACKS (de-duped, preserving order).  Stops at first success.
     import urllib.request, xml.etree.ElementTree as ET
-    full_url = f"{url}/?&hub_key={hub_key}&n_ip={n_ip}"
-    try:
-        with urllib.request.urlopen(full_url, timeout=timeout) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-            root = ET.fromstring(text)
-    except (urllib.request.URLError, ET.ParseError, TimeoutError, OSError) as e:
-        print(f"Warning: could not connect to {url}: {e}", flush=True)
+    endpoints = [url] + [u for u in IPCOUNTRY_FALLBACKS if u != url]
+    root = None
+    for ep in endpoints:
+        full_url = f"{ep}/?&hub_key={hub_key}&n_ip={n_ip}"
+        try:
+            with urllib.request.urlopen(full_url, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+                root = ET.fromstring(text)
+            break
+        except (urllib.request.URLError, ET.ParseError, TimeoutError, OSError) as e:
+            print(f"Warning: ipinfo {ep} failed ({e}); trying next fallback",
+                  flush=True)
+            continue
+    if root is None:
         return geo
 
     status = (root.findtext('status') or '').strip()
