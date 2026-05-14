@@ -5123,10 +5123,25 @@ def _summary_download_users(cur, metrics_db, dthis, dstart, dstop, period,
         return (r[0] or 0) if r else 0
 
     def ul_delta_4(country_extra):
-        ip_sql = f"SELECT DISTINCT ip FROM {metrics_db}.dl_users_period_tmp"
+        # Legacy 1018cc2^ uses a DIFFERENT websessions filter for rowid=4 than
+        # rowid=8: rowid=4 omits both `ws.ip NOT IN (login_ips)` and the
+        # `duration < 900` cap, only requiring `jobs=0 AND duration >= 0` plus
+        # a dnload-matching web row.  So we can't reuse dl_users_period_tmp
+        # (which bakes those filters in for rowid=8) — query directly.
+        ip_sql = (
+            f"SELECT DISTINCT ws.ip "
+            f"FROM {metrics_db}.websessions AS ws "
+            f"INNER JOIN {metrics_db}.web AS w ON w.sessionid = ws.id "
+            f"WHERE w.dnload = 1 "
+            f"  AND ws.datetime > %s AND ws.datetime < %s "
+            f'  AND ws.duration >= "0" AND ws.jobs = "0"'
+        )
+        params = [dstart, dstop]
         if country_extra:
-            ip_sql += f" WHERE {country_extra}"
-        ip_list = _summary_get_ip_list(cur, ip_sql)
+            # country_extra is phrased against the bare `ipcountry` col name
+            # (works against dl_users_period_tmp).  Qualify it for websessions.
+            ip_sql += " AND " + country_extra.replace("ipcountry", "ws.ipcountry")
+        ip_list = _summary_get_ip_list(cur, ip_sql, params)
         if not ip_list:
             return 0
         cur.execute(
