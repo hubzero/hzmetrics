@@ -93,8 +93,12 @@ STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
 # ---------------------------------------------------------------------------
 
 def log_open():
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    return open(LOG, "a")
+    """Open the pipeline log for append.  Honors HZMETRICS_LOG env override
+    so the A/B test harness (running as the developer's UID, not apache)
+    can write to a path it actually owns."""
+    log_path = Path(os.environ.get("HZMETRICS_LOG", str(LOG)))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return open(log_path, "a")
 
 def run(cmd, logfile=None, dry_run=False):
     """Run a command, streaming output to stdout and optionally a logfile."""
