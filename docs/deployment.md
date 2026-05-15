@@ -139,7 +139,7 @@ will execute.
 
 The CMS-side tables created by metrics
 (`jos_resource_stats_tools_topvals`, `jos_session_geo`, etc.) are
-created by the hub's own Joomla migrations and shouldn't need
+created by the hub's own CMS migrations and shouldn't need
 anything from `hzmetrics.py`.  If they're missing, see the
 `exclude_list` schema work from PR  and check the hub's
 migration state.

@@ -44,3 +44,26 @@ The reference HUBzero deployment for this code is the
 [](https://) hub at Purdue.  Other hubs
 running the same scripts include , , and
 historically .
+
+---
+
+**Acknowledgment.**  The original HUBzero metrics package and its
+ongoing development was supported in part by .
+Long-term stewardship of the codebase has been carried by
+J.M. Sperhac (SDSC), among
+others.  This rewrite builds directly on their work.
+
+**Jira / ticket cross-references** (HUBzero internal tracker, where
+applicable):
+
+- **** — parent ticket for this rewrite ("hubzero-metrics
+  todo/status," January 2025).
+- **** — fleet-wide metrics-process survey ("hub-metrics-survey.xlsx").
+- **** — `exclude_list` schema modernization for Purdue
+  migration (April 2025).
+- **, ** — bot identification and `exclude_list` content
+  updates.
+- **, ** — hub-specific-specific guest-user
+  classification work that fed into [usage-tables.md](usage-tables.md).
+- **** — null-handling fixes in `func_misc.php` (preserved
+  bug-for-bug in the rewrite).

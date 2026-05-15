@@ -167,7 +167,7 @@ Then re-summarize.
 
 ## A bot is inflating counts
 
-This happens periodically — a crawler that retains the Joomla session
+This happens periodically — a crawler that retains the CMS session
 cookie is logged per-page-visit instead of once per visitor.
 the largest hub's October 2024 unique-visitor count went to 1.1M (typical:
 ~250k) for this exact reason.
@@ -253,6 +253,77 @@ recoverable problems (e.g., a malformed log line that didn't match
 either apache regex).
 
 `hzmetrics.py status` is the structured view of the same data.
+
+## Backup and restore
+
+The metrics DB is downstream of the logs — anything in the summary
+tables can in principle be rebuilt by re-running the pipeline.  But
+that takes hours on mature hubs, and historical Apache logs may not
+be available far back, so practical backups are still recommended
+before any destructive operation.
+
+```bash
+# Cheap pre-flight dump before a risky operation (re-summarize a
+# month, schema migrate, etc.):
+DATE=$(date +%Y%m%d-%H%M)
+mysqldump --no-tablespaces <hub>_metrics \
+    summary_user_vals summary_simusage_vals summary_misc_vals \
+    summary_andmore_vals migrations \
+    | gzip > /var/backups/hzmetrics-summary-${DATE}.sql.gz
+```
+
+The big tables (`web` historically can be 30M–500M rows;
+`websessions` 190M+; `userlogin` likewise) dump slowly and rarely
+need point-in-time recovery — they're rebuilt from logs anyway.
+The summary tables, by contrast, are small (thousands of rows
+total), encode all the human-readable output, and are what reports
+have been built against — these are the high-value backup targets.
+
+Restore from a summary dump is just `gunzip -c <file>.sql.gz | mysql
+<hub>_metrics`.  The `DELETE + INSERT` per-cell pattern in
+`summarize-month` means a re-run will rewrite cells without needing
+to clear them first.
+
+If the metrics DB has been corrupted at a deeper level, recovery
+order:
+
+1. `mysqldump` whatever is salvageable.
+2. `hzmetrics.py setup-db` (idempotent — `CREATE TABLE IF NOT EXISTS`).
+3. `hzmetrics.py migrate --apply` to bring schema current.
+4. Re-import any preserved historical data via `mysql … < dump.sql`.
+5. Re-run `summarize-month` for each month you need restored.
+6. Re-run `analyze --month` if the underlying enriched data was lost
+   (will require the original Apache logs from `/var/log/httpd/imported/`).
+
+## Monitoring and alerting
+
+The pipeline doesn't ship its own monitoring stack — observability
+is via log file, status command, and what you wire up around it.
+Useful signals to put behind alerts:
+
+| Signal | How to check | When to alert |
+|---|---|---|
+| Pipeline is behind | `hzmetrics.py status` shows pending days | >3 pending days (autonomous catch-up should resolve within hours; sustained backlog means something is wedged) |
+| Daily run is failing | grep `ERROR` / `FAIL` in `/var/log/hubzero/metrics/hzmetrics.log` since midnight | any new occurrence |
+| PID lock is stuck | PID in `/var/run/hzmetrics/hzmetrics.pid` is dead but file is present | >2 hours since lock acquired and PID not running |
+| Logrotate failing | New file in `/var/log/httpd/daily/` is not appearing | no new `<hub>-access.log-YYYYMMDD` after midnight |
+| `web` row count anomaly | Compare today's `web` row count to a 7-day rolling average | row count is >3× the average (bot inflation event) |
+| `webhits / web` ratio anomaly | `SELECT SUM(hits) FROM webhits` ÷ `COUNT(*) FROM web` for the same window | ratio drops below ~0.1 or above ~10 (suggests one of the two imports has stopped) |
+| Summary table missing recent month | `SELECT MAX(datetime) FROM summary_user_vals` | older than 5 days into the new month |
+| Whoisonline map stale | `stat /var/www/<hub>/app/site/stats/maps/whoisonline.xml` | >15 minutes old (cron runs every 5) |
+| DNS service down | `aiodns` errors in the log | >10% of resolutions failing |
+| IP-country service down | `fill-ipcountry` log errors | repeated HTTP errors against `help.hubzero.org/ipinfo/v1` |
+
+Cheap implementation: a daily cron entry that runs `hzmetrics.py
+status`, greps the log for `ERROR`/`FAIL` since midnight, and mails
+out a summary.  The 2015-era `MAILTO=` directive in the original
+crontab handled exactly this — alerts on cron-output capture.
+
+For richer monitoring, a Grafana dashboard reading
+`summary_*_vals` directly works well — both for the live usage
+view and for "are the numbers in the expected range?" checks.  (The
+2023 Sperhac conference talk includes screenshots
+of one such Grafana setup against `foo_metrics`.)
 
 ## When to escalate
 

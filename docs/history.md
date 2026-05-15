@@ -7,27 +7,28 @@ and what came after it on the path to the current
 ## Early lineage (period 14 starts in 1995)
 
 The summary tables' all-time period uses `1995-01-01` as the lower
-bound — a hint at how long this codebase has been in service.
-HUBzero predates Joomla; the modern PHP/Perl pipeline accreted on
-top of an even older stats infrastructure.  Concrete fragments of
-2014–2016 ops notes survive in the project's history ( at
-, , the original ) — including the very first
-"basic new-month checks" runbook that the [operations.md](operations.md)
-runbook here is loosely modeled on.
+bound — a hint at how long this codebase has been in service.  The
+modern PHP/Perl pipeline accreted on top of an even older stats
+infrastructure.  Concrete fragments of 2014–2016 ops notes survive
+in the project's history (an earlier hub, , the original
+) — including the very first "basic new-month checks"
+runbook that the [operations.md](operations.md) runbook here is
+loosely modeled on.
 
 ## 2010s — The original HUBzero metrics package
 
-HUBzero is a Joomla-based CMS for "science gateways" — hosted
-collections of computational tools.  The metrics package was part of
-the open-source HUBzero distribution and shipped to every hub.  It
+HUBzero is a CMS for "science gateways" — hosted collections of
+computational tools.  The metrics package was part of the
+open-source HUBzero distribution and shipped to every hub.  It
 consisted of:
 
 - A cron-driven set of **PHP scripts** under `/opt/hubzero/bin/metrics/`
   that parsed daily Apache and CMS authentication logs into a
   `<hub>_metrics` database, enriched the rows (DNS, GeoIP, session
   coalescing), and computed monthly summary statistics.
-- A **Joomla "usage overview" plugin** that read those summary tables
-  and rendered the public usage reporting pages (`hub.org/usage`).
+- A HUBzero CMS "usage overview" plugin that read those summary
+  tables and rendered the public usage reporting pages
+  (`hub.org/usage`).
 
 The package was installed via RPM/DEB built from
 `source/Makefile` in this repo (and its `gitlab.hubzero.org/.../hubzero-metrics`
@@ -64,7 +65,7 @@ code:
   rows from `web` and `websessions` after enrichment.
 - Custom Usage Overview plugins (`overview2017`, `overview2021`,
   `overviewnew`, `overview`) — multiple competing versions in
-  the Joomla plugin directory, of which `overview2017` was the
+  the CMS plugin directory, of which `overview2017` was the
   actually-deployed one.
 
 By 2024 the the largest hub deployment was running **three** metrics
@@ -194,7 +195,7 @@ pipeline and [testing.md](testing.md) for the test infrastructure.
 - **Celery + Redis from `hubzero-analytics`**.  See above.
 - **Live-DB Redis caches** for per-resource usage plugins.  The
   database is fast enough now; the cache is unnecessary complexity.
-- **Multiple competing usage-overview plugins** in the Joomla
+- **Multiple competing usage-overview plugins** in the CMS
   codebase.  The rewrite only writes the summary tables; the UI side
   is downstream and out of scope.
 

@@ -80,6 +80,33 @@ hours of fully unattended catch-up.
 one full month manually.  `analyze` and `summarize` are individually
 runnable for any month.
 
+## Who reads the metrics
+
+The pipeline produces numbers; different audiences read them in
+different shapes.  Knowing which is which helps when deciding what
+to fix when a number looks off:
+
+- **Gateway owner / PI** — total registered users, total tool runs,
+  visits per month/year, geographic distribution.  Surfaced at
+  `hub.org/usage` (the public usage-overview page).  Aggregated; no
+  individual user data.
+- **Tool contributor** — per-tool ranked stats (users, jobs, CPU
+  time) over rolling windows.  Surfaced at `hub.org/usage/tools/12`
+  and on each tool resource's "Usage" tab.  Driven by
+  `jos_resource_stats_tools_topvals` and `jos_stats_topvals`.
+- **Operator / ops** — pipeline health, log import status, exclude
+  list effectiveness, bot inflation events.  Surfaced via
+  `hzmetrics.py status` and the pipeline log file.  See
+  [operations.md](operations.md).
+- **Funder / grant reporting** — long-window aggregates (period 12
+  / 14), often pulled by ad-hoc SQL against `summary_*_vals` rather
+  than via the UI.  See [usage-tables.md](usage-tables.md) for
+  example queries.
+
+The bug-for-bug-parity contract of the rewrite means the existing
+UI consumers and reporting queries all keep working unchanged — the
+new pipeline produces the same numbers in the same shapes.
+
 ## Reading the rest of these docs
 
 - **[motivations.md](motivations.md)** — why this rewrite happened.

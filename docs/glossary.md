@@ -10,11 +10,11 @@ community.  HUBzero-based hubs include  (the largest),
 () and the some deployments.
 
 ### HUBzero
-The CMS framework hubs are built on.  Joomla-based PHP with custom
+The CMS framework hubs are built on.  Open-source PHP with custom
 plugins, hosted at hubzero.org, sourced at github.com/hubzero.
 
 ### Hub DB (`<hub>`)
-The live CMS database.  Owned by Joomla.  Metrics reads it but
+The live CMS database.  Owned by HUBzero CMS.  Metrics reads it but
 generally doesn't write to it (the exceptions are
 `jos_resource_stats*` and `jos_session_geo`).
 
@@ -151,7 +151,7 @@ tries to run the metrics pipeline (under PID-lock guard).
 ### Migration (schema)
 A row in `<hub>_metrics.migrations` recording an applied schema
 delta.  `hzmetrics.py migrate --apply` walks the unapplied migrations
-in order and runs them.  Modeled after Rails / Joomla migrations.
+in order and runs them.  Standard schema-migration pattern.
 
 ### `access.cfg`
 `/etc/hubzero-metrics/access.cfg`.  Bare `$var = 'value';` PHP-style

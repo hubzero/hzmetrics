@@ -8,7 +8,7 @@ Every HUBzero hub has two MariaDB schemas, both named after the hub:
 
 | Database          | Owned by | Role |
 |-------------------|----------|------|
-| `<hub>`           | CMS      | Live Joomla state — users, profiles, resources, sessions.  Metrics reads from it; writes only `jos_session_geo` (for the whoisonline map) and `jos_resource_stats*` (per-tool aggregates surfaced by the UI). |
+| `<hub>`           | CMS      | Live CMS state — users, profiles, resources, sessions.  Metrics reads from it; writes only `jos_session_geo` (for the whoisonline map) and `jos_resource_stats*` (per-tool aggregates surfaced by the UI). |
 | `<hub>_metrics`   | Pipeline | Enriched analytics — `web`, `websessions`, `toolstart`, `userlogin`, `summary_*_vals`, etc.  Owned end-to-end by `hzmetrics.py`. |
 
 On the reference deployment these are `foo` and
@@ -47,7 +47,7 @@ Pipeline-owned.  The big ones:
 | `sessionlog_metrics` | Enriched tool-session record | `import-hub-data` |
 | `jos_xprofiles_metrics` | User profile snapshot | `import-hub-data` (full rebuild from `<hub>.jos_xprofiles`) |
 | `bot_useragents` | Known-bot user agent | `identify-bots` |
-| `exclude_list` | IP / URL / useragent / domain filter | Operator (via a Joomla migration on the CMS side; pipeline only reads) |
+| `exclude_list` | IP / URL / useragent / domain filter | Operator (via a CMS-side migration; pipeline only reads) |
 
 Reference tables that are read-only at pipeline runtime
 (`domainclass`, `classes`, `continents`, `countries`,

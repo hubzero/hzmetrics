@@ -44,6 +44,34 @@ operational facts were obvious:
    processed the backlog automatically — logs just piled up in
    `daily/` directories until somebody noticed.
 
+## Performance before and after
+
+Measured against a HUBzero hub deployment (the reference
+target for this rewrite).  Concrete numbers where we have them;
+qualitative where we don't.
+
+| Operation | Legacy | Rewrite | Notes |
+|---|---|---|---|
+| Reverse-DNS per IP | ~294 ms | ~4 ms (system) / ~1 ms (unbound) | `host(1)` shell-out → `aiodns`; per-IP fork cost dominated legacy |
+| DNS for a typical month's new IPs | ~30+ min | ~30 sec | Compounds the per-IP win at concurrency=100 |
+| Download-detection in summary | `LIKE`-chain scan of `web` | indexed `dnload=1` lookup | Was the hot loop in `xlogfix_summary.php` |
+| Period 14 (all-time) summary | 10+ hr, sometimes crashed MariaDB | minutes | The combination of `dnload` column + `dl_users_period_tmp` JOIN |
+| `login_ips` filter | `WHERE ip NOT IN (literal-comma-list)` | indexed temp-table JOIN | List grew to 100k+ rows on mature hubs |
+| `bot_useragents` lookup at import | per-row LIKE scan | exact-match indexed `WHERE useragent IN (…)` | Bots inflate `web` row count; bottleneck at import |
+| Catch-up after stall | Manual | Autonomous, one month per `:30` `tick` | 12-month backlog: ~6 hours unattended |
+| Cron entries | 7 separate (whoisonline + 6 staged) | 1 (`tick`) | One PID lock; no concurrent stages |
+| Scripts | ~20 `.php` / `.pl` / `.sh` | 1 `hzmetrics.py` | Single Python file, one CLI |
+| `--dry-run` mode | Inconsistent | Every mutating subcommand | Verified by `port_dryrun` test |
+| Idempotency | Mostly | Universally | Verified by `port_idempotency` test |
+
+The `dnload` change is the headline.  Period 14 (all-time) was
+genuinely unrunnable on mature hubs — the LIKE-chain over a 30M-row
+`web` table would hold connections for hours and occasionally OOM
+the MariaDB process.  Indexing it via a single `TINYINT(1)` column,
+with `import-apache` setting it inline and `backfill-dnload`
+catching up historical rows, made the all-time period merely slow
+rather than impossible.
+
 ## What the rewrite is and isn't
 
 The rewrite is a focused **port and optimization pass**:

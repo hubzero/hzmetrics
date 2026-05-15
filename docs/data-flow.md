@@ -64,7 +64,7 @@ useragent: 'Mozilla/5.0 ...'
 referrer: 'https://www.google.com/'
 apache_pid: '12345'
 uidNumber: 0          -- not logged in
-joomla_sessionid: ''
+joomla_sessionid: ''   -- column name is literal in the schema
 dnload: 1             -- ← downloaded resource
 host: NULL            -- filled in by resolve-dns later
 domain: NULL          -- filled in by fill-domain later
