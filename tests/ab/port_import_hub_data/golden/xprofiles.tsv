@@ -1,0 +1,6 @@
+1001	Alice	alice	alice@example.com	2024-01-01 00:00:00	100	/home/alice	/bin/bash	/bin/false			university	Acme	US	US				-1	0	2024-01-01 00:00:00	1											0	0			NULL	0	
+1002	Bob	bob	bob@example.com	2024-02-01 00:00:00	100	/home/bob	/bin/bash	/bin/false			industry	Acme	GB	IN				-1	0	2024-02-01 00:00:00	2											0	0			NULL	0	
+1003	Carol	carol	carol@example.com	2024-03-01 00:00:00	100	/home/carol	/bin/bash	/bin/false			government	Acme	FR	FR				-1	0	2024-03-01 00:00:00	3											0	0			NULL	0	
+1004	Dave	dave	dave@example.com	2024-04-01 00:00:00	100	/home/dave	/bin/bash	/bin/false			industry	Acme	DE	DE				-1	0	2024-04-01 00:00:00	5											0	0			NULL	0	
+1007	O'Brien	o'brien	ob@example.com	2024-07-01 00:00:00	100	/home/obrien	/bin/bash	/bin/false			industry	O'Acme	IE	IE				-1	0	2024-07-01 00:00:00	1											0	0			NULL	0	
+1008	Bare	bare	bare@example.com	2024-08-01 00:00:00	100	/home/bare	/bin/bash	/bin/false										-1	0	2024-08-01 00:00:00	1											0	0			NULL	0	

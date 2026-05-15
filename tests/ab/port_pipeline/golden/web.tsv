@@ -1,0 +1,10 @@
+NULL	2	2025-07-10 08:00:00	AU	/page	NULL	NULL	1.1.1.1	one.one.one.one	one.one	NULL										0
+NULL	2	2025-07-10 08:05:00	AU	/page2	NULL	NULL	1.1.1.1	one.one.one.one	one.one	NULL										0
+NULL	1	2025-07-10 12:00:00	AU	/page	NULL	NULL	1.0.0.1	one.one.one.one	one.one	NULL										0
+NULL	1	2025-07-10 12:30:00	AU	/page2	NULL	NULL	1.0.0.1	one.one.one.one	one.one	NULL										0
+NULL	3	2025-07-12 11:00:00	US	/p1	NULL	NULL	8.8.4.4	dns.google	dns.google	NULL										0
+NULL	3	2025-07-12 11:01:00	US	/resources/123/download/a.pdf	NULL	NULL	8.8.4.4	dns.google	dns.google	NULL										1
+NULL	4	2025-07-15 09:00:00	US	/p2	NULL	NULL	9.9.9.9	dns9.quad9.net	quad9.net	NULL										0
+NULL	NULL	2025-07-16 10:00:00	NULL	/scrape	NULL	NULL	198.51.100.1	?	?	NULL										0
+NULL	NULL	2025-07-17 14:00:00	NULL	topics/intro	NULL	NULL	198.51.100.2	?	?	NULL										0
+NULL	NULL	2025-07-17 14:05:00	NULL	topics/intro/page1	NULL	NULL	198.51.100.2	?	?	NULL										0

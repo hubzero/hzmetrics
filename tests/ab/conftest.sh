@@ -106,3 +106,32 @@ run_new() {
     HZMETRICS_LOG="$HZMETRICS_LOG" \
     "$PY" "$REPO/hzmetrics.py" "$@"
 }
+
+# Compare every _out/new_<basename> against port_X/golden/<basename>.
+# Used by per-port run_golden.sh scripts to simulate the "legacy/ is
+# gone" world: we ran the new code only, and we diff against a frozen
+# snapshot of what legacy used to produce.
+# Args: dir, then one or more basenames (matching golden/<basename>
+# and _out/new_<basename>).  Exits 1 if any file mismatches.
+golden_diff() {
+    local dir="$1"; shift
+    local fail=0 f new gold
+    for f in "$@"; do
+        new="$dir/_out/new_$f"
+        gold="$dir/golden/$f"
+        if [ ! -f "$gold" ]; then
+            echo "  ERROR  missing golden: golden/$f"; fail=1; continue
+        fi
+        if [ ! -f "$new" ]; then
+            echo "  ERROR  missing new:    _out/new_$f"; fail=1; continue
+        fi
+        if diff -q "$gold" "$new" >/dev/null 2>&1; then
+            echo "  PASS   $f"
+        else
+            echo "  FAIL   $f (first 20 diff lines)"
+            diff -u "$gold" "$new" | head -20
+            fail=1
+        fi
+    done
+    [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAIL"; return 1; }
+}

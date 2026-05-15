@@ -1,0 +1,90 @@
+2	2025-07-00 00:00:00	0	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	0	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	0	2	5002 ~ Burnman Notebook	1
+2	2025-07-00 00:00:00	1	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	1	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	1	2	5002 ~ Burnman Notebook	1
+2	2025-07-00 00:00:00	3	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	3	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	3	2	5002 ~ Burnman Notebook	1
+2	2025-07-00 00:00:00	12	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	12	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	12	2	5002 ~ Burnman Notebook	1
+2	2025-07-00 00:00:00	13	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	13	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	13	2	5002 ~ Burnman Notebook	1
+2	2025-07-00 00:00:00	14	0	Total Simulation Users	4
+2	2025-07-00 00:00:00	14	1	5001 ~ Aspect Notebook	3
+2	2025-07-00 00:00:00	14	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	0	0	Total Simulation Runs	6
+5	2025-07-00 00:00:00	0	1	5001 ~ Aspect Notebook	5
+5	2025-07-00 00:00:00	0	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	1	0	Total Simulation Runs	4
+5	2025-07-00 00:00:00	1	1	5001 ~ Aspect Notebook	3
+5	2025-07-00 00:00:00	1	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	3	0	Total Simulation Runs	4
+5	2025-07-00 00:00:00	3	1	5001 ~ Aspect Notebook	3
+5	2025-07-00 00:00:00	3	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	12	0	Total Simulation Runs	9
+5	2025-07-00 00:00:00	12	1	5001 ~ Aspect Notebook	8
+5	2025-07-00 00:00:00	12	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	13	0	Total Simulation Runs	8
+5	2025-07-00 00:00:00	13	1	5001 ~ Aspect Notebook	7
+5	2025-07-00 00:00:00	13	2	5002 ~ Burnman Notebook	1
+5	2025-07-00 00:00:00	14	0	Total Simulation Runs	9
+5	2025-07-00 00:00:00	14	1	5001 ~ Aspect Notebook	8
+5	2025-07-00 00:00:00	14	2	5002 ~ Burnman Notebook	1
+6	2025-07-00 00:00:00	0	0	Total Simulation Wall Time	2250
+6	2025-07-00 00:00:00	0	1	5001 ~ Aspect Notebook	1950
+6	2025-07-00 00:00:00	0	2	5002 ~ Burnman Notebook	300
+6	2025-07-00 00:00:00	1	0	Total Simulation Wall Time	750
+6	2025-07-00 00:00:00	1	1	5001 ~ Aspect Notebook	450
+6	2025-07-00 00:00:00	1	2	5002 ~ Burnman Notebook	300
+6	2025-07-00 00:00:00	3	0	Total Simulation Wall Time	750
+6	2025-07-00 00:00:00	3	1	5001 ~ Aspect Notebook	450
+6	2025-07-00 00:00:00	3	2	5002 ~ Burnman Notebook	300
+6	2025-07-00 00:00:00	12	0	Total Simulation Wall Time	3750
+6	2025-07-00 00:00:00	12	1	5001 ~ Aspect Notebook	3450
+6	2025-07-00 00:00:00	12	2	5002 ~ Burnman Notebook	300
+6	2025-07-00 00:00:00	13	0	Total Simulation Wall Time	3350
+6	2025-07-00 00:00:00	13	1	5001 ~ Aspect Notebook	3050
+6	2025-07-00 00:00:00	13	2	5002 ~ Burnman Notebook	300
+6	2025-07-00 00:00:00	14	0	Total Simulation Wall Time	3750
+6	2025-07-00 00:00:00	14	1	5001 ~ Aspect Notebook	3450
+6	2025-07-00 00:00:00	14	2	5002 ~ Burnman Notebook	300
+7	2025-07-00 00:00:00	0	0	Total Simulation CPU Time	1140
+7	2025-07-00 00:00:00	0	1	5001 ~ Aspect Notebook	940
+7	2025-07-00 00:00:00	0	2	5002 ~ Burnman Notebook	200
+7	2025-07-00 00:00:00	1	0	Total Simulation CPU Time	390
+7	2025-07-00 00:00:00	1	1	5002 ~ Burnman Notebook	200
+7	2025-07-00 00:00:00	1	2	5001 ~ Aspect Notebook	190
+7	2025-07-00 00:00:00	3	0	Total Simulation CPU Time	390
+7	2025-07-00 00:00:00	3	1	5002 ~ Burnman Notebook	200
+7	2025-07-00 00:00:00	3	2	5001 ~ Aspect Notebook	190
+7	2025-07-00 00:00:00	12	0	Total Simulation CPU Time	1890
+7	2025-07-00 00:00:00	12	1	5001 ~ Aspect Notebook	1690
+7	2025-07-00 00:00:00	12	2	5002 ~ Burnman Notebook	200
+7	2025-07-00 00:00:00	13	0	Total Simulation CPU Time	1690
+7	2025-07-00 00:00:00	13	1	5001 ~ Aspect Notebook	1490
+7	2025-07-00 00:00:00	13	2	5002 ~ Burnman Notebook	200
+7	2025-07-00 00:00:00	14	0	Total Simulation CPU Time	1890
+7	2025-07-00 00:00:00	14	1	5001 ~ Aspect Notebook	1690
+7	2025-07-00 00:00:00	14	2	5002 ~ Burnman Notebook	200
+8	2025-07-00 00:00:00	0	0	Total Simulation Interaction Time	305
+8	2025-07-00 00:00:00	0	1	5001 ~ Aspect Notebook	265
+8	2025-07-00 00:00:00	0	2	5002 ~ Burnman Notebook	40
+8	2025-07-00 00:00:00	1	0	Total Simulation Interaction Time	115
+8	2025-07-00 00:00:00	1	1	5001 ~ Aspect Notebook	75
+8	2025-07-00 00:00:00	1	2	5002 ~ Burnman Notebook	40
+8	2025-07-00 00:00:00	3	0	Total Simulation Interaction Time	115
+8	2025-07-00 00:00:00	3	1	5001 ~ Aspect Notebook	75
+8	2025-07-00 00:00:00	3	2	5002 ~ Burnman Notebook	40
+8	2025-07-00 00:00:00	12	0	Total Simulation Interaction Time	515
+8	2025-07-00 00:00:00	12	1	5001 ~ Aspect Notebook	475
+8	2025-07-00 00:00:00	12	2	5002 ~ Burnman Notebook	40
+8	2025-07-00 00:00:00	13	0	Total Simulation Interaction Time	455
+8	2025-07-00 00:00:00	13	1	5001 ~ Aspect Notebook	415
+8	2025-07-00 00:00:00	13	2	5002 ~ Burnman Notebook	40
+8	2025-07-00 00:00:00	14	0	Total Simulation Interaction Time	515
+8	2025-07-00 00:00:00	14	1	5001 ~ Aspect Notebook	475
+8	2025-07-00 00:00:00	14	2	5002 ~ Burnman Notebook	40

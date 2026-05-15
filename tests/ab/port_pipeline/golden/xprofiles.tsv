@@ -1,0 +1,4 @@
+1001	Alice	alice	a@x	2025-07-05 08:00:00	100	/	/bin/bash	/bin/false			university		US	US				-1	0	2025-07-05 08:00:00	1											0	0			NULL	0	
+1002	Bob	bob	b@x	2025-07-06 09:00:00	100	/	/bin/bash	/bin/false			industry		GB	GB				-1	0	2025-07-06 09:00:00	1											0	0			NULL	0	
+1003	Carol	carol	c@x	2024-06-01 00:00:00	100	/	/bin/bash	/bin/false			university		JP	JP				-1	0	2024-06-01 00:00:00	1											0	0			NULL	0	
+1004	Dave	dave	d@x	2024-06-01 00:00:00	100	/	/bin/bash	/bin/false			university		FR	FR				-1	0	2024-06-01 00:00:00	1											0	0			NULL	0	

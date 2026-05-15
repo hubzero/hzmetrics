@@ -1,0 +1,5 @@
+s1	alice	0	1001	1.1.1.1	one.one.one.one	one.one	0	AU	Australia	Queensland	Brisbane	-27.467540	153.028090	0
+s6	bob	0	1002	1.1.1.1	one.one.one.one	one.one	0	AU	Australia	Queensland	Brisbane	-27.467540	153.028090	0
+s7		1	0	8.8.4.4	dns.google	dns.google	0	US	United States of America	California	Mountain View	37.386050	-122.083850	0
+s2		1	0	8.8.8.8	dns.google	dns.google	0	US	United States of America	California	Mountain View	37.386050	-122.083850	0
+s3		1	0	9.9.9.9	dns9.quad9.net	quad9.net	0	US	United States of America	California	Berkeley	37.871590	-122.272750	1

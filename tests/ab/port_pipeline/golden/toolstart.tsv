@@ -1,0 +1,4 @@
+2	2025-07-10 08:00:00	UNIVERSITY	US	US	1	AU	1.1.1.1	one.one.one.one	alice	aspectnotebook	NULL	one.one	NULL	h1	0.000000	600.000000	NULL
+NULL	2025-07-12 09:00:00	INDUSTRY	GB	GB	1	US	8.8.8.8	dns.google	bob	workspace	NULL	dns.google	NULL	h1	0.000000	400.000000	NULL
+NULL	2025-07-13 14:00:00	UNIVERSITY	JP	JP	1	US	9.9.9.9	dns9.quad9.net	carol	aspectnotebook	NULL	quad9.net	NULL	h1	900.000000	650.000000	NULL
+NULL	2025-07-14 10:00:00	UNIVERSITY	FR	FR	1	AU	1.0.0.1	one.one.one.one	dave	aspectnotebook	NULL	one.one	NULL	h1	1500.000000	700.000000	NULL

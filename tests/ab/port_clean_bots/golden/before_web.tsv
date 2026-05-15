@@ -1,0 +1,20 @@
+1	NULL	NULL	2025-07-05 08:00:00	NULL	/a	NULL	NULL	1.1.1.1	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+2	NULL	NULL	2025-07-05 08:01:00	NULL	/b	NULL	NULL	1.1.1.2	bar.test-bot.example.com	test-bot.example.com	NULL										NULL
+3	NULL	NULL	2025-07-05 08:02:00	NULL	/c	NULL	NULL	1.1.1.3	sub.test-bot.example.com	sub.test-bot.example.com	NULL										NULL
+4	NULL	NULL	2025-07-10 09:00:00	NULL	/d	NULL	NULL	1.2.1.1	mail.lone.example.org	lone.example.org	NULL										NULL
+5	NULL	NULL	2025-07-12 10:00:00	NULL	/e	NULL	NULL	2.2.2.1	node01.test-crawler.org	test-crawler.org	NULL										NULL
+6	NULL	NULL	2025-07-12 10:01:00	NULL	/f	NULL	NULL	2.2.2.2	node02.test-crawler.org	test-crawler.org	NULL										NULL
+7	NULL	NULL	2025-07-14 11:00:00	NULL	/g	NULL	NULL	2.3.1.1	exact-host.example.io	example.io	NULL										NULL
+8	NULL	NULL	2025-07-14 11:01:00	NULL	/h	NULL	NULL	2.3.1.2	other.exact-host.example.io	exact-host.example.io	NULL										NULL
+9	NULL	NULL	2025-07-16 12:00:00	NULL	/i	NULL	NULL	2.4.1.1	mybigscannerhost.net	mybigscannerhost.net	NULL										NULL
+10	NULL	NULL	2025-07-16 12:01:00	NULL	/j	NULL	NULL	2.4.1.2	no-bots-here.net	no-bots-here.net	NULL										NULL
+11	NULL	NULL	2025-07-22 14:00:00	NULL	/k	NULL	NULL	3.3.3.1	login.rcac.purdue.edu	purdue.edu	NULL										NULL
+12	NULL	NULL	2025-07-23 15:00:00	NULL	/l	NULL	NULL	4.4.4.1	NULL		NULL										NULL
+13	NULL	NULL	2025-07-23 15:01:00	NULL	/m	NULL	NULL	4.4.4.2			NULL										NULL
+14	NULL	NULL	2025-06-30 23:59:00	NULL	/n	NULL	NULL	5.5.5.1	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+15	NULL	NULL	2025-06-30 00:00:00	NULL	/o	NULL	NULL	5.5.5.2	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+16	NULL	NULL	2025-08-01 00:00:00	NULL	/p	NULL	NULL	5.5.5.3	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+17	NULL	NULL	2025-08-01 00:00:01	NULL	/q	NULL	NULL	5.5.5.4	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+18	NULL	NULL	2025-07-07 23:59:59	NULL	/r	NULL	NULL	6.1.1.1	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+19	NULL	NULL	2025-07-08 00:00:01	NULL	/s	NULL	NULL	6.1.1.2	foo.test-bot.example.com	test-bot.example.com	NULL										NULL
+20	NULL	NULL	2025-07-19 13:00:00	NULL	/t	NULL	NULL	7.1.1.1	whatever	?	NULL										NULL

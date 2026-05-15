@@ -1,0 +1,41 @@
+1	NULL	NULL	2025-07-05 08:00:00	NULL	/2lvl1	NULL	NULL	10.0.0.1	www.example.com	example.com	NULL										NULL
+2	NULL	NULL	2025-07-05 08:00:01	NULL	/2lvl2	NULL	NULL	10.0.0.2	mail.google.com	google.com	NULL										NULL
+3	NULL	NULL	2025-07-05 08:00:02	NULL	/2lvl3	NULL	NULL	10.0.0.3	site.example.org	example.org	NULL										NULL
+4	NULL	NULL	2025-07-05 08:00:03	NULL	/2lvl4	NULL	NULL	10.0.0.4	host.example.net	example.net	NULL										NULL
+5	NULL	NULL	2025-07-10 09:00:00	NULL	/i3-1	NULL	NULL	10.0.0.5	cs.purdue.edu	purdue.edu	NULL										NULL
+6	NULL	NULL	2025-07-10 09:00:01	NULL	/i3-2	NULL	NULL	10.0.0.6	login.csail.mit.edu	mit.edu	NULL										NULL
+7	NULL	NULL	2025-07-10 09:00:02	NULL	/i3-3	NULL	NULL	10.0.0.7	host.foo.com.au	foo.com.au	NULL										NULL
+8	NULL	NULL	2025-07-10 09:00:03	NULL	/i3-4	NULL	NULL	10.0.0.8	srv.foo.org.uk	foo.org.uk	NULL										NULL
+9	NULL	NULL	2025-07-10 09:00:04	NULL	/i3-5	NULL	NULL	10.0.0.9	web.foo.gov.uk	foo.gov.uk	NULL										NULL
+10	NULL	NULL	2025-07-10 09:00:05	NULL	/i3-6	NULL	NULL	10.0.0.10	a.b.ac.cn	b.ac.cn	NULL										NULL
+11	NULL	NULL	2025-07-10 09:00:06	NULL	/i3-7	NULL	NULL	10.0.0.11	host.co.jp	host.co.jp	NULL										NULL
+12	NULL	NULL	2025-07-10 09:00:07	NULL	/i3-8	NULL	NULL	10.0.0.12	site.physics.ed.au	physics.ed.au	NULL										NULL
+13	NULL	NULL	2025-07-11 10:00:00	NULL	/2x2-1	NULL	NULL	10.0.0.13	user.cs.ox.ac.uk	ox.ac.uk	NULL										NULL
+14	NULL	NULL	2025-07-11 10:00:01	NULL	/2x2-2	NULL	NULL	10.0.0.14	host.aa.bb	host.aa.bb	NULL										NULL
+15	NULL	NULL	2025-07-11 10:00:02	NULL	/2x2-3	NULL	NULL	10.0.0.15	login.kth.se	kth.se	NULL										NULL
+16	NULL	NULL	2025-07-11 10:00:03	NULL	/ub-1	NULL	NULL	10.0.0.16	site.ub.cc	ub.cc	NULL										NULL
+17	NULL	NULL	2025-07-11 10:00:04	NULL	/ub-2	NULL	NULL	10.0.0.17	a.b.ub.cc	ub.cc	NULL										NULL
+18	NULL	NULL	2025-07-11 10:00:05	NULL	/mil1	NULL	NULL	10.0.0.18	host.army.mil	host.army.mil	NULL										NULL
+19	NULL	NULL	2025-07-11 10:00:06	NULL	/mil2	NULL	NULL	10.0.0.19	server.navy.mil	server.navy.mil	NULL										NULL
+20	NULL	NULL	2025-07-11 10:00:07	NULL	/mil3	NULL	NULL	10.0.0.20	foo.af.mil	foo.af.mil	NULL										NULL
+21	NULL	NULL	2025-07-11 10:00:08	NULL	/mil4	NULL	NULL	10.0.0.21	a.b.army.mil	b.army.mil	NULL										NULL
+22	NULL	NULL	2025-07-12 11:00:00	NULL	/4us1	NULL	NULL	10.0.0.22	school.fairfax.k12.va.us	fairfax.k12.va.us	NULL										NULL
+23	NULL	NULL	2025-07-12 11:00:01	NULL	/4us2	NULL	NULL	10.0.0.23	lib.boston.lib.ma.us	boston.lib.ma.us	NULL										NULL
+24	NULL	NULL	2025-07-12 11:00:02	NULL	/4us3	NULL	NULL	10.0.0.24	site.middle.cc.va.us	middle.cc.va.us	NULL										NULL
+25	NULL	NULL	2025-07-12 11:00:03	NULL	/4us4	NULL	NULL	10.0.0.25	host.inst.tec.fl.us	inst.tec.fl.us	NULL										NULL
+26	NULL	NULL	2025-07-12 11:00:04	NULL	/4nu1	NULL	NULL	10.0.0.26	site.foo.bar.va.us	bar.va.us	NULL										NULL
+27	NULL	NULL	2025-07-12 11:00:05	NULL	/4nu2	NULL	NULL	10.0.0.27	site.foo.k12.va.de	k12.va.de	NULL										NULL
+28	NULL	NULL	2025-07-13 12:00:00	NULL	/h-1	NULL	NULL	10.0.0.28	host-a-b-c-d-foo.com	foo.com	NULL										NULL
+29	NULL	NULL	2025-07-13 12:00:01	NULL	/h-2	NULL	NULL	10.0.0.29	a-b-c-d-test.org	test.org	NULL										NULL
+30	NULL	NULL	2025-07-13 12:00:02	NULL	/u-1	NULL	NULL	10.0.0.30	a_b_c_d-foo.com	foo.com	NULL										NULL
+31	NULL	NULL	2025-07-13 12:00:03	NULL	/u-2	NULL	NULL	10.0.0.31	a_b_c_d_foo.com	foo.com	NULL										NULL
+32	NULL	NULL	2025-07-13 12:00:04	NULL	/u-3	NULL	NULL	10.0.0.32	a-b-c-d_foo.com	foo.com	NULL										NULL
+33	NULL	NULL	2025-07-14 13:00:00	NULL	/s-1	NULL	NULL	10.0.0.33	localhost	?	NULL										NULL
+34	NULL	NULL	2025-07-14 13:00:01	NULL	/s-2	NULL	NULL	10.0.0.34	?	?	NULL										NULL
+35	NULL	NULL	2025-07-14 13:00:02	NULL	/s-3	NULL	NULL	10.0.0.35	NULL		NULL										NULL
+36	NULL	NULL	2025-07-14 13:00:03	NULL	/s-4	NULL	NULL	10.0.0.36			NULL										NULL
+37	NULL	NULL	2025-07-14 13:00:04	NULL	/s-5	NULL	NULL	10.0.0.37	.example.com	example.com	NULL										NULL
+38	NULL	NULL	2025-07-15 14:00:00	NULL	/p-1	NULL	NULL	10.0.0.38	foo.skip-me.com	skip-me.com	NULL										NULL
+39	NULL	NULL	2025-07-15 14:00:01	NULL	/p-2	NULL	NULL	10.0.0.39	foo.also-skip.com	also-skip.com	NULL										NULL
+40	NULL	NULL	2025-06-30 23:59:00	NULL	/o-1	NULL	NULL	10.0.0.40	web.out-of-range.com	out-of-range.com	NULL										NULL
+41	NULL	NULL	2025-08-01 00:01:00	NULL	/o-2	NULL	NULL	10.0.0.41	web.out-of-range.com		NULL										NULL
