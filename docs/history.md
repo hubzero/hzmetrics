@@ -4,6 +4,17 @@ This document traces where the code under `tests/legacy/` came from
 and what came after it on the path to the current
 `hzmetrics.py`-based pipeline.
 
+## Early lineage (period 14 starts in 1995)
+
+The summary tables' all-time period uses `1995-01-01` as the lower
+bound — a hint at how long this codebase has been in service.
+HUBzero predates Joomla; the modern PHP/Perl pipeline accreted on
+top of an even older stats infrastructure.  Concrete fragments of
+2014–2016 ops notes survive in the project's history ( at
+, , the original ) — including the very first
+"basic new-month checks" runbook that the [operations.md](operations.md)
+runbook here is loosely modeled on.
+
 ## 2010s — The original HUBzero metrics package
 
 HUBzero is a Joomla-based CMS for "science gateways" — hosted
@@ -98,6 +109,17 @@ retrieving data.  Please check back later."  Permanently.).  The
 `hubzero-analytics` cron entry ran in production alongside the
 legacy `hubzero-metrics` cron entry, with neither codebase a complete
 replacement for the other.
+
+For a sense of scale, the `hubzero-analytics` codebase reached:
+
+- `Backend/Metrics/metrics_base.py` — 1639 lines
+- `Backend/Metrics/indTool.py` — 730 lines
+- `Backend/Metrics/baseTool.py` — 508 lines
+- ...plus the Celery scheduler, Redis broker, API/verb modules, and
+  Debian + RPM packaging.
+
+…all of which never fully displaced the ~800-line `xlogfix_summary.php`
+it was meant to replace.
 
 The lesson informed the current rewrite: **no broker, no daemon, no
 background workers**.  Cron + a single Python process + a PID lock is

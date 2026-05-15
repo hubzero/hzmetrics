@@ -1,0 +1,173 @@
+# Glossary
+
+Quick definitions of terms that appear across these docs.  Each entry
+is one or two sentences.
+
+### Hub / science gateway
+A web-accessible portal that hosts computational tools for a research
+community.  HUBzero-based hubs include  (the largest),
+, , , and historically 
+() and the some deployments.
+
+### HUBzero
+The CMS framework hubs are built on.  Joomla-based PHP with custom
+plugins, hosted at hubzero.org, sourced at github.com/hubzero.
+
+### Hub DB (`<hub>`)
+The live CMS database.  Owned by Joomla.  Metrics reads it but
+generally doesn't write to it (the exceptions are
+`jos_resource_stats*` and `jos_session_geo`).
+
+### Metrics DB (`<hub>_metrics`)
+The analytics database.  Owned end-to-end by the metrics pipeline.
+Contains `web`, `websessions`, `toolstart`, `userlogin`,
+`summary_*_vals`, and the static reference tables (`continents`,
+`countries`, `domainclass`, etc.).
+
+### Web row
+One row in `web` represents one Apache HTTP request.  Created by
+`import-apache`.  Enriched by `resolve-dns` / `fill-domain` /
+`fill-ipcountry` / `logfix-session`.
+
+### Web session
+One row in `websessions` represents a coalesced visitor session — a
+sequence of `web` rows from the same `ip` + `host` within 1800 seconds
+of each other.  Created by `logfix-session`.
+
+### Tool start
+One row in `toolstart` represents a user launching a computational
+tool.  Created from `<hub>.sessionlog` by `import-hub-data` and
+enriched with walltime / cputime by `middleware-wall` / `middleware-cpu`.
+
+### Simulation
+In metrics terms, a tool-launch event that resulted in a job being
+submitted.  Counted by `summary_simusage_vals` and the `sim_users()`
+function.  Distinct from a "view-only" tool session.
+
+### Period
+The time window a summary cell represents.  Six codes:
+
+| Code | Span |
+|:---:|:---|
+| `0`  | Calendar year containing `datetime` |
+| `1`  | The month itself |
+| `3`  | Quarter containing `datetime` |
+| `12` | Rolling 12 months ending at `datetime` |
+| `13` | Fiscal year (Oct–Sep) containing `datetime` |
+| `14` | All time (since 1995-01-01) |
+
+### datetime convention
+Summary tables use `'YYYY-MM-00 00:00:00'` for monthly anchors —
+zero-padded day to mark "this is a month, not a specific date".
+Period 14 (all-time) uses `'0000-00-00 00:00:00'` in some legacy
+layouts; the rewrite preserves whichever the legacy used.
+
+### rowid / colid
+The two indexes into a summary cell.  `rowid` is the metric (e.g.,
+"registered users", "simulation jobs", "domains served"); `colid` is
+the breakdown axis (1 = total; 2–6 = residence by continent; 7–11 =
+org type).  Each `summary_*_vals` table has its own `rowid` semantics;
+see [usage-tables.md](usage-tables.md).
+
+### Domain class
+A six-bucket categorization of internet domains used for the org-type
+breakdown.  Stored in the `domainclass` reference table:
+
+| Class | Meaning |
+|:---:|:---|
+| `0`   | Unknown (no domain information) |
+| `1`   | Educational institution |
+| `2`   | Industrial / corporate |
+| `3`   | Governmental |
+| `4`   | Internet service provider |
+| `5`   | Search engine |
+| `6`   | Press / media / publication |
+
+The mapping is hand-maintained.  Most of the entries date to 2015;
+periodic refresh is recommended but rarely happens.  `fill-domain`
+sets the domain on each `web` / `websessions` / `toolstart` row;
+`fill-user-info` and the summary `int_users()` / `reg_users()`
+functions roll the domain up into the colid 8–11 buckets.
+
+### Registered vs unregistered (guest) user
+- **Registered**: appears in `userlogin` (i.e., logged into the CMS).
+  Org / residence is taken from their `jos_xprofiles` profile if they
+  filled it out, otherwise treated as "unknown".
+- **Unregistered** (or "guest"): not logged in.  Identified by
+  `(ip, host)` pair in `websessions`.  Org / residence is inferred
+  from the resolved hostname → domain → `domainclass` lookup.
+
+The some deployments is anonymous-dominant — about 10 registered
+accounts total — so its metrics are essentially all guest-user
+inference.
+
+### Tool top / toplist / "top" code
+`jos_resource_stats_tools_topvals` and `jos_stats_topvals` store
+ranked lists of tools by various metrics.  The `top` column codes the
+metric:
+
+| `top` | Tool metric |
+|:---:|:---|
+| `2`  | Number of users |
+| `5`  | Number of jobs |
+| `6`  | Walltime |
+| `7`  | Simulation CPU time |
+| `8`  | Simulation interaction time |
+| `10` | Number of courses |
+| `11` | Course user count |
+
+`rank=0` is the special "total across all tools" row for that
+`(top, period, datetime)` triple.  `rank=1, 2, 3, …` are the
+individual tools in descending order.
+
+### dnload
+A boolean (`TINYINT 0/1`) column on the `web` table indicating
+whether the row represents a resource download.  Set inline by
+`import-apache` for new rows; `backfill-dnload` populates the
+historical rows.  Introduced by the rewrite to replace a slow `LIKE`-
+chain in `xlogfix_summary.php`'s download detection.
+
+### Login IPs / login_ips_tmp
+A temp table built at summary time, indexing every IP that appears
+in `userlogin_lite`.  Used as the "registered user" set against
+which `websessions.ip NOT IN (...)` filters identify unregistered
+visitors.  The rewrite materializes this as an indexed JOIN target
+instead of an in-memory comma list, dramatically speeding up the
+all-time aggregation.
+
+### whoisonline
+The live "who is currently online" widget.  Reads
+`<hub>.jos_session` every 5 minutes, looks up reverse DNS + GeoIP for
+new IPs, writes `<hub>.jos_session_geo` and
+`/var/www/<hub>/app/site/stats/maps/whoisonline.xml` for the Google
+Maps widget on the public usage page.  Real-time-ish, but a separate
+concern from the daily metrics pipeline.
+
+### Tick
+The cron entry point — `hzmetrics.py tick` — that runs every 5
+minutes.  Always refreshes whoisonline; at `:30` past the hour, also
+tries to run the metrics pipeline (under PID-lock guard).
+
+### Migration (schema)
+A row in `<hub>_metrics.migrations` recording an applied schema
+delta.  `hzmetrics.py migrate --apply` walks the unapplied migrations
+in order and runs them.  Modeled after Rails / Joomla migrations.
+
+### `access.cfg`
+`/etc/hubzero-metrics/access.cfg`.  Bare `$var = 'value';` PHP-style
+file with DB credentials.  Owned `root:apache` mode 640.  Read by
+`hzmetrics.py`, the legacy Perl scripts, and the test harness (via
+`HZMETRICS_ACCESS_CFG` env var).
+
+### exclude_list
+Per-hub table in the metrics DB.  Filters bots / scanners / utility
+traffic out of metrics processing.  See PR  for the modernized
+schema; see [operations.md](operations.md) for ops use.
+
+### A/B parity / bug-for-bug parity
+The rewrite's parity contract: the new code's output tables must be
+byte-identical to the legacy code's output tables for the same input
+fixtures.  Verified by `tests/ab/run-all.sh`.  Preserved even where
+the legacy had quirks (NULL vs empty-string, implementation-defined
+ordering with no tie-breaker, etc.) — those are documented and
+matched.

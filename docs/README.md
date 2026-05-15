@@ -14,9 +14,18 @@ Read in roughly this order if new to the project:
    the current rewrite came about.
 4. **[architecture.md](architecture.md)** — pipeline phases, the two
    databases, key tables, scheduling, locking, and the catch-up model.
-5. **[usage-tables.md](usage-tables.md)** — cheat sheet for the
+5. **[data-flow.md](data-flow.md)** — concrete trace of a single
+   Apache log line through every stage to its final summary cell.
+6. **[usage-tables.md](usage-tables.md)** — cheat sheet for the
    `summary_*_vals` tables that drive the usage-overview UI.  Adapted
    from J.M. Sperhac's "Hub usage data overview and table translator."
+7. **[deployment.md](deployment.md)** — install on a new hub: cron,
+   logrotate, schema bootstrap, optional unbound.
+8. **[operations.md](operations.md)** — runbook for ops tasks
+   (catch-up, stuck lock, bot inflation, DNS issues).
+9. **[testing.md](testing.md)** — A/B + golden test modes, 26 ports.
+10. **[glossary.md](glossary.md)** — short definitions for everything
+    above (hub, period code, dnload, domain class, rowid/colid, etc.).
 
 For a quick CLI reference:
 

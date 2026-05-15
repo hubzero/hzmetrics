@@ -137,6 +137,87 @@ produce a full period grid like the other summary tables — that's
 inherited from the legacy `xlogfix_andmore_usage.php` and preserved
 by the port.
 
+## Hub-side: `jos_stats_topvals` and `jos_resource_stats_tools_topvals`
+
+The per-tool ranked toplists, written into the hub DB (not the
+metrics DB) by `gen-tool-toplists` / `gen-tool-tops`.
+
+```
+( id        INT (auto),
+  top       TINYINT,     -- which tool metric (see table below)
+  datetime  DATETIME,    -- 'YYYY-MM-00 00:00:00'
+  period    TINYINT,     -- one of the six period codes
+  rank      SMALLINT,    -- 0 = total across all tools; 1, 2, 3 ... ranked tools
+  name      VARCHAR(255),-- 'Total Simulation Jobs' at rank=0; '<resid> ~ <title>' otherwise
+  value     BIGINT )
+```
+
+The `rank=0` row is the special "total across all tools" row for
+that `(top, period, datetime)` triple.  Reporting UIs (e.g.,
+`hub.org/usage/tools/12`) display the totals as the headline number
+and the ranks 1+ as the per-tool list below.
+
+### `top` codes
+
+| `top` | Tool metric |
+|:---:|:---|
+| `2`  | Number of users |
+| `5`  | Number of jobs |
+| `6`  | Walltime |
+| `7`  | Simulation CPU time |
+| `8`  | Simulation interaction time |
+| `10` | Number of courses |
+| `11` | Course user count |
+
+(From J.M. Sperhac's "Hub tool stats summarized" reference.)
+
+## Reference: `domainclass` table
+
+The 6-bucket categorization that drives the orgtype breakdown in
+`summary_user_vals` colid 8–11 and `summary_simusage_vals` same.
+Stored in `<hub>_metrics.domainclass`:
+
+| Class | Meaning |
+|:---:|:---|
+| `0`   | Unknown (no domain information) |
+| `1`   | Educational institution |
+| `2`   | Industrial / corporate |
+| `3`   | Governmental |
+| `4`   | Internet service provider |
+| `5`   | Search engine |
+| `6`   | Press / media / publication |
+
+The mapping is hand-maintained.  Most of the entries date to 2015
+(see Sperhac's "Organization type and location" reference).  Periodic
+refresh is recommended but rarely happens — adding a new
+educational, government, or industry domain to this table is what
+makes that domain show up in the right org-type bucket on the
+usage page.
+
+## How registered vs guest users are classified
+
+Two paths into the colid 2–11 breakdowns:
+
+**Registered users** (`reg_users`, rowid=6).  Identified by
+appearing in `userlogin_lite` (= filtered view of `userlogin` for
+login + simulation actions).  Org type and residence taken from
+their `jos_xprofiles_metrics` profile (`orgtype` and
+`countryresident` columns).  If they didn't fill out the profile,
+they roll up into "unknown" (colid=2 and 7 — i.e., they don't
+contribute to any of 3–6 or 8–11, only to the colid=1 total).
+
+**Guest / unregistered users** (`int_users`, rowid=7;
+`download_users`, rowid=8).  Identified by `(ip, host)` in
+`websessions` with no matching login row.  Org type from
+`domainclass` lookup on the resolved domain.  Residence from
+`fill-ipcountry`'s GeoIP, mapped to continent via `country_continent`.
+
+The some deployments is a special case: about 10 registered accounts
+total (the maintenance staff), almost all visitors are anonymous.
+So its summary_user_vals is essentially all rowid=7 (unregistered)
+and rowid=8 (download users), with rowid=6 (registered) nearly
+zero.  Most hubs have a richer registered-user population.
+
 ## Example queries
 
 These work against the live `<hub>_metrics` database and are exactly
