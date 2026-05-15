@@ -21,6 +21,16 @@ dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
 pip3.11 install --user aiodns                       # not packaged on Rocky 8
 ```
 
+Versions required:
+- `aiodns` >= 3.x (the c-ares-based async resolver used by
+  `resolve-dns`)
+- `pymysql` (any current 1.x)
+- Python >= 3.7 for `resolve-dns` itself (async syntax), but the
+  pipeline's `tick` self-relaunches into Python >= 3.10 when invoked
+  under an older interpreter — Rocky 8's system `/usr/bin/python3` is
+  3.6 which lacks `asyncio.run()`, so a separate `python3.11` install
+  alongside is the supported configuration.
+
 Test the Python version is discoverable: `hzmetrics.py` self-relaunches
 into the highest-numbered `python3.N` (≥ 3.10) it can find on `PATH`,
 so just having `python3.11` installed alongside the system `python3`

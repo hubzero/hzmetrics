@@ -283,3 +283,35 @@ ORDER BY datetime;
   time independent of the period being summarized.  This is a known
   design issue preserved for parity.
 - `summary_andmore_vals` only has periods 1/12/14 (not the full 6).
+- `summary_andmore_vals.datetime` uses `'YYYY-MM-01'` (day 01); the
+  other summary tables use `'YYYY-MM-00'` (zero day).  Caught by an
+  A/B test during the port — the convention difference comes from
+  legacy `xlogfix_andmore_usage.php` using `$processed_on =
+  $dthis_.'-01'` explicitly.
+
+## Deliberately-preserved legacy parity quirks
+
+Edge cases the rewrite mirrors exactly to keep `summary_*_vals`
+bug-for-bug compatible with the legacy pipeline.  Each is verified
+by an A/B test and would FAIL if the new code diverged.
+
+| Quirk | Where | Why preserved |
+|---|---|---|
+| `userlogin_lite` has no date filter on `int_users` / `download_users` queries | `summary_user_vals` rowid=3, rowid=4 | Counts inflate across runs; any reporting downstream is already calibrated to this |
+| `jos_xprofiles_metrics` reflects CURRENT profile state, not state-at-activity-time | `reg_users` / `sim_users` org-type breakdowns | Same reason — the table is fully rebuilt every run; any time-travel rewrite of historic months would shift old breakdowns |
+| `summary_misc_vals.rowid=3` writes `''` when SUM is NULL | empty windows | Legacy `db_fetch(NULL)` → `dbquote(NULL) → ''` |
+| `summary_misc_vals.rowid=7` is a formatted string, not a number | max-logins-on-day | `'42 users on 2025-07-15'` |
+| `summary_andmore_vals.datetime` ends in `-01`, others in `-00` | `andmore-usage` | Legacy `$processed_on = $dthis_.'-01'` |
+| Week-chunks start the day BEFORE the month | `fill-domain`, `clean-bots`, `gen-tool-stats` | Legacy `findWeeks()` returns `[$mon-1d, $mon+1w)` for chunk 0 |
+| Banker's rounding via `FLOOR(x+0.5)`, not `ROUND(x)` | `middleware-wall`, `middleware-cpu` | Perl `int($x+0.5)` is round-half-up; MariaDB `ROUND()` is banker's |
+| `cpu.pl` UPDATE-only (never INSERT) | `middleware-cpu` | Legacy carries the comment "Do nothing as are just importing CPUtimes" |
+| `cpu.pl` includes `event='[waiting]'`, wall excludes | `middleware-cpu` | Filters differ by metric; preserved per-metric |
+| `gridstat` is exact-match; `hctest%` is LIKE | Multiple ports | So `gridstatx` is NOT excluded; `hctester` IS excluded |
+| `download_users` rowid=4 uses a DIFFERENT WHERE filter than rowid=8 | `summary_user_vals` | rowid=4 has no `login_ips` exclusion and no `duration < 900` cap |
+| Last in-flight session of a `logfix-session` run is never emitted | `websessions` | Coalescer flushes only on session-end-detected; tail of run has none |
+| `INSERT IGNORE` on `userlogin` collapses duplicate `(datetime, user, ip, action)` tuples | `import-auth` | Legacy uses INSERT IGNORE; we preserve same semantics |
+| Floats stringified before binding into SQL to hit half-away-from-zero rounding | `gen-tool-stats` propagate | Otherwise pymysql's numeric-literal path hits banker's rounding |
+
+All preserved quirks are documented in commit messages of the form
+`A/B test: <port> — caught … divergence` and the test suite would
+break if any port regressed against them.

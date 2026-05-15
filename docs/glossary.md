@@ -171,3 +171,41 @@ fixtures.  Verified by `tests/ab/run-all.sh`.  Preserved even where
 the legacy had quirks (NULL vs empty-string, implementation-defined
 ordering with no tie-breaker, etc.) — those are documented and
 matched.
+
+### `_findweeks` / week-chunking
+A legacy pattern from `xlogfix_summary.php` / `xlogfix_domain.php`:
+break a month into ~4 week-sized scans for memory-bounded
+enrichment.  Has a known quirk — each week-chunk starts on the day
+**before** the month begins.  So July 2025's first chunk runs from
+`2025-06-30` to `2025-07-07`, not from `2025-07-01`.  Preserved
+bug-for-bug by the rewrite.
+
+### Banker's rounding (the middleware port quirk)
+MariaDB's `ROUND()` on a `DOUBLE` column uses round-half-to-even
+(banker's rounding) — `ROUND(200.5) → 200`.  Perl's `int($x + 0.5)`
+in `xlogfix_middleware_{wall,cpu}.pl` is round-half-up — `200.5 →
+201`.  The rewrite uses `FLOOR(x + 0.5)` instead of `ROUND()` to
+mirror the Perl semantics exactly.  Caught by the
+`port_middleware` A/B test.
+
+### `gridstat` / `hctest_` user filter
+Two patterns of "test account" excluded from metrics processing
+across the legacy code.  `gridstat` is an **exact-string** match
+(so `gridstatx` is NOT excluded).  `hctest%` is a LIKE pattern (so
+`hctest`, `hctest_x`, `hctestlonger`, `hctester` are all excluded).
+Preserved bug-for-bug.
+
+### Unflushed last session
+A legacy quirk in `logfix_session.pl`: the very last session of
+each run never gets emitted to `websessions` if no later row
+triggers the "session end found" path.  Preserved by the rewrite —
+the `port_logfix_session` test fixture exercises it explicitly.
+
+### Two paths to MySQL `INT` rounding
+Yet another preserved quirk.  The legacy PHP stringifies values
+before binding into SQL, so MariaDB applies half-away-from-zero
+rounding when casting a float-string to INT: `'488.5' → 489`.  The
+Python port's `pymysql` originally bound Python floats as numeric
+literals, hitting banker's rounding: `488.5 → 488`.  The fix:
+stringify Python floats before binding.  Caught by the
+`port_gen_tool_stats` A/B test.

@@ -160,6 +160,35 @@ after these and the indexed `dnload` column.
 target month — there is no incremental summary mode.  Idempotency
 comes from `DELETE` + `INSERT` per cell, not from skipping rows.
 
+The key performance optimizations the rewrite added to summarize
+(without changing what gets produced):
+
+- **`build_login_ips_table()`** materializes the registered-user IP
+  set into an indexed temp table.  Replaces a literal
+  comma-separated `WHERE ip NOT IN (…)` string that on mature hubs
+  grew past 100k IPs.
+- **`build_download_users_table()`** builds `dl_users_period_tmp`
+  once per period via a JOIN that drives from the (small) `WHERE
+  dnload=1` side rather than the (huge) `web` side.  Replaces a
+  correlated `EXISTS` against full `web` — the structural fix
+  behind the period-14 win.
+- **`download_sessions_tmp`** is built via a single `INSERT …
+  SELECT` instead of the legacy's row-by-row chunked INSERTs.
+- **`country_continent` lookups** are cached once at run start
+  rather than re-queried per cell.
+- **`_summary_11col_cells()`** is a shared helper for the 11-column
+  residency+orgtype block that `reg_users` and `sim_users` both
+  emit, parametrised by the country and orgtype columns.  This is
+  structural deduplication, not a behavior change.
+
+`gen_tool_stats.php` separately had `_findweeks()` for chunking the
+month into 4 week-sized scans.  The Python port preserves the
+chunking pattern, including the **legacy quirk that each week-chunk
+begins on the day BEFORE the month starts** (so July 2025's first
+chunk is `[2025-06-30, 2025-07-07)`).  This came up in A/B testing
+of `fill-domain` and is documented in the
+[`testing.md`](testing.md) and the commit message for that fix.
+
 ## Scheduling and concurrency
 
 One cron entry:

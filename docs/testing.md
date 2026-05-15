@@ -71,22 +71,80 @@ reference data — used between tests.
 
 ## When the harness catches things
 
-Real bugs surfaced during the port and fixed in the process:
+Real bugs surfaced during the port, with their commit messages
+preserved in the log for reference:
 
-- **`summary_misc_vals` rowid=3 NULL handling** —
-  `SUM(duration)` returns NULL on an empty period; legacy writes
-  empty string but the Python port was writing `"0"`.  Caught by
-  `port_period_sweep` at anchor months with no data.
-- **`xlogfix_middleware_cpu.pl` semantics** — three divergences
-  caught by `port_middleware`: banker's rounding vs round-half-up in
-  ROUND() on DOUBLE columns; `cpu.pl` does insert-only, doesn't
-  update; `cpu.pl` doesn't filter `event = '[waiting]'`; `cpu.pl`
-  uses `<=` not `<` on its update check.
-- **`fill-domain` day-before-month-start** — off-by-one on the lower
-  bound of the date window.
+- **`fill-domain` day-before-month-start** — legacy `findWeeks()`
+  starts a week-chunk on the day BEFORE the month begins (so
+  `2025-06-30 23:59:00` belongs to July 2025's first chunk).
+  Caught by `port_fill_domain`; commit
+  `A/B test: fill-domain — caught & fixed day-before-month-start
+  divergence`.
+- **`xlogfix_middleware_cpu.pl` — four real divergences** in one
+  commit (`A/B test: middleware-{wall,cpu} — caught three real
+  divergences`):
+  - MariaDB `ROUND()` is banker's rounding, Perl `int($x + 0.5)` is
+    round-half-up → fixed to `FLOOR(x + 0.5)`.
+  - `cpu.pl` only UPDATEs existing toolstart rows, never INSERTs
+    (the wall version does both).
+  - `cpu.pl`'s UPDATE check is `<= 0` (includes `cputime=0`), not
+    `< 0`.
+  - `cpu.pl` does not filter `joblog.event = '[waiting]'`; wall
+    does.  Caught when both ports were initially symmetric.
+- **`andmore-usage` datetime suffix** — legacy stores `'-01'`,
+  summarize uses `'-00'`; new port was using `'-00'` for both.
+  Commit `A/B test: andmore-usage — caught datetime suffix
+  divergence`.
+- **`logfix-session` cross-week state** — Perl declares session
+  state vars at script scope, so an in-flight session persists
+  across the 4 week-chunks of a month.  The Python port initially
+  reset state per chunk.  Commit `A/B test: logfix-session — caught
+  cross-week state divergence`.
+- **`summarize-month` reg_users col=1 missing-JOIN** — legacy
+  queries `userlogin_lite` directly (no JOIN) for col=1; my port
+  was unconditionally joining `jos_xprofiles_metrics` for every
+  col, so when `xprofiles_metrics` is empty it under-counted.
+  Commit `A/B test: summarize-month — caught reg_users col=1
+  missing-JOIN divergence`.
+- **`import-auth` bracket-strip** — `[user[sub]]` should produce
+  `user`, not `user[sub]`.  PHP `ltrim($x, '[') + rtrim($x, ']')`
+  use charlist semantics (strip ALL leading `[` and trailing `]`);
+  the port's regex was capturing the inner-bracketed content
+  literally.  Commit `A/B: deepen 5 fixtures — caught import-auth
+  bracket-strip bug`.
+- **`gen-tool-stats` float→int rounding** — Python float bound as
+  numeric literal hits MariaDB's banker's rounding; PHP stringifies
+  first and hits half-away-from-zero.  `488.5 → 488` vs `488.5 →
+  489`.  Fix: stringify floats before binding.  Commit `A/B:
+  deepen 5 more fixtures, caught gen-tool-stats float→int rounding
+  bug`.
+- **`download_users` rowid=4 vs rowid=8 filter mismatch** — the two
+  rowids use DIFFERENT WHERE filters in legacy (rowid=4 doesn't
+  exclude `login_ips` or cap `duration < 900`), but my port was
+  reusing `dl_users_period_tmp` built for rowid=8.  Caught by
+  deepening `port_summarize_month`'s fixture with a registered-user
+  downloader.  Commit `A/B: deepen summarize-month, caught
+  download_users rowid=4 filter mismatch`.
+- **`summary_misc_vals` rowid=3 NULL handling** — `SUM(duration)`
+  returns NULL on an empty period; legacy `db_fetch` returns NULL →
+  `dbquote(NULL)` writes empty string; the port coerced to `0`.
+  Caught by `port_period_sweep` at anchor months with no data.
+  Commit `A/B: period sweep test + fix misc_usage NULL → empty-
+  string parity`.
 
-Documented in commit history under `A/B test: <port> — caught …` and
-`A/B: …` messages.
+Plus the **"A/B re-baseline"** commit (`Roll back dnload-at-import
+and action-filter from hzmetrics.py`) — the most important harness
+catch.  An initial legacy snapshot included two **post-aa245f7**
+behaviors that had been absorbed into the new port: `import-apache`
+setting `dnload=1` inline, and `import-auth` filtering
+`action IN ('login','simulation')` at insert time.  Re-baselining
+the harness against the true pre-refactor snapshot revealed that
+the port had unintentionally inherited those changes; both got
+rolled back.  This is the divergence the docs talk about under
+"bug-for-bug parity is hard to verify when your baseline is wrong."
+
+Documented in commit history under `A/B test: <port> — caught …`
+and `A/B: …` messages.
 
 ## What can't be tested locally
 

@@ -150,6 +150,38 @@ By late 2025 the migration was done and the team had a clear view of
 what wasn't working in the original metrics pipeline on the
 post-migration hosts.
 
+## 2025 — Pre-rewrite stabilization on the reference host
+
+Before the full rewrite, ~2025 saw a year of in-place fixes against
+the legacy package on a HUBzero hub.  These are the commits
+that ultimately defined the "TRUE pre-refactor legacy" used as the
+A/B parity baseline:
+
+- **Jan 2025** — `whoisonline` bot-flag fix; `dns_worker` script
+  comments + qualified table-name worker-process check.
+- **Jan 30 2025** — explicit `timeout` prefix on the `host(1)`
+  shell-out per a StackOverflow recipe ([`gethostbyaddr` timeout
+  workaround](https://stackoverflow.com/questions/6972989/)) — the
+  closest the legacy code got to the rewrite's `aiodns` solution.
+- **Mar 3 2025** — `[]` Remove unused plotting scripts and
+  dependencies.
+- **Apr 29 2025** — Fix to enddate; exclude `/cron/tick` and `/api/`
+  content from metrics.
+- **May 5 2025** — `[]` triplet: null-var check before
+  `preg_match`, null-string `dbquote` handling, array element check
+  removing 'force' processing.
+- **Jun 10 2025** — `[]` Accommodate undefined parameters
+  (Jeanette Sperhac, jsperhac@ucsd.edu).
+- **Jun 12 2025** — Don't pass null to `mysqli_real_escape_string`.
+- **Jul 14 2025** — Handle `preg_match()` null parameter warning in
+  `xgethostbyaddr` (the function the rewrite ultimately replaced
+  wholesale with `aiodns`).
+
+These commits' authors include Jeanette Sperhac (SDSC, UCSD),
+Nicholas J. Kisseberth (Purdue), and other contributors.  The "January 2025 status" doc (`hzdocs/hubzero-metrics
+todo.md`) summarized the state at that point and set the agenda the
+rewrite later executed against.
+
 ## 2026 — Current rewrite (this repo)
 
 In 2026-05 a HUBzero hub became the first deployment target for
