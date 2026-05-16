@@ -1,4 +1,21 @@
-# hzmetrics
+<p align="center">
+  <img src="gh-pages/assets/logo.svg" alt="" width="120" height="120">
+</p>
+
+<h1 align="center">Hubzero Metrics Pipeline</h1>
+
+<p align="center">
+  <em>Apache logs &rarr; MariaDB analytics, in one Python file.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/hubzero/hzmetrics/actions/workflows/docs.yml"><img alt="docs CI" src="https://github.com/hubzero/hzmetrics/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="https://hubzero.github.io/hzmetrics/"><img alt="documentation" src="https://img.shields.io/badge/docs-hubzero.github.io%2Fhzmetrics-2456c2?logo=github&logoColor=white"></a>
+  <img alt="Python 3.7+" src="https://img.shields.io/badge/python-3.7%2B-3776ab?logo=python&logoColor=white">
+  <img alt="status: beta" src="https://img.shields.io/badge/status-beta-d54a3c">
+</p>
+
+---
 
 `hzmetrics.py` is the analytics pipeline for a HUBzero-based science
 gateway. It ingests Apache access logs and CMS authentication logs,
