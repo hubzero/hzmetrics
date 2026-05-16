@@ -13,6 +13,7 @@
   <a href="https://github.com/hubzero/hzmetrics/actions/workflows/docs.yml"><img alt="docs CI" src="https://github.com/hubzero/hzmetrics/actions/workflows/docs.yml/badge.svg"></a>
   <a href="https://hubzero.github.io/hzmetrics/"><img alt="documentation" src="https://img.shields.io/badge/docs-hubzero.github.io%2Fhzmetrics-2456c2?logo=github&logoColor=white"></a>
   <img alt="Python 3.7+" src="https://img.shields.io/badge/python-3.7%2B-3776ab?logo=python&logoColor=white">
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-007ec6"></a>
   <img alt="status: beta" src="https://img.shields.io/badge/status-beta-d54a3c">
 </p>
 
