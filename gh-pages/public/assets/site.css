@@ -155,6 +155,31 @@ code, pre { font-family: var(--font-code); }
 .home-main__about { max-width: 56rem; }
 .home-main__about > .prose { max-width: 56rem; }
 
+/* Site-wide Beta badge in the sticky header — small, sits between the
+   brand link and the top-nav on every page. Hidden on phones to keep
+   the header from wrapping awkwardly. */
+.site-header__beta {
+  display: inline-block;
+  font-family: var(--font-code);
+  font-weight: 900;
+  font-size: .78rem;
+  letter-spacing: .18em;
+  color: #d54a3c;
+  border: 2px solid #d54a3c;
+  padding: .08rem .5rem .12rem;
+  border-radius: .3rem;
+  transform: rotate(-8deg);
+  opacity: .85;
+  text-transform: uppercase;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  text-shadow: 0 0 2px rgba(213, 74, 60, 0.18);
+}
+@media (max-width: 720px) {
+  .site-header__beta { display: none; }
+}
+
 /* Rubber-stamp Beta badge — adapted from mod_botshield. Sits inline
    immediately to the right of the H1 title text (via the flex parent). */
 .hero__beta-stamp {

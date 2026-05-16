@@ -259,22 +259,17 @@ def build_docs_nav(groups: list[dict], pages_by_group: dict, page_titles: dict,
                 f'    <li><a class="{classes}" href="{escape(page_href)}">'
                 f'{escape(title)}</a></li>'
             )
-        # Expand the page list for the current group (so deep-nav stays
-        # focused on doc pages); on the homepage (no current group)
-        # expand every group, since the home sidebar IS the site index.
-        expand = (current_group is None) or is_current_group
-        if expand and items:
+        # Always render the full page list — keeps the table of contents
+        # complete and visible on every page; the active page (if any)
+        # gets `.is-active` set above.
+        if items:
             list_html = (
                 '\n  <ul class="docs-nav__list">\n'
                 + "\n".join(items)
                 + "\n  </ul>"
             )
         else:
-            count = len(pages_by_group.get(g_slug, []))
-            list_html = (
-                f'\n  <p class="docs-nav__count">{count} page'
-                f'{"s" if count != 1 else ""}</p>'
-            )
+            list_html = ""
         chunks.append(
             f'<div class="docs-nav__group">\n'
             f'  <a class="{title_classes}" href="{escape(href)}">'

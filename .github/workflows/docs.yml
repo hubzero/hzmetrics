@@ -32,6 +32,12 @@ permissions:
   pages: write
   id-token: write
 
+# Opt the JS-action runtimes into Node 24 ahead of the 2026-06-02 default
+# switch, so we don't see the "Node 20 actions are deprecated" warning
+# from checkout, setup-python, upload-pages-artifact, deploy-pages, etc.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 # Allow one concurrent deploy; don't cancel an in-flight production
 # publish, just queue behind it.
 concurrency:
