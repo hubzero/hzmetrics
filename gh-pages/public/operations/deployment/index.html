@@ -179,8 +179,7 @@ will execute.</p>
 (<code>jos_resource_stats_tools_topvals</code>, <code>jos_session_geo</code>, etc.) are
 created by the hub's own CMS migrations and shouldn't need
 anything from <code>hzmetrics.py</code>.  If they're missing, see the
-<code>exclude_list</code> schema work from PR  and check the hub's
-migration state.</p>
+<code>exclude_list</code> schema work and check the hub's migration state.</p>
 <p>Apply any pending schema migrations:</p>
 <pre><code>sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
 </code></pre>

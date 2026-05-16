@@ -76,6 +76,10 @@ in the project's history (an earlier hub, , the original
 runbook that the <a href="../../operations/operations/">operations.md</a> runbook here is
 loosely modeled on.</p>
 <h2 id="2010s-the-original-hubzero-metrics-package">2010s — The original HUBzero metrics package</h2>
+<p>The HUBzero metrics subsystem was originally written in Perl by
+Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the codebase to PHP, and that
+PHP form is what accreted through the 2010s and is preserved verbatim
+under <a href="../tests/legacy/"><code>tests/legacy/</code></a>.</p>
 <p>HUBzero is a CMS for &quot;science gateways&quot; — hosted collections of
 computational tools.  The metrics package was part of the
 open-source HUBzero distribution and shipped to every hub.  It
@@ -182,11 +186,10 @@ Purdue's RCAC.  The migration touched the metrics pipeline mostly
 through the <code>exclude_list</code> table — IP addresses, useragent strings,
 and domains that should be excluded from metrics accounting because
 they represent infrastructure activity, not user activity.</p>
-<p>Sperhac's PR
-[ &quot;Add columns and data to exclude_list metrics table&quot;]
-extended the schema (<code>notes</code> and <code>date_added</code> columns) and refreshed
-the bot/scanner/security-monitor entries.  The post-migration ops
-work that fed into this rewrite:</p>
+<p>Sperhac's pull request to add columns and data to the <code>exclude_list</code>
+metrics table extended the schema (<code>notes</code> and <code>date_added</code> columns)
+and refreshed the bot/scanner/security-monitor entries.  The
+post-migration ops work that fed into this rewrite:</p>
 <ul>
 <li>Added <code>rcac.purdue.edu</code> and <code>%.itap.purdue.edu</code> exclusions.</li>
 <li>Updated entries for current security scanners (Nessus, PRTG,
@@ -209,23 +212,24 @@ comments + qualified table-name worker-process check.</li>
 shell-out per a StackOverflow recipe (<a href="https://stackoverflow.com/questions/6972989/"><code>gethostbyaddr</code> timeout
 workaround</a>) — the
 closest the legacy code got to the rewrite's <code>aiodns</code> solution.</li>
-<li><strong>Mar 3 2025</strong> — <code>[]</code> Remove unused plotting scripts and
-dependencies.</li>
+<li><strong>Mar 3 2025</strong> — Remove unused plotting scripts and dependencies.</li>
 <li><strong>Apr 29 2025</strong> — Fix to enddate; exclude <code>/cron/tick</code> and <code>/api/</code>
 content from metrics.</li>
-<li><strong>May 5 2025</strong> — <code>[]</code> triplet: null-var check before
+<li><strong>May 5 2025</strong> — null-handling triplet: null-var check before
 <code>preg_match</code>, null-string <code>dbquote</code> handling, array element check
 removing 'force' processing.</li>
-<li><strong>Jun 10 2025</strong> — <code>[]</code> Accommodate undefined parameters
-(Jeanette Sperhac, jsperhac@ucsd.edu).</li>
+<li><strong>Jun 10 2025</strong> — Accommodate undefined parameters (Jeanette
+Sperhac, jsperhac@ucsd.edu).</li>
 <li><strong>Jun 12 2025</strong> — Don't pass null to <code>mysqli_real_escape_string</code>.</li>
 <li><strong>Jul 14 2025</strong> — Handle <code>preg_match()</code> null parameter warning in
 <code>xgethostbyaddr</code> (the function the rewrite ultimately replaced
 wholesale with <code>aiodns</code>).</li>
 </ul>
 <p>These commits' authors include Jeanette Sperhac (SDSC, UCSD),
-Nicholas J. Kisseberth (Purdue), and other contributors.  The &quot;January 2025 status&quot; doc (<code>hzdocs/hubzero-metrics todo.md</code>) summarized the state at that point and set the agenda the
-rewrite later executed against.</p>
+Nicholas J. Kisseberth (Purdue), and other contributors.  The
+&quot;January 2025 status&quot; doc (<code>hzdocs/hubzero-metrics todo.md</code>)
+summarized the state at that point and set the agenda the rewrite
+later executed against.</p>
 <h2 id="2026-current-rewrite-this-repo">2026 — Current rewrite (this repo)</h2>
 <p>In 2026-05 a HUBzero hub became the first deployment target for
 a focused Python rewrite.  Goals:</p>

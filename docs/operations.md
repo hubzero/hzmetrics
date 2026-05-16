@@ -181,7 +181,6 @@ INSERT INTO <hub>_metrics.exclude_list (filter, type, notes)
   VALUES ('128.210.12.34', 'ip', 'Purdue internal scanner');
 
 -- Available types: ip, host, useragent, domain, url
--- See PR  for the schema.
 ```
 
 `exclude_list` is consulted by:

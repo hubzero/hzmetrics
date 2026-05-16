@@ -173,15 +173,11 @@ for `FAIL`, `ERROR`, or `unrecognized` surfaces recoverable problems.
 | `docs/operations.md` | follows the 2014–2016 *Basic new-month checks* runbook (Sperhac, / era) |
 
 The commit history is annotated: each A/B-caught divergence is
-recorded as a `A/B test: <port> — caught … divergence` commit, and
-the relevant Jira tickets (, , , ,
-, , …) appear in the
-[`docs/README.md`](docs/README.md) cross-reference list.
+recorded as a `A/B test: <port> — caught … divergence` commit.
 
 ## Acknowledgments
 
-The original HUBzero metrics package and its ongoing development was
-supported in part by . Long-term stewardship
-of the codebase has been carried by J.M. Sperhac (SDSC),
-among others. This rewrite
-builds directly on their work.
+The HUBzero metrics subsystem was originally written in Perl by
+Swaroop Shivarajapura and later ported to PHP by Nicholas J. Kisseberth. Long-term
+stewardship of the codebase has been carried by J.M. Sperhac (SDSC),
+among others. This Python rewrite builds directly on their work.

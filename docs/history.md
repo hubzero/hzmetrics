@@ -17,6 +17,11 @@ loosely modeled on.
 
 ## 2010s — The original HUBzero metrics package
 
+The HUBzero metrics subsystem was originally written in Perl by
+Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the codebase to PHP, and that
+PHP form is what accreted through the 2010s and is preserved verbatim
+under [`tests/legacy/`](../tests/legacy/).
+
 HUBzero is a CMS for "science gateways" — hosted collections of
 computational tools.  The metrics package was part of the
 open-source HUBzero distribution and shipped to every hub.  It
@@ -134,11 +139,10 @@ through the `exclude_list` table — IP addresses, useragent strings,
 and domains that should be excluded from metrics accounting because
 they represent infrastructure activity, not user activity.
 
-Sperhac's PR
-[ "Add columns and data to exclude_list metrics table"]
-extended the schema (`notes` and `date_added` columns) and refreshed
-the bot/scanner/security-monitor entries.  The post-migration ops
-work that fed into this rewrite:
+Sperhac's pull request to add columns and data to the `exclude_list`
+metrics table extended the schema (`notes` and `date_added` columns)
+and refreshed the bot/scanner/security-monitor entries.  The
+post-migration ops work that fed into this rewrite:
 
 - Added `rcac.purdue.edu` and `%.itap.purdue.edu` exclusions.
 - Updated entries for current security scanners (Nessus, PRTG,
@@ -163,24 +167,24 @@ A/B parity baseline:
   shell-out per a StackOverflow recipe ([`gethostbyaddr` timeout
   workaround](https://stackoverflow.com/questions/6972989/)) — the
   closest the legacy code got to the rewrite's `aiodns` solution.
-- **Mar 3 2025** — `[]` Remove unused plotting scripts and
-  dependencies.
+- **Mar 3 2025** — Remove unused plotting scripts and dependencies.
 - **Apr 29 2025** — Fix to enddate; exclude `/cron/tick` and `/api/`
   content from metrics.
-- **May 5 2025** — `[]` triplet: null-var check before
+- **May 5 2025** — null-handling triplet: null-var check before
   `preg_match`, null-string `dbquote` handling, array element check
   removing 'force' processing.
-- **Jun 10 2025** — `[]` Accommodate undefined parameters
-  (Jeanette Sperhac, jsperhac@ucsd.edu).
+- **Jun 10 2025** — Accommodate undefined parameters (Jeanette
+  Sperhac, jsperhac@ucsd.edu).
 - **Jun 12 2025** — Don't pass null to `mysqli_real_escape_string`.
 - **Jul 14 2025** — Handle `preg_match()` null parameter warning in
   `xgethostbyaddr` (the function the rewrite ultimately replaced
   wholesale with `aiodns`).
 
 These commits' authors include Jeanette Sperhac (SDSC, UCSD),
-Nicholas J. Kisseberth (Purdue), and other contributors.  The "January 2025 status" doc (`hzdocs/hubzero-metrics
-todo.md`) summarized the state at that point and set the agenda the
-rewrite later executed against.
+Nicholas J. Kisseberth (Purdue), and other contributors.  The
+"January 2025 status" doc (`hzdocs/hubzero-metrics todo.md`)
+summarized the state at that point and set the agenda the rewrite
+later executed against.
 
 ## 2026 — Current rewrite (this repo)
 

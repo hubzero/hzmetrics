@@ -161,8 +161,8 @@ file with DB credentials.  Owned `root:apache` mode 640.  Read by
 
 ### exclude_list
 Per-hub table in the metrics DB.  Filters bots / scanners / utility
-traffic out of metrics processing.  See PR  for the modernized
-schema; see [operations.md](operations.md) for ops use.
+traffic out of metrics processing.  See
+[operations.md](operations.md) for ops use.
 
 ### A/B parity / bug-for-bug parity
 The rewrite's parity contract: the new code's output tables must be
