@@ -63,10 +63,13 @@ INSERT INTO joblog (sessnum, job, superjob, event, start, walltime, cputime, ncp
 USE foo_metrics_test;
 
 INSERT INTO toolstart (datetime, success, user, ip, tool, execunit, walltime, cputime) VALUES
-  -- carol: wall = -1 placeholder, cpu = 0 placeholder.  wall.pl updates wall to 201;
-  -- cpu.pl (which uses <= 0) updates cpu to 200.
-  ('2025-07-15 14:00:00', 1, 'carol', '3.3.3.1', 'tool3', 'gilbreth', -1, 0),
-  -- dave: wall = -1, cpu = -1.  Both updates apply.
-  ('2025-07-20 11:00:00', 1, 'dave', '4.4.4.1', 'tool4', 'gilbreth', -1, -1),
-  -- existing row that's already complete — wall.pl and cpu.pl should leave it.
+  -- carol: wall=0 / cpu=0 — the legacy Perl wrote "-1" as a placeholder
+  -- but toolstart.walltime/cputime are FLOAT UNSIGNED, so -1 was always
+  -- silently coerced to 0 in lenient mode (and rejected in strict mode).
+  -- wall.pl's `t.walltime < 0` UPDATE branch therefore never matched in
+  -- practice; cpu.pl's `t.cputime <= 0 AND j.cputime > 0` does.
+  ('2025-07-15 14:00:00', 1, 'carol', '3.3.3.1', 'tool3', 'gilbreth', 0, 0),
+  -- dave: same — wall stays 0, cpu may update if joblog matches.
+  ('2025-07-20 11:00:00', 1, 'dave', '4.4.4.1', 'tool4', 'gilbreth', 0, 0),
+  -- existing row that's already complete — wall.pl and cpu.pl leave it.
   ('2025-07-29 09:00:00', 1, 'jude', '12.0.0.1', 'toolE', 'gilbreth', 500, 400);

@@ -80,12 +80,15 @@ INSERT INTO userlogin (datetime, user, ip, action) VALUES
   ('2025-07-14 11:00:00', 'alice', '1.1.1.1', 'login'),
   ('2025-07-14 12:00:00', 'bob',   '8.8.8.8', 'login');
 
--- Pre-existing toolstart with -1 placeholder walltime/cputime — exercises
--- the UPDATE branch in middleware-wall (which uses < 0) and middleware-cpu
--- (which uses <= 0).
+-- Pre-existing toolstart with 0 placeholder walltime/cputime.  The legacy
+-- Perl wrote "-1" as a sentinel here but toolstart.walltime/cputime are
+-- FLOAT UNSIGNED — -1 was always silently coerced to 0 in lenient mode
+-- (and rejected in strict mode).  middleware-wall's `t.walltime < 0` UPDATE
+-- branch therefore never matched in practice; middleware-cpu's
+-- `t.cputime <= 0 AND j.cputime > 0` does.
 INSERT INTO toolstart (datetime, success, user, ip, tool, execunit, walltime, cputime) VALUES
-  ('2025-07-10 08:00:00', 1, 'alice', '1.1.1.1', 'aspectnotebook', 'h1', -1, -1),
-  ('2025-07-12 09:00:00', 1, 'bob',   '8.8.8.8', 'workspace',       'h1', -1, -1);
+  ('2025-07-10 08:00:00', 1, 'alice', '1.1.1.1', 'aspectnotebook', 'h1', 0, 0),
+  ('2025-07-12 09:00:00', 1, 'bob',   '8.8.8.8', 'workspace',       'h1', 0, 0);
 -- sessionlog 40003 + 40004 have no matching toolstart — middleware-wall
 -- INSERTs them.
 

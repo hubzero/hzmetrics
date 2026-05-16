@@ -1,4 +1,4 @@
-name: tests-golden
+name: tests
 
 # Golden-mode round of the A/B suite: runs only the new hzmetrics.py
 # ports and diffs each port's output tables against the frozen snapshot
@@ -14,13 +14,13 @@ on:
     paths:
       - 'hzmetrics.py'
       - 'tests/ab/**'
-      - '.github/workflows/tests-golden.yml'
+      - '.github/workflows/tests.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'hzmetrics.py'
       - 'tests/ab/**'
-      - '.github/workflows/tests-golden.yml'
+      - '.github/workflows/tests.yml'
   workflow_dispatch:
 
 jobs:
