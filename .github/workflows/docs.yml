@@ -32,12 +32,6 @@ permissions:
   pages: write
   id-token: write
 
-# Opt the JS-action runtimes into Node 24 ahead of the 2026-06-02 default
-# switch, so we don't see the "Node 20 actions are deprecated" warning
-# from checkout, setup-python, upload-pages-artifact, deploy-pages, etc.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 # Allow one concurrent deploy; don't cancel an in-flight production
 # publish, just queue behind it.
 concurrency:
@@ -50,10 +44,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
           cache: "pip"
@@ -75,7 +69,7 @@ jobs:
           fi
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: gh-pages/public
 
@@ -90,4 +84,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
