@@ -108,8 +108,11 @@ the daily-state-already-completed guard on `run` / `process` /
 ## Documentation site
 
 The docs under [`docs/`](docs/) are plain markdown and are rendered
-into a static HTML site under `gh-pages/public/` for GitHub Pages
-(Settings → Pages → Source = `main`, `/gh-pages/public`).
+into a static HTML site under `gh-pages/public/`. The site is
+published to GitHub Pages by `.github/workflows/docs.yml` via the
+Actions deploy flow (Settings → Pages → Source = GitHub Actions).
+
+Local preview:
 
 ```sh
 pip3.11 install -r gh-pages/requirements.txt   # one-shot; same pip you used for aiodns
@@ -117,10 +120,11 @@ python3 gh-pages/build_site.py                 # rebuild gh-pages/public/ from d
 ```
 
 The builder is `markdown-it-py` + a few small templates. The CI
-workflow at `.github/workflows/docs.yml` rebuilds the site on every
-PR/push and fails if `gh-pages/public/` would change — i.e., the
-author forgot to rebuild before committing. GitHub Pages itself
-publishes whatever lands in `gh-pages/public/` on `main`.
+workflow rebuilds on every PR/push and fails if the committed
+`gh-pages/public/` is out of sync with what the build produces — so
+reviewers see the visible-output delta in PR diffs. On `main`, the
+same workflow uploads `gh-pages/public/` as a Pages artifact and
+deploys it.
 
 Start reading at [`docs/README.md`](docs/README.md) — it links every
 other doc in roughly the order to read them.

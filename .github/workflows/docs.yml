@@ -1,23 +1,25 @@
 name: docs
 
-# Verifies that gh-pages/public/ stays in sync with docs/ + the templates/CSS
-# that wrap it. Pattern from rappture-monorepo's docs.yml: rebuild on every
-# PR/push, fail if `git diff --quiet gh-pages/public/` shows changes — i.e.,
-# the author forgot to rebuild before committing.
+# Build the docs site and publish it to GitHub Pages via the Actions
+# deploy flow.
 #
-# GitHub Pages itself publishes from `main:/gh-pages/public` (Settings →
-# Pages → Source), so this job's only role is consistency. Pages deployment
-# happens automatically when the merge to main lands; this workflow does
-# not push anything.
+# The built site is also committed under gh-pages/public/ for diff
+# visibility — the workflow fails on PR if that committed copy is out of
+# sync with what `gh-pages/build_site.py` would produce, so reviewers see
+# the visible-output delta in PR diffs.
+#
+# Pages source must be set to "GitHub Actions" once:
+#   Settings → Pages → Source = GitHub Actions
+#   (or: gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow)
 
 on:
-  pull_request:
+  push:
     branches: [ main ]
     paths:
       - 'docs/**'
       - 'gh-pages/**'
       - '.github/workflows/docs.yml'
-  push:
+  pull_request:
     branches: [ main ]
     paths:
       - 'docs/**'
@@ -25,9 +27,20 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deploy; don't cancel an in-flight production
+# publish, just queue behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  docs-fresh:
-    name: gh-pages/public/ is up to date with sources
+  build:
+    name: Build docs site
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -43,10 +56,10 @@ jobs:
       - name: Install builder deps
         run: pip install -r gh-pages/requirements.txt
 
-      - name: Rebuild gh-pages/public/
+      - name: Build site
         run: python3 gh-pages/build_site.py
 
-      - name: Fail if rebuild produced changes
+      - name: Fail if committed gh-pages/public/ is stale
         run: |
           if ! git diff --quiet gh-pages/public/; then
             echo "::error::gh-pages/public/ is out of sync with docs/ or gh-pages/ sources."
@@ -54,3 +67,21 @@ jobs:
             git --no-pager diff --stat gh-pages/public/
             exit 1
           fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: gh-pages/public
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    # Only deploy from main, not from PR builds.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
