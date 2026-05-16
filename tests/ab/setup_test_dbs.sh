@@ -17,7 +17,10 @@ FIXTURES="$SCRIPTPATH/fixtures"
 
 HUB_TEST_DB=foo_test
 METRICS_TEST_DB=foo_metrics_test
-TEST_USER=    # reuses prod app user; CREATE DB happens as root
+# Local default is empty (reuses the prod app user that's already
+# GRANTed locally). CI overrides with TEST_USER=<ci-user> via env so
+# the bootstrap GRANTs to a dedicated CI user.
+TEST_USER="${TEST_USER:-}"
 ACCESS_CFG="$FIXTURES/test_access.cfg"
 DB_PASS=$(grep "^\$db_pass" "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
 

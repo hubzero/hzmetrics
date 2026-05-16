@@ -1,0 +1,88 @@
+name: tests-golden
+
+# Golden-mode round of the A/B suite: runs only the new hzmetrics.py
+# ports and diffs each port's output tables against the frozen snapshot
+# of what legacy used to produce (tests/ab/port_*/golden/*.tsv).
+#
+# This is the subset of the test harness that does NOT need tests/legacy/
+# (the PHP/Perl/Bash reference implementation) to be runnable — perfect
+# for CI where we don't want to install a Perl + PHP toolchain too.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hzmetrics.py'
+      - 'tests/ab/**'
+      - '.github/workflows/tests-golden.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'hzmetrics.py'
+      - 'tests/ab/**'
+      - '.github/workflows/tests-golden.yml'
+  workflow_dispatch:
+
+jobs:
+  golden:
+    name: A/B golden-mode tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      # setup_test_dbs.sh honors this via "${TEST_USER:-}". Local runs
+      # leave it empty (reuses the prod app user); CI sets a dedicated
+      # name so the bootstrap can CREATE USER + GRANT cleanly.
+      TEST_USER: hzci
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install pymysql aiodns
+
+      - name: Install + start MariaDB
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mariadb -e "SELECT VERSION();"
+
+      - name: Patch test_access.cfg with the CI user
+        run: |
+          # The committed cfg ships with $db_user = '' (anonymous user,
+          # matches the local dev convention). For CI we need a real
+          # user; rewrite the cfg in place — change is contained to the
+          # runner workspace.
+          sed -i "s/^\$db_user = '';/\$db_user = '${TEST_USER}';/" \
+            tests/ab/fixtures/test_access.cfg
+          grep "^\$db_user" tests/ab/fixtures/test_access.cfg
+
+      - name: Create CI user in MariaDB
+        run: |
+          DB_PASS=$(grep "^\$db_pass" tests/ab/fixtures/test_access.cfg \
+                    | sed -E "s/.*'([^']+)'.*/\1/")
+          sudo mariadb <<SQL
+          CREATE USER IF NOT EXISTS '${TEST_USER}'@'localhost'
+            IDENTIFIED BY '${DB_PASS}';
+          SQL
+
+      - name: Bootstrap test databases
+        run: tests/ab/setup_test_dbs.sh --bootstrap
+
+      - name: Run golden suite
+        run: tests/ab/run-all-golden.sh
+
+      - name: Upload per-port logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abg-logs
+          path: /tmp/abg-*.log
+          if-no-files-found: ignore
+          retention-days: 7
