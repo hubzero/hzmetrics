@@ -13,10 +13,8 @@ PHP, Perl, and Bash scripts that previously lived at
 preserved verbatim under [`tests/legacy/`](tests/legacy/) and is the
 bug-for-bug parity target the A/B test harness compares against.
 
-The reference deployment is the
-[](https://) hub at Purdue. Other hubs
-running the same code include , , and
-historically .
+The reference deployment is a HUBzero hub at Purdue, with other
+HUBzero hubs running the same code.
 
 ## Quickstart
 
@@ -170,7 +168,7 @@ for `FAIL`, `ERROR`, or `unrecognized` surfaces recoverable problems.
 | `tests/legacy/gen_tool_*.php` | legacy tool-stats / tops / toplists generators |
 | `hubzero-metrics.cron.*` | distilled from the seven legacy cron entries into a single `tick` line |
 | `docs/usage-tables.md` | adapted from J.M. Sperhac's *Hub usage data overview and table translator* (Jan 2025) |
-| `docs/operations.md` | follows the 2014–2016 *Basic new-month checks* runbook (Sperhac, / era) |
+| `docs/operations.md` | follows the 2014–2016 *Basic new-month checks* runbook (Sperhac) |
 
 The commit history is annotated: each A/B-caught divergence is
 recorded as a `A/B test: <port> — caught … divergence` commit.
@@ -178,6 +176,7 @@ recorded as a `A/B test: <port> — caught … divergence` commit.
 ## Acknowledgments
 
 The HUBzero metrics subsystem was originally written in Perl by
-Swaroop Shivarajapura and later ported to PHP by Nicholas J. Kisseberth. Long-term
-stewardship of the codebase has been carried by J.M. Sperhac (SDSC),
-among others. This Python rewrite builds directly on their work.
+Swaroop Shivarajapura and later ported to PHP by Nicholas J.
+Kisseberth. Long-term stewardship of the codebase has been carried
+by J.M. Sperhac (SDSC), among others. This Python rewrite builds
+directly on their work.

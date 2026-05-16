@@ -40,15 +40,13 @@ target the A/B test harness compares the new code against.  See
 
 ---
 
-The reference HUBzero deployment for this code is the
-[](https://) hub at Purdue.  Other hubs
-running the same scripts include , , and
-historically .
+The reference HUBzero deployment for this code is a hub at Purdue.
+The same scripts run on other HUBzero hubs as well.
 
 ---
 
 **Acknowledgment.**  The HUBzero metrics subsystem was originally
-written in Perl by Swaroop Shivarajapura and later ported to PHP by Nicholas J. Kisseberth.
-Long-term stewardship of the codebase has been carried by
-J.M. Sperhac (SDSC), among others.  This Python rewrite builds
-directly on their work.
+written in Perl by Swaroop Shivarajapura and later ported to PHP by
+Nicholas J. Kisseberth.  Long-term stewardship of the codebase has
+been carried by J.M. Sperhac (SDSC), among others.  This Python
+rewrite builds directly on their work.

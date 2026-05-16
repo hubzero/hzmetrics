@@ -10,17 +10,16 @@ The summary tables' all-time period uses `1995-01-01` as the lower
 bound — a hint at how long this codebase has been in service.  The
 modern PHP/Perl pipeline accreted on top of an even older stats
 infrastructure.  Concrete fragments of 2014–2016 ops notes survive
-in the project's history (an earlier hub, , the original
-) — including the very first "basic new-month checks"
-runbook that the [operations.md](operations.md) runbook here is
-loosely modeled on.
+in the project's history — including the very first "basic new-month
+checks" runbook that the [operations.md](operations.md) runbook here
+is loosely modeled on.
 
 ## 2010s — The original HUBzero metrics package
 
 The HUBzero metrics subsystem was originally written in Perl by
-Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the codebase to PHP, and that
-PHP form is what accreted through the 2010s and is preserved verbatim
-under [`tests/legacy/`](../tests/legacy/).
+Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the
+codebase to PHP, and that PHP form is what accreted through the 2010s
+and is preserved verbatim under [`tests/legacy/`](../tests/legacy/).
 
 HUBzero is a CMS for "science gateways" — hosted collections of
 computational tools.  The metrics package was part of the
@@ -55,37 +54,35 @@ All preserved verbatim under [`tests/legacy/`](../tests/legacy/) at
 the snapshot just before this rewrite began.  See
 [architecture.md](architecture.md) for the table-by-table reference.
 
-## ~2017–2021 — the largest hub goes its own way
+## ~2017–2021 — A large hub goes its own way
 
- is by a wide margin the biggest HUBzero deployment.  As
-their traffic, tool count, and reporting requirements outgrew the
-stock pipeline, the the largest hub team forked and accumulated their own
-code:
+The largest HUBzero deployment had traffic, tool count, and reporting
+requirements that outgrew the stock pipeline.  Its operators forked
+and accumulated their own code:
 
-- **`metrics.custom.<hub>`** — additional PHP+Bash specific to
-  the largest hub.  Lived at `/opt/hubzero/bin/metrics.custom.<hub>`.
+- **`metrics.custom.<hub>`** — additional PHP+Bash specific to that
+  hub.  Lived under `/opt/hubzero/bin/metrics.custom.<hub>`.
   Refactored the daily run to use a Truth/Provisional/Production
   directory layout for logs (size-bounded sanity check on incoming
   log files) and added custom cleanup SQL scripts to delete known-bot
   rows from `web` and `websessions` after enrichment.
 - Custom Usage Overview plugins (`overview2017`, `overview2021`,
-  `overviewnew`, `overview`) — multiple competing versions in
-  the CMS plugin directory, of which `overview2017` was the
+  `overviewnew`, etc.) — multiple competing versions in the CMS
+  plugin directory, of which `overview2017` was the
   actually-deployed one.
 
-By 2024 the the largest hub deployment was running **three** metrics
-codebases concurrently:
+By 2024 that deployment was running **three** metrics codebases
+concurrently:
 
 1. `hubzero-metrics` — the open-source vanilla package, used for the
    fetch/import/archive of raw log files.
 2. `metrics.custom.<hub>` — hub-specific enrichment and summary.
 3. `hubzero-analytics` — see below.
 
-J.M. Sperhac's 2024-11 status writeup
-(`hzdocs/the largest hub metrics status 2024-11.md`) is the best account of
-how this got fragile: "complex, dated, fragile, and would benefit
-from an audit. They continue to require regular fixes. Some code
-that we execute daily is no longer relevant."
+J.M. Sperhac's 2024-11 status writeup is the best account of how this
+got fragile: "complex, dated, fragile, and would benefit from an
+audit. They continue to require regular fixes. Some code that we
+execute daily is no longer relevant."
 
 ## ~2017–2022 — `hubzero-analytics`, the attempted Python rewrite
 
@@ -109,12 +106,12 @@ Design choices:
 
 By 2024 the project had been effectively abandoned.  The repo at
 `gitlab.hubzero.org/hubzero/hubzero-analytics` was out of date
-relative to what was actually deployed on the largest hub.  Redis-backed
-resource usage plugins were timing out in the UI ("Currently
-retrieving data.  Please check back later."  Permanently.).  The
-`hubzero-analytics` cron entry ran in production alongside the
-legacy `hubzero-metrics` cron entry, with neither codebase a complete
-replacement for the other.
+relative to what was actually deployed.  Redis-backed resource usage
+plugins were timing out in the UI ("Currently retrieving data.
+Please check back later."  Permanently.).  The `hubzero-analytics`
+cron entry ran in production alongside the legacy `hubzero-metrics`
+cron entry, with neither codebase a complete replacement for the
+other.
 
 For a sense of scale, the `hubzero-analytics` codebase reached:
 
@@ -154,10 +151,10 @@ By late 2025 the migration was done and the team had a clear view of
 what wasn't working in the original metrics pipeline on the
 post-migration hosts.
 
-## 2025 — Pre-rewrite stabilization on the reference host
+## 2025 — Pre-rewrite stabilization
 
 Before the full rewrite, ~2025 saw a year of in-place fixes against
-the legacy package on a HUBzero hub.  These are the commits
+the legacy package on a Purdue-hosted hub.  These are the commits
 that ultimately defined the "TRUE pre-refactor legacy" used as the
 A/B parity baseline:
 
@@ -188,7 +185,7 @@ later executed against.
 
 ## 2026 — Current rewrite (this repo)
 
-In 2026-05 a HUBzero hub became the first deployment target for
+In 2026-05 a Purdue-hosted hub became the first deployment target for
 a focused Python rewrite.  Goals:
 
 - Replace `tests/legacy/*` with a single `hzmetrics.py` file.
@@ -225,9 +222,9 @@ pipeline and [testing.md](testing.md) for the test infrastructure.
 
 ## What was left behind on purpose
 
-- **The Truth/Provisional/Production log staging dance** from
-  `metrics.custom.<hub>`.  Simple `daily/` → `imported/` with a
-  state file and a single-process lock is enough.
+- **The Truth/Provisional/Production log staging dance** from the
+  hub-specific custom metrics layer.  Simple `daily/` → `imported/`
+  with a state file and a single-process lock is enough.
 - **Celery + Redis from `hubzero-analytics`**.  See above.
 - **Live-DB Redis caches** for per-resource usage plugins.  The
   database is fast enough now; the cache is unnecessary complexity.

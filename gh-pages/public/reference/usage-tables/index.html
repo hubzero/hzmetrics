@@ -521,11 +521,12 @@ contribute to any of 3–6 or 8–11, only to the colid=1 total).</p>
 <code>websessions</code> with no matching login row.  Org type from
 <code>domainclass</code> lookup on the resolved domain.  Residence from
 <code>fill-ipcountry</code>'s GeoIP, mapped to continent via <code>country_continent</code>.</p>
-<p>The some deployments is a special case: about 10 registered accounts
-total (the maintenance staff), almost all visitors are anonymous.
-So its summary_user_vals is essentially all rowid=7 (unregistered)
-and rowid=8 (download users), with rowid=6 (registered) nearly
-zero.  Most hubs have a richer registered-user population.</p>
+<p>Some hub deployments are a special case: registered accounts in
+the single digits (just the maintenance staff), with almost all
+visitors anonymous.  In those cases summary_user_vals is essentially
+all rowid=7 (unregistered) and rowid=8 (download users), with
+rowid=6 (registered) nearly zero.  Most hubs have a richer
+registered-user population.</p>
 <h2 id="example-queries">Example queries</h2>
 <p>These work against the live <code>&lt;hub&gt;_metrics</code> database and are exactly
 what the usage-overview UI does behind the scenes.</p>

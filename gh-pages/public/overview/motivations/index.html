@@ -79,13 +79,13 @@ resolution against the upstream resolver clocks in at <strong>~294 ms per
 IP</strong>.  A monthly batch with tens of thousands of new IPs spends most
 of an hour just on DNS.</p>
 <p>Bot traffic made both problems worse.  In late 2024 cookie-retaining
-crawlers inflated the largest hub's &quot;unique visitors&quot; count from a typical
-~250,000/month to over 1.1M, all of which had to be ingested,
+crawlers inflated one large hub's &quot;unique visitors&quot; count from a
+typical ~250,000/month to over 1.1M, all of which had to be ingested,
 enriched, and then partially deleted by hand-maintained &quot;clean-bots&quot;
 SQL scripts.  Some of those cleanup scripts spent three hours per
 night trying to delete rows that hadn't existed for years.</p>
-<p>By the time we reached a HUBzero hub at Purdue, three
-operational facts were obvious:</p>
+<p>By the time we reached the Purdue-hosted hub, three operational
+facts were obvious:</p>
 <ol>
 <li>Slow scripts on growing data become broken scripts.  The pipeline
 wasn't reliably finishing.</li>
@@ -98,8 +98,8 @@ processed the backlog automatically — logs just piled up in
 <code>daily/</code> directories until somebody noticed.</li>
 </ol>
 <h2 id="performance-before-and-after">Performance before and after</h2>
-<p>Measured against a HUBzero hub deployment (the reference
-target for this rewrite).  Concrete numbers where we have them;
+<p>Measured against the reference deployment for this rewrite.
+Concrete numbers where we have them;
 qualitative where we don't.</p>
 <table>
 <thead>
@@ -115,7 +115,7 @@ qualitative where we don't.</p>
 <td>Reverse-DNS per IP</td>
 <td>294 ms</td>
 <td>4.2 ms (system) / 2.1 ms (unbound c=500) / ~1 ms warm-cache</td>
-<td><code>host(1)</code> shell-out → <code>aiodns</code>; benchmarked on the reference host 2026-05-13.  <strong>70× / 140× / 280×</strong> faster</td>
+<td><code>host(1)</code> shell-out → <code>aiodns</code>; benchmarked 2026-05-13.  <strong>70× / 140× / 280×</strong> faster</td>
 </tr>
 <tr>
 <td>Reverse-DNS, 12-hub × 12-month catch-up</td>
@@ -288,14 +288,14 @@ summaries for the current month each run; freeze last-month at
 end-of-month.</li>
 </ul>
 <h2 id="why-python-and-not-the-abandoned-python-with-celery-and-redis-attempt">Why Python (and not the abandoned Python-with-Celery-and-Redis attempt)</h2>
-<p>A previous attempt — <code>hubzero-analytics</code>, used on the largest hub — already
-tried to replace the legacy pipeline with Python.  It introduced
-Celery, Redis, and a parallel Truth/Provisional/Production directory
-layout for log files.  It never fully replaced the legacy pipeline on
-the hubs that adopted it (the largest hub still ran the original PHP/Perl
-fetch/import scripts in parallel) and was effectively abandoned for
-the open-source HUBzero distribution.  See <a href="../history/">history.md</a>
-for more on that.</p>
+<p>A previous attempt — <code>hubzero-analytics</code>, used on the largest hub —
+already tried to replace the legacy pipeline with Python.  It
+introduced Celery, Redis, and a parallel Truth/Provisional/Production
+directory layout for log files.  It never fully replaced the legacy
+pipeline on the hubs that adopted it (that hub still ran the original
+PHP/Perl fetch/import scripts in parallel) and was effectively
+abandoned for the open-source HUBzero distribution.  See
+<a href="../history/">history.md</a> for more on that.</p>
 <p>This rewrite is deliberately the opposite shape: <strong>one file, no
 broker, no daemon, no background workers</strong>.  The pipeline is short
 enough and the data volume is small enough (compared to web-scale

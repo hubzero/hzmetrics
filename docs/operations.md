@@ -6,7 +6,7 @@ running, this is what to do when something looks off.
 
 The conventional sanity-check pattern goes back to the original
 HUBzero pipeline circa 2014–2016 (Sperhac's "Basic new-month checks
-for Usage Metrics Processing" runbook from the / era).
+for Usage Metrics Processing" runbook).
 The mechanics are different now but the questions to ask are the
 same.
 
@@ -169,8 +169,8 @@ Then re-summarize.
 
 This happens periodically — a crawler that retains the CMS session
 cookie is logged per-page-visit instead of once per visitor.
-the largest hub's October 2024 unique-visitor count went to 1.1M (typical:
-~250k) for this exact reason.
+One large hub's October 2024 unique-visitor count went to 1.1M
+(typical: ~250k) for this exact reason.
 
 The pipeline doesn't fix the bot problem at runtime.  Mitigation is
 via the `exclude_list` table in the metrics DB:
@@ -322,7 +322,7 @@ For richer monitoring, a Grafana dashboard reading
 `summary_*_vals` directly works well — both for the live usage
 view and for "are the numbers in the expected range?" checks.  (The
 2023 Sperhac conference talk includes screenshots
-of one such Grafana setup against `foo_metrics`.)
+of one such Grafana setup against a hub's metrics database.)
 
 ## When to escalate
 

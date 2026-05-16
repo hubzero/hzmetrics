@@ -11,8 +11,8 @@ Every HUBzero hub has two MariaDB schemas, both named after the hub:
 | `<hub>`           | CMS      | Live CMS state — users, profiles, resources, sessions.  Metrics reads from it; writes only `jos_session_geo` (for the whoisonline map) and `jos_resource_stats*` (per-tool aggregates surfaced by the UI). |
 | `<hub>_metrics`   | Pipeline | Enriched analytics — `web`, `websessions`, `toolstart`, `userlogin`, `summary_*_vals`, etc.  Owned end-to-end by `hzmetrics.py`. |
 
-On the reference deployment these are `foo` and
-`foo_metrics`.  Credentials are in
+For a hub named `foo`, these are `foo` and `foo_metrics`
+respectively.  Credentials are in
 `/etc/hubzero-metrics/access.cfg` (owned `root:apache`, mode 640).
 The config file uses a bare `$var = 'value';` syntax that is read by
 both the Python pipeline and the Perl scripts under

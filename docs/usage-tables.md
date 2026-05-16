@@ -212,11 +212,12 @@ contribute to any of 3–6 or 8–11, only to the colid=1 total).
 `domainclass` lookup on the resolved domain.  Residence from
 `fill-ipcountry`'s GeoIP, mapped to continent via `country_continent`.
 
-The some deployments is a special case: about 10 registered accounts
-total (the maintenance staff), almost all visitors are anonymous.
-So its summary_user_vals is essentially all rowid=7 (unregistered)
-and rowid=8 (download users), with rowid=6 (registered) nearly
-zero.  Most hubs have a richer registered-user population.
+Some hub deployments are a special case: registered accounts in
+the single digits (just the maintenance staff), with almost all
+visitors anonymous.  In those cases summary_user_vals is essentially
+all rowid=7 (unregistered) and rowid=8 (download users), with
+rowid=6 (registered) nearly zero.  Most hubs have a richer
+registered-user population.
 
 ## Example queries
 

@@ -73,7 +73,7 @@ practical follow-on to <a href="../deployment/">deployment.md</a> — once it's
 running, this is what to do when something looks off.</p>
 <p>The conventional sanity-check pattern goes back to the original
 HUBzero pipeline circa 2014–2016 (Sperhac's &quot;Basic new-month checks
-for Usage Metrics Processing&quot; runbook from the / era).
+for Usage Metrics Processing&quot; runbook).
 The mechanics are different now but the questions to ask are the
 same.</p>
 <h2 id="pipeline-is-running-am-i-getting-fresh-data">Pipeline is running — am I getting fresh data?</h2>
@@ -185,8 +185,8 @@ check that <code>web.dnload</code> is populated:</p>
 <h2 id="a-bot-is-inflating-counts">A bot is inflating counts</h2>
 <p>This happens periodically — a crawler that retains the CMS session
 cookie is logged per-page-visit instead of once per visitor.
-the largest hub's October 2024 unique-visitor count went to 1.1M (typical:
-~250k) for this exact reason.</p>
+One large hub's October 2024 unique-visitor count went to 1.1M
+(typical: ~250k) for this exact reason.</p>
 <p>The pipeline doesn't fix the bot problem at runtime.  Mitigation is
 via the <code>exclude_list</code> table in the metrics DB:</p>
 <pre><code class="language-sql">-- Add an IP/host/useragent/domain entry:
@@ -355,7 +355,7 @@ crontab handled exactly this — alerts on cron-output capture.</p>
 <code>summary_*_vals</code> directly works well — both for the live usage
 view and for &quot;are the numbers in the expected range?&quot; checks.  (The
 2023 Sperhac conference talk includes screenshots
-of one such Grafana setup against <code>foo_metrics</code>.)</p>
+of one such Grafana setup against a hub's metrics database.)</p>
 <h2 id="when-to-escalate">When to escalate</h2>
 <ul>
 <li>Pipeline runs but produces 0 rows in <code>web</code> for a day → check that

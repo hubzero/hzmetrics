@@ -25,14 +25,14 @@ IP**.  A monthly batch with tens of thousands of new IPs spends most
 of an hour just on DNS.
 
 Bot traffic made both problems worse.  In late 2024 cookie-retaining
-crawlers inflated the largest hub's "unique visitors" count from a typical
-~250,000/month to over 1.1M, all of which had to be ingested,
+crawlers inflated one large hub's "unique visitors" count from a
+typical ~250,000/month to over 1.1M, all of which had to be ingested,
 enriched, and then partially deleted by hand-maintained "clean-bots"
 SQL scripts.  Some of those cleanup scripts spent three hours per
 night trying to delete rows that hadn't existed for years.
 
-By the time we reached a HUBzero hub at Purdue, three
-operational facts were obvious:
+By the time we reached the Purdue-hosted hub, three operational
+facts were obvious:
 
 1. Slow scripts on growing data become broken scripts.  The pipeline
    wasn't reliably finishing.
@@ -46,13 +46,13 @@ operational facts were obvious:
 
 ## Performance before and after
 
-Measured against a HUBzero hub deployment (the reference
-target for this rewrite).  Concrete numbers where we have them;
+Measured against the reference deployment for this rewrite.
+Concrete numbers where we have them;
 qualitative where we don't.
 
 | Operation | Legacy | Rewrite | Notes |
 |---|---|---|---|
-| Reverse-DNS per IP | 294 ms | 4.2 ms (system) / 2.1 ms (unbound c=500) / ~1 ms warm-cache | `host(1)` shell-out → `aiodns`; benchmarked on the reference host 2026-05-13.  **70× / 140× / 280×** faster |
+| Reverse-DNS per IP | 294 ms | 4.2 ms (system) / 2.1 ms (unbound c=500) / ~1 ms warm-cache | `host(1)` shell-out → `aiodns`; benchmarked 2026-05-13.  **70× / 140× / 280×** faster |
 | Reverse-DNS, 12-hub × 12-month catch-up | ~1000 hr | ~2–4 hr | with centralized unbound; biggest fleet-wide win |
 | DNS for a typical month's new IPs | ~30+ min | ~30 sec | At concurrency=100 against system resolver |
 | Download-detection in summary | `LIKE`-chain scan of `web` | indexed `dnload=1` lookup | Was the hot loop in `xlogfix_summary.php` |
@@ -154,14 +154,14 @@ A surprising amount of the legacy design is sound and worth keeping:
 
 ## Why Python (and not the abandoned Python-with-Celery-and-Redis attempt)
 
-A previous attempt — `hubzero-analytics`, used on the largest hub — already
-tried to replace the legacy pipeline with Python.  It introduced
-Celery, Redis, and a parallel Truth/Provisional/Production directory
-layout for log files.  It never fully replaced the legacy pipeline on
-the hubs that adopted it (the largest hub still ran the original PHP/Perl
-fetch/import scripts in parallel) and was effectively abandoned for
-the open-source HUBzero distribution.  See [history.md](history.md)
-for more on that.
+A previous attempt — `hubzero-analytics`, used on the largest hub —
+already tried to replace the legacy pipeline with Python.  It
+introduced Celery, Redis, and a parallel Truth/Provisional/Production
+directory layout for log files.  It never fully replaced the legacy
+pipeline on the hubs that adopted it (that hub still ran the original
+PHP/Perl fetch/import scripts in parallel) and was effectively
+abandoned for the open-source HUBzero distribution.  See
+[history.md](history.md) for more on that.
 
 This rewrite is deliberately the opposite shape: **one file, no
 broker, no daemon, no background workers**.  The pipeline is short

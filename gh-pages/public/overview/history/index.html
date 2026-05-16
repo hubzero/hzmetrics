@@ -54,10 +54,10 @@
   <ul class="toc__list">
 <li class="toc__item toc__item--level-2"><a href="#early-lineage-period-14-starts-in-1995">Early lineage (period 14 starts in 1995)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#2010s-the-original-hubzero-metrics-package">2010s — The original HUBzero metrics package</a></li>
-<li class="toc__item toc__item--level-2"><a href="#20172021--goes-its-own-way">~2017–2021 — the largest hub goes its own way</a></li>
+<li class="toc__item toc__item--level-2"><a href="#20172021-a-large-hub-goes-its-own-way">~2017–2021 — A large hub goes its own way</a></li>
 <li class="toc__item toc__item--level-2"><a href="#20172022-hubzero-analytics-the-attempted-python-rewrite">~2017–2022 — `hubzero-analytics`, the attempted Python rewrite</a></li>
 <li class="toc__item toc__item--level-2"><a href="#2025-purdue-migration-exclude-list-refresh">2025 — Purdue migration, exclude_list refresh</a></li>
-<li class="toc__item toc__item--level-2"><a href="#2025-pre-rewrite-stabilization-on-">2025 — Pre-rewrite stabilization on the reference host</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2025-pre-rewrite-stabilization">2025 — Pre-rewrite stabilization</a></li>
 <li class="toc__item toc__item--level-2"><a href="#2026-current-rewrite-this-repo">2026 — Current rewrite (this repo)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#what-was-left-behind-on-purpose">What was left behind on purpose</a></li>
   </ul>
@@ -71,15 +71,14 @@ and what came after it on the path to the current
 bound — a hint at how long this codebase has been in service.  The
 modern PHP/Perl pipeline accreted on top of an even older stats
 infrastructure.  Concrete fragments of 2014–2016 ops notes survive
-in the project's history (an earlier hub, , the original
-) — including the very first &quot;basic new-month checks&quot;
-runbook that the <a href="../../operations/operations/">operations.md</a> runbook here is
-loosely modeled on.</p>
+in the project's history — including the very first &quot;basic new-month
+checks&quot; runbook that the <a href="../../operations/operations/">operations.md</a> runbook here
+is loosely modeled on.</p>
 <h2 id="2010s-the-original-hubzero-metrics-package">2010s — The original HUBzero metrics package</h2>
 <p>The HUBzero metrics subsystem was originally written in Perl by
-Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the codebase to PHP, and that
-PHP form is what accreted through the 2010s and is preserved verbatim
-under <a href="../tests/legacy/"><code>tests/legacy/</code></a>.</p>
+Swaroop Shivarajapura.  Nicholas J. Kisseberth later ported the
+codebase to PHP, and that PHP form is what accreted through the 2010s
+and is preserved verbatim under <a href="../tests/legacy/"><code>tests/legacy/</code></a>.</p>
 <p>HUBzero is a CMS for &quot;science gateways&quot; — hosted collections of
 computational tools.  The metrics package was part of the
 open-source HUBzero distribution and shipped to every hub.  It
@@ -111,36 +110,34 @@ tables to filter bots.</p>
 <p>All preserved verbatim under <a href="../tests/legacy/"><code>tests/legacy/</code></a> at
 the snapshot just before this rewrite began.  See
 <a href="../../reference/architecture/">architecture.md</a> for the table-by-table reference.</p>
-<h2 id="20172021--goes-its-own-way">~2017–2021 — the largest hub goes its own way</h2>
-<p> is by a wide margin the biggest HUBzero deployment.  As
-their traffic, tool count, and reporting requirements outgrew the
-stock pipeline, the the largest hub team forked and accumulated their own
-code:</p>
+<h2 id="20172021-a-large-hub-goes-its-own-way">~2017–2021 — A large hub goes its own way</h2>
+<p>The largest HUBzero deployment had traffic, tool count, and reporting
+requirements that outgrew the stock pipeline.  Its operators forked
+and accumulated their own code:</p>
 <ul>
-<li><strong><code>metrics.custom.<hub></code></strong> — additional PHP+Bash specific to
-the largest hub.  Lived at <code>/opt/hubzero/bin/metrics.custom.<hub></code>.
+<li><strong><code>metrics.custom.&lt;hub&gt;</code></strong> — additional PHP+Bash specific to that
+hub.  Lived under <code>/opt/hubzero/bin/metrics.custom.&lt;hub&gt;</code>.
 Refactored the daily run to use a Truth/Provisional/Production
 directory layout for logs (size-bounded sanity check on incoming
 log files) and added custom cleanup SQL scripts to delete known-bot
 rows from <code>web</code> and <code>websessions</code> after enrichment.</li>
 <li>Custom Usage Overview plugins (<code>overview2017</code>, <code>overview2021</code>,
-<code>overviewnew</code>, <code>overview</code>) — multiple competing versions in
-the CMS plugin directory, of which <code>overview2017</code> was the
+<code>overviewnew</code>, etc.) — multiple competing versions in the CMS
+plugin directory, of which <code>overview2017</code> was the
 actually-deployed one.</li>
 </ul>
-<p>By 2024 the the largest hub deployment was running <strong>three</strong> metrics
-codebases concurrently:</p>
+<p>By 2024 that deployment was running <strong>three</strong> metrics codebases
+concurrently:</p>
 <ol>
 <li><code>hubzero-metrics</code> — the open-source vanilla package, used for the
 fetch/import/archive of raw log files.</li>
-<li><code>metrics.custom.<hub></code> — hub-specific enrichment and summary.</li>
+<li><code>metrics.custom.&lt;hub&gt;</code> — hub-specific enrichment and summary.</li>
 <li><code>hubzero-analytics</code> — see below.</li>
 </ol>
-<p>J.M. Sperhac's 2024-11 status writeup
-(<code>hzdocs/the largest hub metrics status 2024-11.md</code>) is the best account of
-how this got fragile: &quot;complex, dated, fragile, and would benefit
-from an audit. They continue to require regular fixes. Some code
-that we execute daily is no longer relevant.&quot;</p>
+<p>J.M. Sperhac's 2024-11 status writeup is the best account of how this
+got fragile: &quot;complex, dated, fragile, and would benefit from an
+audit. They continue to require regular fixes. Some code that we
+execute daily is no longer relevant.&quot;</p>
 <h2 id="20172022-hubzero-analytics-the-attempted-python-rewrite">~2017–2022 — <code>hubzero-analytics</code>, the attempted Python rewrite</h2>
 <p>In parallel, a Python rewrite was attempted under the name
 <strong><code>hubzero-analytics</code></strong>.  It lived at <code>/usr/share/hubzero-analytics</code>
@@ -161,12 +158,12 @@ Celery-scheduled.</li>
 </ul>
 <p>By 2024 the project had been effectively abandoned.  The repo at
 <code>gitlab.hubzero.org/hubzero/hubzero-analytics</code> was out of date
-relative to what was actually deployed on the largest hub.  Redis-backed
-resource usage plugins were timing out in the UI (&quot;Currently
-retrieving data.  Please check back later.&quot;  Permanently.).  The
-<code>hubzero-analytics</code> cron entry ran in production alongside the
-legacy <code>hubzero-metrics</code> cron entry, with neither codebase a complete
-replacement for the other.</p>
+relative to what was actually deployed.  Redis-backed resource usage
+plugins were timing out in the UI (&quot;Currently retrieving data.
+Please check back later.&quot;  Permanently.).  The <code>hubzero-analytics</code>
+cron entry ran in production alongside the legacy <code>hubzero-metrics</code>
+cron entry, with neither codebase a complete replacement for the
+other.</p>
 <p>For a sense of scale, the <code>hubzero-analytics</code> codebase reached:</p>
 <ul>
 <li><code>Backend/Metrics/metrics_base.py</code> — 1639 lines</li>
@@ -200,9 +197,9 @@ list).</li>
 <p>By late 2025 the migration was done and the team had a clear view of
 what wasn't working in the original metrics pipeline on the
 post-migration hosts.</p>
-<h2 id="2025-pre-rewrite-stabilization-on-">2025 — Pre-rewrite stabilization on the reference host</h2>
+<h2 id="2025-pre-rewrite-stabilization">2025 — Pre-rewrite stabilization</h2>
 <p>Before the full rewrite, ~2025 saw a year of in-place fixes against
-the legacy package on a HUBzero hub.  These are the commits
+the legacy package on a Purdue-hosted hub.  These are the commits
 that ultimately defined the &quot;TRUE pre-refactor legacy&quot; used as the
 A/B parity baseline:</p>
 <ul>
@@ -231,7 +228,7 @@ Nicholas J. Kisseberth (Purdue), and other contributors.  The
 summarized the state at that point and set the agenda the rewrite
 later executed against.</p>
 <h2 id="2026-current-rewrite-this-repo">2026 — Current rewrite (this repo)</h2>
-<p>In 2026-05 a HUBzero hub became the first deployment target for
+<p>In 2026-05 a Purdue-hosted hub became the first deployment target for
 a focused Python rewrite.  Goals:</p>
 <ul>
 <li>Replace <code>tests/legacy/*</code> with a single <code>hzmetrics.py</code> file.</li>
@@ -264,9 +261,9 @@ port.</li>
 pipeline and <a href="../../operations/testing/">testing.md</a> for the test infrastructure.</p>
 <h2 id="what-was-left-behind-on-purpose">What was left behind on purpose</h2>
 <ul>
-<li><strong>The Truth/Provisional/Production log staging dance</strong> from
-<code>metrics.custom.<hub></code>.  Simple <code>daily/</code> → <code>imported/</code> with a
-state file and a single-process lock is enough.</li>
+<li><strong>The Truth/Provisional/Production log staging dance</strong> from the
+hub-specific custom metrics layer.  Simple <code>daily/</code> → <code>imported/</code>
+with a state file and a single-process lock is enough.</li>
 <li><strong>Celery + Redis from <code>hubzero-analytics</code></strong>.  See above.</li>
 <li><strong>Live-DB Redis caches</strong> for per-resource usage plugins.  The
 database is fast enough now; the cache is unnecessary complexity.</li>

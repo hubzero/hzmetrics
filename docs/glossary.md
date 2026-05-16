@@ -5,9 +5,7 @@ is one or two sentences.
 
 ### Hub / science gateway
 A web-accessible portal that hosts computational tools for a research
-community.  HUBzero-based hubs include  (the largest),
-, , , and historically 
-() and the some deployments.
+community.
 
 ### HUBzero
 The CMS framework hubs are built on.  Open-source PHP with custom
@@ -97,9 +95,9 @@ functions roll the domain up into the colid 8–11 buckets.
   `(ip, host)` pair in `websessions`.  Org / residence is inferred
   from the resolved hostname → domain → `domainclass` lookup.
 
-The some deployments is anonymous-dominant — about 10 registered
-accounts total — so its metrics are essentially all guest-user
-inference.
+Some hub deployments are anonymous-dominant — registered accounts
+in the single digits — so their metrics are essentially all
+guest-user inference.
 
 ### Tool top / toplist / "top" code
 `jos_resource_stats_tools_topvals` and `jos_stats_topvals` store
