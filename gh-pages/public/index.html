@@ -10,7 +10,7 @@
 <body class="site-home">
   <a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="page-shell">
-    <header class="site-header">
+    <header class="site-header site-header--compact">
       <a class="brand" href=".">
         <span class="brand__name">hzmetrics</span>
       </a>
@@ -20,37 +20,49 @@
     </header>
 
     <main id="main-content" class="home-layout" tabindex="-1">
-      <section class="hero">
-        <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
-        <p class="eyebrow">HUBzero metrics pipeline</p>
-        <h1>hzmetrics</h1>
-        <p class="hero__tagline">HUBzero metrics pipeline — one Python file, bug-for-bug compatible with the legacy PHP/Perl/Bash stack.</p>
-        <p class="hero__description">Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways.</p>
-      </section>
+      <aside class="home-sidebar" aria-label="Documentation sections">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="overview/motivations/index.html">Motivations</a></li>
+    <li><a class="docs-nav__item" href="overview/history/index.html">History</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="reference/data-flow/index.html">Data flow: one log line through the pipeline</a></li>
+    <li><a class="docs-nav__item" href="reference/usage-tables/index.html">Summary table cheat sheet</a></li>
+    <li><a class="docs-nav__item" href="reference/glossary/index.html">Glossary</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="operations/deployment/index.html">Deployment</a></li>
+    <li><a class="docs-nav__item" href="operations/operations/index.html">Operations runbook</a></li>
+    <li><a class="docs-nav__item" href="operations/testing/index.html">Testing</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
 
-      <section class="groups">
-        <h2 class="groups__heading">Sections</h2>
-        <div class="groups__grid">
-<a class="group-card" href="overview/index.html">
-  <h3 class="group-card__title">Overview</h3>
-  <p class="group-card__summary">What hzmetrics is, why it was rewritten, and where the code came from.</p>
-  <p class="group-card__meta">3 pages</p>
-</a>
-<a class="group-card" href="reference/index.html">
-  <h3 class="group-card__title">Reference</h3>
-  <p class="group-card__summary">Pipeline internals, end-to-end data flow, summary-table decoder, glossary.</p>
-  <p class="group-card__meta">4 pages</p>
-</a>
-<a class="group-card" href="operations/index.html">
-  <h3 class="group-card__title">Operations</h3>
-  <p class="group-card__summary">Install on a new hub, day-to-day runbook, A/B test harness.</p>
-  <p class="group-card__meta">3 pages</p>
-</a>
-        </div>
-      </section>
+      <article class="home-main">
+        <header class="home-main__header">
+          <p class="eyebrow">HUBzero metrics pipeline</p>
+          <h1 class="home-main__title">
+            <span class="home-main__title-text">hzmetrics</span>
+            <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
+          </h1>
+          <p class="home-main__tagline">HUBzero metrics pipeline — one Python file, bug-for-bug compatible with the legacy PHP/Perl/Bash stack.</p>
+          <p class="home-main__description">Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways.</p>
+        </header>
 
-      <section class="provenance">
-        <h2 class="provenance__heading">About these docs</h2>
+        <section class="home-main__about">
 <div class="prose">
 <p>Documentation for <code>hzmetrics.py</code> — the Python rewrite of the HUBzero
 metrics pipeline.</p>
@@ -96,7 +108,8 @@ been carried by J.M. Sperhac (SDSC), among others.  This Python
 rewrite builds directly on their work.</p>
 
 </div>
-      </section>
+        </section>
+      </article>
     </main>
 
     <footer class="site-footer">

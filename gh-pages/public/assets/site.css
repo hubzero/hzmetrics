@@ -89,31 +89,84 @@ code, pre { font-family: var(--font-code); }
 .eyebrow a { color: inherit; text-decoration: none; }
 .eyebrow a:hover { color: var(--accent-strong); }
 
-/* --- home --- */
-.hero {
-  position: relative;
-  padding: clamp(2rem, 5vw, 4rem) clamp(1rem, 4vw, 3rem);
-  color: #f1f4f9; background: var(--panel);
+/* --- home page (doc-page-style layout: sidebar + article) --- */
+.home-layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
 }
-.hero h1 {
-  margin: 0; font-size: clamp(2rem, 5vw, 3.6rem); line-height: 1.05;
-  letter-spacing: -0.01em; font-family: var(--font-code);
+@media (max-width: 60rem) {
+  .home-layout { grid-template-columns: 1fr; }
 }
 
-/* Rubber-stamp Beta badge — adapted from mod_botshield. */
+.home-sidebar {
+  padding: 1.2rem 1rem;
+  border-right: 1px solid var(--line);
+  background: #fafbfd;
+  font-size: .92rem;
+  max-height: calc(100vh - 1.2rem);
+  overflow-y: auto;
+  position: sticky; top: 0;
+  align-self: start;
+}
+@media (max-width: 60rem) {
+  .home-sidebar {
+    position: static; border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+.home-main {
+  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 4vw, 3rem);
+  min-width: 0;
+}
+
+.home-main__header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 1.4rem;
+  margin-bottom: 1.5rem;
+}
+
+.home-main__title {
+  margin: 0 0 .35rem;
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  line-height: 1.15;
+  font-family: var(--font-code);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.home-main__tagline {
+  max-width: 55rem;
+  margin: .25rem 0 .5rem;
+  color: var(--ink-soft);
+  font-size: 1.05rem;
+}
+
+.home-main__description {
+  max-width: 55rem;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: .95rem;
+}
+
+.home-main__about { max-width: 56rem; }
+.home-main__about > .prose { max-width: 56rem; }
+
+/* Rubber-stamp Beta badge — adapted from mod_botshield. Sits inline
+   immediately to the right of the H1 title text (via the flex parent). */
 .hero__beta-stamp {
-  position: absolute;
-  top: 1.5rem;
-  right: clamp(1rem, 4vw, 2.5rem);
-  z-index: 2;
+  display: inline-block;
   font-family: var(--font-code);
   font-weight: 900;
-  font-size: clamp(1.6rem, 3.5vw, 2.6rem);
+  font-size: clamp(.95rem, 1.7vw, 1.15rem);
   letter-spacing: 0.18em;
   color: #d54a3c;
-  border: 3px solid #d54a3c;
-  padding: 0.2rem 0.75rem 0.25rem;
-  border-radius: 0.4rem;
+  border: 2px solid #d54a3c;
+  padding: 0.15rem 0.6rem 0.2rem;
+  border-radius: 0.35rem;
   transform: rotate(-12deg);
   opacity: 0.85;
   text-transform: uppercase;
@@ -121,63 +174,8 @@ code, pre { font-family: var(--font-code); }
   user-select: none;
   white-space: nowrap;
   text-shadow: 0 0 2px rgba(213, 74, 60, 0.18);
+  vertical-align: middle;
 }
-
-@media (max-width: 720px) {
-  .hero__beta-stamp {
-    top: 0.75rem;
-    right: 0.75rem;
-    font-size: clamp(1.1rem, 5vw, 1.7rem);
-    border-width: 2px;
-    padding: 0.12rem 0.55rem 0.18rem;
-  }
-}
-.hero__tagline {
-  max-width: 50rem; margin: 1rem 0 .25rem; color: #c8d3e4; font-size: 1.15rem;
-}
-.hero__description {
-  max-width: 50rem; margin: 0; color: #a4b1c5; font-size: .98rem;
-}
-
-.groups {
-  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 4vw, 3rem);
-  border-bottom: 1px solid var(--line);
-}
-.groups__heading {
-  margin: 0 0 1.2rem; font-size: 1.4rem;
-}
-.groups__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-  gap: 1rem;
-}
-.group-card {
-  display: block; padding: 1.1rem 1.2rem;
-  background: var(--paper); border: 1px solid var(--line);
-  text-decoration: none; color: inherit;
-  transition: border-color .12s, transform .12s;
-}
-.group-card:hover {
-  border-color: var(--accent); transform: translateY(-1px);
-}
-.group-card__title {
-  margin: 0 0 .35rem; font-size: 1.1rem; color: var(--accent-strong);
-}
-.group-card__summary {
-  margin: 0 0 .5rem; color: var(--ink-soft); font-size: .94rem; line-height: 1.45;
-}
-.group-card__meta {
-  margin: 0; color: var(--ink-soft); font-size: .8rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .04em;
-}
-
-.provenance {
-  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 4vw, 3rem);
-}
-.provenance__heading {
-  margin: 0 0 1rem; font-size: 1.3rem;
-}
-.provenance .prose { font-size: .95rem; }
 
 /* --- group page --- */
 .group-layout {

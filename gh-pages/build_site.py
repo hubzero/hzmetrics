@@ -259,7 +259,11 @@ def build_docs_nav(groups: list[dict], pages_by_group: dict, page_titles: dict,
                 f'    <li><a class="{classes}" href="{escape(page_href)}">'
                 f'{escape(title)}</a></li>'
             )
-        if is_current_group and items:
+        # Expand the page list for the current group (so deep-nav stays
+        # focused on doc pages); on the homepage (no current group)
+        # expand every group, since the home sidebar IS the site index.
+        expand = (current_group is None) or is_current_group
+        if expand and items:
             list_html = (
                 '\n  <ul class="docs-nav__list">\n'
                 + "\n".join(items)
@@ -372,24 +376,15 @@ def main() -> int:
     write_text(output_dir / ".nojekyll", "")
 
     # --- homepage ---
+    # Doc-page-like layout: a fully-expanded section sidebar on the left
+    # (built by build_docs_nav with current_group=None) and the rendered
+    # docs/README.md as the article on the right.
     home_output = output_dir / "index.html"
-    group_cards = []
-    for group in groups:
-        count = len(pages_by_group.get(group["slug"], []))
-        gpath = output_dir / group["slug"] / "index.html"
-        href = relative_href(home_output, gpath)
-        group_cards.append(
-            '<a class="group-card" href="{href}">\n'
-            '  <h3 class="group-card__title">{title}</h3>\n'
-            '  <p class="group-card__summary">{summary}</p>\n'
-            '  <p class="group-card__meta">{count} page{plural}</p>\n'
-            '</a>'.format(
-                href=escape(href),
-                title=escape(group["title"]),
-                summary=escape(group["summary"]),
-                count=count, plural=("s" if count != 1 else ""),
-            )
-        )
+    home_nav_html = build_docs_nav(
+        groups, pages_by_group, page_titles,
+        home_output, output_dir,
+        None, None,
+    )
     home_html = render_template(
         SOURCE_DIR / "templates" / "home.html",
         {
@@ -398,7 +393,7 @@ def main() -> int:
             "site_description": escape(site_description),
             "github_href": escape(github_href),
             "assets_href": "assets/site.css",
-            "group_cards": "\n".join(group_cards),
+            "docs_nav": home_nav_html,
             "readme_html": readme_html,
         },
     )
