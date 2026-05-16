@@ -50,8 +50,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server
+          # The test fixtures and the existing hub_schema.sql were
+          # written against a relaxed sql_mode (no STRICT_TRANS_TABLES)
+          # that lets INSERTs omit NOT-NULL-without-default columns.
+          # The Ubuntu MariaDB default is strict; match the dev config.
+          sudo tee /etc/mysql/mariadb.conf.d/99-ci.cnf >/dev/null <<EOF
+          [mysqld]
+          sql_mode = NO_ENGINE_SUBSTITUTION
+          EOF
           sudo systemctl start mariadb
-          sudo mariadb -e "SELECT VERSION();"
+          sudo mariadb -e "SELECT VERSION(); SELECT @@sql_mode;"
 
       - name: Patch test_access.cfg with the CI user
         run: |
@@ -80,7 +88,7 @@ jobs:
 
       - name: Upload per-port logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: abg-logs
           path: /tmp/abg-*.log
