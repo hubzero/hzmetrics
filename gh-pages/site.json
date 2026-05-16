@@ -1,0 +1,26 @@
+{
+  "site_name": "hzmetrics",
+  "site_tagline": "HUBzero metrics pipeline — one Python file, bug-for-bug compatible with the legacy PHP/Perl/Bash stack.",
+  "site_description": "Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways (, , , historically ).",
+  "github_href": "https://github.com/hubzero/hzmetrics",
+  "groups": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "summary": "What hzmetrics is, why it was rewritten, and where the code came from.",
+      "pages": ["summary", "motivations", "history"]
+    },
+    {
+      "slug": "reference",
+      "title": "Reference",
+      "summary": "Pipeline internals, end-to-end data flow, summary-table decoder, glossary.",
+      "pages": ["architecture", "data-flow", "usage-tables", "glossary"]
+    },
+    {
+      "slug": "operations",
+      "title": "Operations",
+      "summary": "Install on a new hub, day-to-day runbook, A/B test harness.",
+      "pages": ["deployment", "operations", "testing"]
+    }
+  ]
+}

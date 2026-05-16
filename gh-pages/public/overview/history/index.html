@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>History | hzmetrics</title>
+  <meta name="description" content="What hzmetrics is, why it was rewritten, and where the code came from.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../motivations/index.html">Motivations</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">History</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <p class="docs-nav__count">4 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Overview</a></p>
+          <h1>History</h1>
+          <p class="docs-article__source">Source: <code>docs/history.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#early-lineage-period-14-starts-in-1995">Early lineage (period 14 starts in 1995)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2010s-the-original-hubzero-metrics-package">2010s — The original HUBzero metrics package</a></li>
+<li class="toc__item toc__item--level-2"><a href="#20172021--goes-its-own-way">~2017–2021 — the largest hub goes its own way</a></li>
+<li class="toc__item toc__item--level-2"><a href="#20172022-hubzero-analytics-the-attempted-python-rewrite">~2017–2022 — `hubzero-analytics`, the attempted Python rewrite</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2025-purdue-migration-exclude-list-refresh">2025 — Purdue migration, exclude_list refresh</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2025-pre-rewrite-stabilization-on-">2025 — Pre-rewrite stabilization on the reference host</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2026-current-rewrite-this-repo">2026 — Current rewrite (this repo)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-was-left-behind-on-purpose">What was left behind on purpose</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>This document traces where the code under <code>tests/legacy/</code> came from
+and what came after it on the path to the current
+<code>hzmetrics.py</code>-based pipeline.</p>
+<h2 id="early-lineage-period-14-starts-in-1995">Early lineage (period 14 starts in 1995)</h2>
+<p>The summary tables' all-time period uses <code>1995-01-01</code> as the lower
+bound — a hint at how long this codebase has been in service.  The
+modern PHP/Perl pipeline accreted on top of an even older stats
+infrastructure.  Concrete fragments of 2014–2016 ops notes survive
+in the project's history (an earlier hub, , the original
+) — including the very first &quot;basic new-month checks&quot;
+runbook that the <a href="../../operations/operations/">operations.md</a> runbook here is
+loosely modeled on.</p>
+<h2 id="2010s-the-original-hubzero-metrics-package">2010s — The original HUBzero metrics package</h2>
+<p>HUBzero is a CMS for &quot;science gateways&quot; — hosted collections of
+computational tools.  The metrics package was part of the
+open-source HUBzero distribution and shipped to every hub.  It
+consisted of:</p>
+<ul>
+<li>A cron-driven set of <strong>PHP scripts</strong> under <code>/opt/hubzero/bin/metrics/</code>
+that parsed daily Apache and CMS authentication logs into a
+<code>&lt;hub&gt;_metrics</code> database, enriched the rows (DNS, GeoIP, session
+coalescing), and computed monthly summary statistics.</li>
+<li>A HUBzero CMS &quot;usage overview&quot; plugin that read those summary
+tables and rendered the public usage reporting pages
+(<code>hub.org/usage</code>).</li>
+</ul>
+<p>The package was installed via RPM/DEB built from
+<code>source/Makefile</code> in this repo (and its <code>gitlab.hubzero.org/.../hubzero-metrics</code>
+predecessor).  Over a decade it grew through layered additions:
+Perl scripts to handle Apache log fetch and archive, more PHP for
+specific metric definitions, Bash glue between stages, exclusion-list
+tables to filter bots.</p>
+<p>The shape that survived to the rewrite:</p>
+<ul>
+<li>One file per metric subdomain (<code>xlogfix_dns_v2.sh</code>, <code>xlogfix_domain.php</code>,
+<code>xlogfix_summary.php</code>, etc.)</li>
+<li>One cron entry per stage (<code>import</code>, <code>process_tool_metrics</code>,
+<code>process_usage_metrics</code>, <code>process_usage_metrics_summary</code>)</li>
+<li>Two databases: live CMS (<code>&lt;hub&gt;</code>) and analytics (<code>&lt;hub&gt;_metrics</code>)</li>
+<li>Five summary tables keyed by <code>(rowid, colid, period, datetime)</code></li>
+</ul>
+<p>All preserved verbatim under <a href="../tests/legacy/"><code>tests/legacy/</code></a> at
+the snapshot just before this rewrite began.  See
+<a href="../../reference/architecture/">architecture.md</a> for the table-by-table reference.</p>
+<h2 id="20172021--goes-its-own-way">~2017–2021 — the largest hub goes its own way</h2>
+<p> is by a wide margin the biggest HUBzero deployment.  As
+their traffic, tool count, and reporting requirements outgrew the
+stock pipeline, the the largest hub team forked and accumulated their own
+code:</p>
+<ul>
+<li><strong><code>metrics.custom.<hub></code></strong> — additional PHP+Bash specific to
+the largest hub.  Lived at <code>/opt/hubzero/bin/metrics.custom.<hub></code>.
+Refactored the daily run to use a Truth/Provisional/Production
+directory layout for logs (size-bounded sanity check on incoming
+log files) and added custom cleanup SQL scripts to delete known-bot
+rows from <code>web</code> and <code>websessions</code> after enrichment.</li>
+<li>Custom Usage Overview plugins (<code>overview2017</code>, <code>overview2021</code>,
+<code>overviewnew</code>, <code>overview</code>) — multiple competing versions in
+the CMS plugin directory, of which <code>overview2017</code> was the
+actually-deployed one.</li>
+</ul>
+<p>By 2024 the the largest hub deployment was running <strong>three</strong> metrics
+codebases concurrently:</p>
+<ol>
+<li><code>hubzero-metrics</code> — the open-source vanilla package, used for the
+fetch/import/archive of raw log files.</li>
+<li><code>metrics.custom.<hub></code> — hub-specific enrichment and summary.</li>
+<li><code>hubzero-analytics</code> — see below.</li>
+</ol>
+<p>J.M. Sperhac's 2024-11 status writeup
+(<code>hzdocs/the largest hub metrics status 2024-11.md</code>) is the best account of
+how this got fragile: &quot;complex, dated, fragile, and would benefit
+from an audit. They continue to require regular fixes. Some code
+that we execute daily is no longer relevant.&quot;</p>
+<h2 id="20172022-hubzero-analytics-the-attempted-python-rewrite">~2017–2022 — <code>hubzero-analytics</code>, the attempted Python rewrite</h2>
+<p>In parallel, a Python rewrite was attempted under the name
+<strong><code>hubzero-analytics</code></strong>.  It lived at <code>/usr/share/hubzero-analytics</code>
+on the largest hub and was the only Python metrics code in production
+anywhere in the HUBzero ecosystem.</p>
+<p>Design choices:</p>
+<ul>
+<li><strong>Python + Celery</strong> for task scheduling.</li>
+<li><strong>Redis</strong> as a task broker and as a real-time data cache for the
+<code>whoisonline.py</code> widget and per-resource usage plugins
+(<code>plg_resources_usagenewdata</code> et al.).</li>
+<li><strong>Independent log import</strong> — <code>hubzero-analytics</code> did its own Apache
+log fetch and parse, parallel to the legacy <code>hubzero-metrics</code>
+fetch.</li>
+<li>Per-month scripts: <code>user_count.py</code>, <code>visitor_count.py</code>,
+<code>visitors_cumulative.py</code>, <code>andmore_user_builder.py</code>, etc., each
+Celery-scheduled.</li>
+</ul>
+<p>By 2024 the project had been effectively abandoned.  The repo at
+<code>gitlab.hubzero.org/hubzero/hubzero-analytics</code> was out of date
+relative to what was actually deployed on the largest hub.  Redis-backed
+resource usage plugins were timing out in the UI (&quot;Currently
+retrieving data.  Please check back later.&quot;  Permanently.).  The
+<code>hubzero-analytics</code> cron entry ran in production alongside the
+legacy <code>hubzero-metrics</code> cron entry, with neither codebase a complete
+replacement for the other.</p>
+<p>For a sense of scale, the <code>hubzero-analytics</code> codebase reached:</p>
+<ul>
+<li><code>Backend/Metrics/metrics_base.py</code> — 1639 lines</li>
+<li><code>Backend/Metrics/indTool.py</code> — 730 lines</li>
+<li><code>Backend/Metrics/baseTool.py</code> — 508 lines</li>
+<li>...plus the Celery scheduler, Redis broker, API/verb modules, and
+Debian + RPM packaging.</li>
+</ul>
+<p>…all of which never fully displaced the ~800-line <code>xlogfix_summary.php</code>
+it was meant to replace.</p>
+<p>The lesson informed the current rewrite: <strong>no broker, no daemon, no
+background workers</strong>.  Cron + a single Python process + a PID lock is
+sufficient for the actual data volumes involved.</p>
+<h2 id="2025-purdue-migration-exclude-list-refresh">2025 — Purdue migration, exclude_list refresh</h2>
+<p>In early-to-mid 2025 the HUBzero hubs migrated from SDSC hosting to
+Purdue's RCAC.  The migration touched the metrics pipeline mostly
+through the <code>exclude_list</code> table — IP addresses, useragent strings,
+and domains that should be excluded from metrics accounting because
+they represent infrastructure activity, not user activity.</p>
+<p>Sperhac's PR
+[ &quot;Add columns and data to exclude_list metrics table&quot;]
+extended the schema (<code>notes</code> and <code>date_added</code> columns) and refreshed
+the bot/scanner/security-monitor entries.  The post-migration ops
+work that fed into this rewrite:</p>
+<ul>
+<li>Added <code>rcac.purdue.edu</code> and <code>%.itap.purdue.edu</code> exclusions.</li>
+<li>Updated entries for current security scanners (Nessus, PRTG,
+Detectify, gatus).</li>
+<li>Per-hub IP refreshes (each hub has its own metrics DB and exclusion
+list).</li>
+</ul>
+<p>By late 2025 the migration was done and the team had a clear view of
+what wasn't working in the original metrics pipeline on the
+post-migration hosts.</p>
+<h2 id="2025-pre-rewrite-stabilization-on-">2025 — Pre-rewrite stabilization on the reference host</h2>
+<p>Before the full rewrite, ~2025 saw a year of in-place fixes against
+the legacy package on a HUBzero hub.  These are the commits
+that ultimately defined the &quot;TRUE pre-refactor legacy&quot; used as the
+A/B parity baseline:</p>
+<ul>
+<li><strong>Jan 2025</strong> — <code>whoisonline</code> bot-flag fix; <code>dns_worker</code> script
+comments + qualified table-name worker-process check.</li>
+<li><strong>Jan 30 2025</strong> — explicit <code>timeout</code> prefix on the <code>host(1)</code>
+shell-out per a StackOverflow recipe (<a href="https://stackoverflow.com/questions/6972989/"><code>gethostbyaddr</code> timeout
+workaround</a>) — the
+closest the legacy code got to the rewrite's <code>aiodns</code> solution.</li>
+<li><strong>Mar 3 2025</strong> — <code>[]</code> Remove unused plotting scripts and
+dependencies.</li>
+<li><strong>Apr 29 2025</strong> — Fix to enddate; exclude <code>/cron/tick</code> and <code>/api/</code>
+content from metrics.</li>
+<li><strong>May 5 2025</strong> — <code>[]</code> triplet: null-var check before
+<code>preg_match</code>, null-string <code>dbquote</code> handling, array element check
+removing 'force' processing.</li>
+<li><strong>Jun 10 2025</strong> — <code>[]</code> Accommodate undefined parameters
+(Jeanette Sperhac, jsperhac@ucsd.edu).</li>
+<li><strong>Jun 12 2025</strong> — Don't pass null to <code>mysqli_real_escape_string</code>.</li>
+<li><strong>Jul 14 2025</strong> — Handle <code>preg_match()</code> null parameter warning in
+<code>xgethostbyaddr</code> (the function the rewrite ultimately replaced
+wholesale with <code>aiodns</code>).</li>
+</ul>
+<p>These commits' authors include Jeanette Sperhac (SDSC, UCSD),
+Nicholas J. Kisseberth (Purdue), and other contributors.  The &quot;January 2025 status&quot; doc (<code>hzdocs/hubzero-metrics todo.md</code>) summarized the state at that point and set the agenda the
+rewrite later executed against.</p>
+<h2 id="2026-current-rewrite-this-repo">2026 — Current rewrite (this repo)</h2>
+<p>In 2026-05 a HUBzero hub became the first deployment target for
+a focused Python rewrite.  Goals:</p>
+<ul>
+<li>Replace <code>tests/legacy/*</code> with a single <code>hzmetrics.py</code> file.</li>
+<li>Bug-for-bug compatible with the legacy code at the metric-value
+level (verified by A/B harness).</li>
+<li>Built-in catch-up so a stalled pipeline can be left to drain
+unattended.</li>
+<li>Fix the <code>xlogfix_summary.php</code> period-14 performance blowup by
+introducing the indexed <code>dnload</code> column.</li>
+<li>Replace the <code>host(1)</code> per-IP DNS shell-out with <code>aiodns</code>.</li>
+</ul>
+<p>Notable mile markers preserved in commit history:</p>
+<ul>
+<li><strong><code>Pipeline refactor: hzmetrics.py manager, dnload column, schema migrations, backlog catch-up</code></strong> — the first commit introducing the
+Python pipeline manager, the <code>dnload</code> column, the <code>migrations</code>
+table, and the backlog-catchup loop.</li>
+<li><strong><code>Move legacy reference code into tests/legacy/</code></strong> — the synthetic
+commit that relocates the original PHP/Perl/Bash scripts into a
+reference location.  After this commit, edits to legacy files are
+rare and explicitly for testability.</li>
+<li><strong><code>A/B harness step 1: restore legacy scripts + HZMETRICS_ACCESS_CFG</code></strong>
+through <strong><code>A/B re-baseline: legacy is now aa245f7^ (TRUE pre-refactor commit)</code></strong> — building out the A/B test harness against
+the pristine pre-refactor legacy as the wire-format reference.</li>
+<li>Per-port test commits (<code>A/B test: fill-domain</code>, <code>A/B test: middleware-{wall,cpu} — caught three real divergences</code>, etc.) —
+each documents real divergences caught by the harness during the
+port.</li>
+</ul>
+<p><code>hzmetrics.py</code> reached A/B parity in late 2026-05.  See
+<a href="../../reference/architecture/">architecture.md</a> for the current shape of the
+pipeline and <a href="../../operations/testing/">testing.md</a> for the test infrastructure.</p>
+<h2 id="what-was-left-behind-on-purpose">What was left behind on purpose</h2>
+<ul>
+<li><strong>The Truth/Provisional/Production log staging dance</strong> from
+<code>metrics.custom.<hub></code>.  Simple <code>daily/</code> → <code>imported/</code> with a
+state file and a single-process lock is enough.</li>
+<li><strong>Celery + Redis from <code>hubzero-analytics</code></strong>.  See above.</li>
+<li><strong>Live-DB Redis caches</strong> for per-resource usage plugins.  The
+database is fast enough now; the cache is unnecessary complexity.</li>
+<li><strong>Multiple competing usage-overview plugins</strong> in the CMS
+codebase.  The rewrite only writes the summary tables; the UI side
+is downstream and out of scope.</li>
+</ul>
+<p>These are documented here to make clear that &quot;not in the rewrite&quot; is
+not the same as &quot;we forgot.&quot;  Each was a deliberate decision.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

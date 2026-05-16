@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data flow: one log line through the pipeline | hzmetrics</title>
+  <meta name="description" content="Pipeline internals, end-to-end data flow, summary-table decoder, glossary.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Data flow: one log line through the pipeline</a></li>
+    <li><a class="docs-nav__item" href="../usage-tables/index.html">Summary table cheat sheet</a></li>
+    <li><a class="docs-nav__item" href="../glossary/index.html">Glossary</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Data flow: one log line through the pipeline</h1>
+          <p class="docs-article__source">Source: <code>docs/data-flow.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#starting-point-a-raw-apache-log-line">Starting point: a raw Apache log line</a></li>
+<li class="toc__item toc__item--level-2"><a href="#stage-1-fetch-tick-run-import">Stage 1 — fetch (`tick` → `run` → `import`)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#stage-2-import-apache">Stage 2 — import-apache</a></li>
+<li class="toc__item toc__item--level-2"><a href="#stage-3-analyze-enrichment-chain">Stage 3 — analyze (enrichment chain)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#resolve-dns">resolve-dns</a></li>
+<li class="toc__item toc__item--level-3"><a href="#fill-domain">fill-domain</a></li>
+<li class="toc__item toc__item--level-3"><a href="#fill-ipcountry">fill-ipcountry</a></li>
+<li class="toc__item toc__item--level-3"><a href="#logfix-session">logfix-session</a></li>
+<li class="toc__item toc__item--level-3"><a href="#clean-bots">clean-bots</a></li>
+<li class="toc__item toc__item--level-3"><a href="#gen-tool-stats-gen-tool-tops-gen-tool-toplists">gen-tool-stats / gen-tool-tops / gen-tool-toplists</a></li>
+<li class="toc__item toc__item--level-3"><a href="#andmore-usage">andmore-usage</a></li>
+<li class="toc__item toc__item--level-2"><a href="#stage-4-summarize">Stage 4 — summarize</a></li>
+<li class="toc__item toc__item--level-3"><a href="#total-users-int-users-unregistered-visitors">`total_users` / `int_users` (unregistered visitors)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#download-users">`download_users`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#why-the-rewrite-is-faster-than-legacy-here">Why the rewrite is faster than legacy here</a></li>
+<li class="toc__item toc__item--level-2"><a href="#final-state">Final state</a></li>
+<li class="toc__item toc__item--level-2"><a href="#same-line-registered-user-variant">Same line, registered user variant</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>This document traces a single Apache HTTP request from the raw log
+file all the way through to a cell in <code>summary_user_vals</code>.
+Concrete example, end to end.</p>
+<h2 id="starting-point-a-raw-apache-log-line">Starting point: a raw Apache log line</h2>
+<pre><code>2025-07-10 14:23:11 EDT 12345 - &quot;GET /resources/345/download/foo.zip HTTP/1.1&quot;
+  200 102400 203.0.113.42 &quot;https://www.google.com/&quot; &quot;Mozilla/5.0 ...&quot;
+  TLSv1.3 0 102400 - - - - - - - - -
+</code></pre>
+<p>Sitting in <code>/var/log/httpd/daily/&lt;hub&gt;-access.log-20250710</code> after
+the host's logrotate ran at midnight.</p>
+<h2 id="stage-1-fetch-tick-run-import">Stage 1 — fetch (<code>tick</code> → <code>run</code> → <code>import</code>)</h2>
+<p><code>tick</code> runs every 5 minutes.  At <code>:30</code>, it acquires the PID lock and
+calls <code>run</code>.  <code>run</code> walks the daily logs oldest-first:</p>
+<pre><code>/var/log/httpd/daily/&lt;hub&gt;-access.log-20250710     ← target
+/var/log/hubzero/daily/cmsauth.log-20250710        ← same day
+</code></pre>
+<p><code>fetch</code> concatenates the day's access logs into a staging file:</p>
+<pre><code>/var/log/hubzero/metrics/_hub_apache.log
+/var/log/hubzero/metrics/_hub_auth.log
+</code></pre>
+<h2 id="stage-2-import-apache">Stage 2 — import-apache</h2>
+<p><code>hzmetrics.py import-apache /var/log/hubzero/metrics/_hub_apache.log</code>
+reads the staging file line by line.</p>
+<p>For our log line:</p>
+<ol>
+<li><strong>Regex match.</strong> Two regexes: <code>_APACHE_PAT_NEW</code> (23 fields,
+current Apache layout) and <code>_APACHE_PAT_OLD</code> (14 fields, kept for
+archived logs).  Our line matches NEW.</li>
+<li><strong>Extract fields.</strong> Method = <code>GET</code>, status = <code>200</code>, bytes =
+<code>102400</code>, IP = <code>203.0.113.42</code>, URL = <code>/resources/345/download/foo.zip</code>.</li>
+<li><strong>Method filter.</strong> GET or POST only.  ✓</li>
+<li><strong>Status filter.</strong> <code>status == 200 &amp;&amp; bytes &gt; 0</code>.  ✓</li>
+<li><strong>URL exclusion filter.</strong>  Checked against <code>exclude_list</code> for IP /
+useragent / URL hits.  The URL would normally also be filtered by
+the suffix list (<code>.gif|.css|.js|...</code>), except that
+<code>/resources/.*</code> overrides that check.  ✓</li>
+<li><strong>Bot check.</strong> Useragent looked up in <code>bot_useragents</code>.  Not a
+bot.  ✓</li>
+<li><strong>dnload detection.</strong> Matches <code>/resources/.*/download/.*</code> →
+<code>dnload = 1</code> set inline.</li>
+<li><strong>INSERT.</strong> A new row in <code>&lt;hub&gt;_metrics.web</code>:</li>
+</ol>
+<pre><code>datetime: '2025-07-10 14:23:11'
+ip: '203.0.113.42'
+content: '/resources/345/download/foo.zip'
+useragent: 'Mozilla/5.0 ...'
+referrer: 'https://www.google.com/'
+apache_pid: '12345'
+uidNumber: 0          -- not logged in
+joomla_sessionid: ''   -- column name is literal in the schema
+dnload: 1             -- ← downloaded resource
+host: NULL            -- filled in by resolve-dns later
+domain: NULL          -- filled in by fill-domain later
+ipcountry: NULL       -- filled in by fill-ipcountry later
+sessionid: 0          -- filled in by logfix-session later
+</code></pre>
+<h2 id="stage-3-analyze-enrichment-chain">Stage 3 — analyze (enrichment chain)</h2>
+<p><code>run</code> invokes <code>analyze</code> for the most recent month.  Each enrichment
+step processes the rows still missing its target column — restartable,
+idempotent.</p>
+<h3 id="resolve-dns">resolve-dns</h3>
+<pre><code>[resolve-dns] web 2025-07: 4823 rows missing host
+[resolve-dns] aiodns concurrency=100, system resolver
+</code></pre>
+<p>For <code>203.0.113.42</code>, aiodns does a PTR lookup.  Suppose it resolves to
+<code>crawl-203-0-113-42.example.com</code>.  The row's <code>host</code> column is
+filled in.</p>
+<h3 id="fill-domain">fill-domain</h3>
+<pre><code>[fill-domain] web 2025-07: 4823 rows missing domain
+</code></pre>
+<p>Strips subdomains from <code>host</code> to get a registrable domain via the
+<code>get_domain()</code> rules (handles <code>.com / .net</code>, country-code TLDs,
+<code>.k12.va.us</code>, etc.).  For our example: <code>host</code> =
+<code>crawl-203-0-113-42.example.com</code> → <code>domain</code> = <code>example.com</code>.</p>
+<p>The <code>domain</code> is then looked up in the <code>domainclass</code> reference table:</p>
+<pre><code>SELECT class, country FROM domainclass WHERE domain = 'example.com';
+-- (no match for this hypothetical example → class stays unknown)
+</code></pre>
+<p>A match would set the orgtype bucket (1=Edu, 2=Industry, 3=Gov,
+4=ISP, 5=SearchEngine, 6=Press).  No match leaves it unset, which
+later rolls up as &quot;unknown&quot; in the colid=7 breakdown.</p>
+<h3 id="fill-ipcountry">fill-ipcountry</h3>
+<pre><code>[fill-ipcountry] web 2025-07: 4823 rows missing ipcountry
+</code></pre>
+<p>For <code>203.0.113.42</code>, calls <code>help.hubzero.org/ipinfo/v1</code> (or the
+configured GeoIP service) → returns <code>'US'</code>.  Row's <code>ipcountry</code> is set
+to <code>'US'</code>.</p>
+<p>US falls into colid 3 (Residence — United States) when this row
+is later aggregated.  Other continents go to 4 (Asia) / 5 (Europe) /
+6 (Other) via the <code>continents</code> reference table mapping.</p>
+<h3 id="logfix-session">logfix-session</h3>
+<pre><code>[logfix-session] 2025-07: scanning web for new session boundaries
+</code></pre>
+<p>Walks <code>web</code> ordered by <code>(ip, host, datetime)</code>.  Coalesces sequential
+rows from the same <code>(ip, host)</code> within 1800s into a single
+<code>websessions</code> row.</p>
+<p>For our row, say there were 5 other requests from the same IP that
+day, all within 5 minutes of each other.  They all get the same
+<code>sessionid</code> and aggregate into one <code>websessions</code> row:</p>
+<pre><code>id: 50001
+datetime: '2025-07-10 14:23:11'   -- first request in the session
+ip: '203.0.113.42'
+host: 'crawl-203-0-113-42.example.com'
+domain: 'example.com'
+ipcountry: 'US'
+duration: 287                      -- seconds from first to last
+webevents: 6                       -- requests in this session
+jobs: 0                            -- no tool launches
+</code></pre>
+<p>The 6 <code>web</code> rows then get <code>sessionid = 50001</code>.</p>
+<h3 id="clean-bots">clean-bots</h3>
+<pre><code>[clean-bots] 2025-07: scanning for exclude_list hits
+</code></pre>
+<p>If <code>example.com</code> (or <code>crawl-203-0-113-42.example.com</code>) matches an
+entry in <code>exclude_list</code>, this <code>websessions</code> row and its 6 <code>web</code> rows
+get DELETEd.  Otherwise the row stays.</p>
+<h3 id="gen-tool-stats-gen-tool-tops-gen-tool-toplists">gen-tool-stats / gen-tool-tops / gen-tool-toplists</h3>
+<p>Operates on <code>&lt;hub&gt;.sessionlog</code> and <code>&lt;hub&gt;.joblog</code>, not on <code>web</code>.
+This particular log line was a resource download, not a tool launch,
+so it doesn't contribute to tool stats.  See <a href="../glossary/">glossary.md</a>
+for the tool-stats path.</p>
+<h3 id="andmore-usage">andmore-usage</h3>
+<p>Iterates the published resources in <code>&lt;hub&gt;.jos_resources</code>.  Resource
+345 has <code>path = 'resources/345/'</code> (or similar pattern).  The
+URL-match scan finds our <code>web</code> row (its <code>content</code> includes
+<code>/resources/345/download/</code>), counts our <code>ip</code> as a unique user of
+resource 345 during this period.</p>
+<p>A row in <code>&lt;hub&gt;.jos_resource_stats</code> is written/updated:</p>
+<pre><code>resid: 345
+restype: 7              -- 7 = tool / resource in jos_resources
+period: 1, 12, 14       -- written for these three periods only
+datetime: '2025-07-00'
+users: &lt;incremented&gt;
+</code></pre>
+<p>(The legacy <code>xlogfix_andmore_usage.php</code> writes only periods 1, 12,
+14 — not the full 6.  The rewrite preserves this.)</p>
+<h2 id="stage-4-summarize">Stage 4 — summarize</h2>
+<p><code>summarize --month 2025-07</code> re-aggregates every cell of the summary
+tables.</p>
+<p>For our <code>web</code> row to land in a count, it has to be picked up by one
+of the summary functions:</p>
+<h3 id="total-users-int-users-unregistered-visitors"><code>total_users</code> / <code>int_users</code> (unregistered visitors)</h3>
+<pre><code class="language-sql">-- Approximate: actual query is in hzmetrics.py _summary_int_users().
+SELECT COUNT(DISTINCT ip, host) FROM websessions
+WHERE datetime &gt; '2025-07-01' AND datetime &lt; '2025-08-01'
+  AND duration &gt;= 900 AND jobs = 0
+  AND ip NOT IN (SELECT ip FROM login_ips_tmp);
+</code></pre>
+<p>Our session's <code>duration</code> is 287 (&lt; 900), so it's NOT counted by the
+&quot;interactive visitor&quot; measure.  But by the &quot;any visitor&quot; measure
+(<code>duration &gt;= 0 OR jobs &gt; 0</code> — used in <code>summary_misc_vals.rowid=4</code>),
+it IS counted.  The visitor count for July 2025 increments by 1.</p>
+<h3 id="download-users"><code>download_users</code></h3>
+<pre><code class="language-sql">-- Approximate.
+SELECT COUNT(DISTINCT ws.ip, ws.host) FROM websessions ws, web w
+WHERE w.sessionid = ws.id
+  AND ws.datetime &gt; '2025-07-01' AND ws.datetime &lt; '2025-08-01'
+  AND ws.duration &gt;= 0 AND ws.duration &lt; 900
+  AND ws.jobs = 0
+  AND ws.ip NOT IN (SELECT ip FROM login_ips_tmp)
+  AND w.dnload = 1;
+</code></pre>
+<p>Our session has <code>web.dnload = 1</code> (we set it in import-apache), so the
+session counts toward the download-user count.  <code>summary_user_vals</code>
+rowid=8 (download users) increments by 1 in the colid=1 (total) and
+colid=3 (US) buckets.</p>
+<p>This same query runs 6 times — once per period (0, 1, 3, 12, 13, 14)
+— with the date-range bounds shifted accordingly.</p>
+<h3 id="why-the-rewrite-is-faster-than-legacy-here">Why the rewrite is faster than legacy here</h3>
+<p>The legacy <code>download_users()</code> query had <code>WHERE (w.content LIKE &quot;/resources/%/download/%&quot; OR w.content LIKE &quot;%.zip&quot; OR …)</code> instead
+of <code>w.dnload = 1</code>.  On a hub with 30M+ <code>web</code> rows, the all-time
+period (no date filter) had to LIKE-scan everything.  The
+<code>dnload</code> column is a regular <code>TINYINT(1)</code> with a one-row check —
+the query goes from &quot;table scan, 10+ hours, sometimes crashes
+MariaDB&quot; to &quot;indexed lookup, minutes.&quot;</p>
+<h2 id="final-state">Final state</h2>
+<p>Our one log line contributed to:</p>
+<ul>
+<li>1 row in <code>&lt;hub&gt;_metrics.web</code> (with <code>dnload=1</code>, <code>sessionid=50001</code>)</li>
+<li>1 row in <code>&lt;hub&gt;_metrics.websessions</code> (with 5 sibling requests)</li>
+<li>Increment of <code>&lt;hub&gt;_metrics.summary_misc_vals</code> rowid=4 (visitors)
+and rowid=8 (web server hits) for July 2025, colid=1</li>
+<li>Increment of <code>&lt;hub&gt;_metrics.summary_user_vals</code> rowid=8 (download
+users) for July 2025, colid 1 and 3</li>
+<li>Increment of <code>&lt;hub&gt;.jos_resource_stats</code> users count for resource
+345</li>
+</ul>
+<p>That last one is what appears on the resource's &quot;Usage&quot; tab and
+contributes to the toplists on <code>hub.org/usage/tools/12</code>.</p>
+<h2 id="same-line-registered-user-variant">Same line, registered user variant</h2>
+<p>Almost identical, except:</p>
+<ul>
+<li>Apache log line has the username field filled in (not <code>-</code>).</li>
+<li>The CMS auth log for that day has matching <code>login</code> /
+<code>sim_login</code> events for the user, populating <code>userlogin</code>.</li>
+<li><code>import-hub-data</code> joins through <code>&lt;hub&gt;.jos_xprofiles</code> to populate
+<code>jos_xprofiles_metrics</code> with profile fields (<code>orgtype</code>,
+<code>countryresident</code>).</li>
+<li>At summary time, the user's IP appears in <code>login_ips_tmp</code>, so
+their <code>websessions</code> rows are excluded from the
+unregistered/guest counts and counted instead under <code>reg_users</code>
+(rowid=6).</li>
+<li>Their org type / residence comes from their profile (if filled
+out), not from domain lookup.</li>
+</ul>
+<p>The two paths converge at <code>summary_user_vals</code> — both contribute to
+the total at <code>rowid=1, colid=1</code>, just through different rowids.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

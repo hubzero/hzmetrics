@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing | hzmetrics</title>
+  <meta name="description" content="Install on a new hub, day-to-day runbook, A/B test harness.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <p class="docs-nav__count">4 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../deployment/index.html">Deployment</a></li>
+    <li><a class="docs-nav__item" href="../operations/index.html">Operations runbook</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Testing</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Testing</h1>
+          <p class="docs-article__source">Source: <code>docs/testing.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#two-test-modes">Two test modes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-s-tested">What&#x27;s tested</a></li>
+<li class="toc__item toc__item--level-2"><a href="#running">Running</a></li>
+<li class="toc__item toc__item--level-2"><a href="#when-the-harness-catches-things">When the harness catches things</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-can-t-be-tested-locally">What can&#x27;t be tested locally</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>Brief summary of the A/B test harness under <code>tests/ab/</code>.  Detail
+intentionally not duplicated from individual port test READMEs — read
+<code>tests/ab/run-all.sh</code> and the per-port <code>run.sh</code> files for the source
+of truth.</p>
+<h2 id="two-test-modes">Two test modes</h2>
+<p>The harness can run in two modes:</p>
+<ol>
+<li><strong>A/B mode</strong> (<code>tests/ab/run-all.sh</code>) — runs each port's legacy
+PHP/Perl/Bash script and the new <code>hzmetrics.py</code> equivalent side by
+side, diffs every output table.  Requires <code>tests/legacy/</code> to be
+present.</li>
+<li><strong>Golden mode</strong> (<code>tests/ab/run-all-golden.sh</code>) — runs only the new
+code, diffs against a frozen snapshot of legacy output captured at
+parity time (<code>tests/ab/port_*/golden/*.tsv</code>).  Does not require
+<code>tests/legacy/</code>.  Simulates the world where the legacy reference
+has been removed.</li>
+</ol>
+<p>Both modes produce the same pass/fail outcome on a current codebase.
+Both modes pass in the current tree.</p>
+<h2 id="what-s-tested">What's tested</h2>
+<p>26 test directories under <code>tests/ab/port_*</code>:</p>
+<p><strong>Per-port A/B (16):</strong> <code>port_andmore_usage</code>, <code>port_clean_bots</code>,
+<code>port_fill_domain</code>, <code>port_fill_ipcountry</code>, <code>port_fill_user_info</code>,
+<code>port_gen_tool_stats</code>, <code>port_gen_tool_toplists</code>,
+<code>port_gen_tool_tops</code>, <code>port_identify_bots</code>, <code>port_import_apache</code>,
+<code>port_import_auth</code>, <code>port_import_hub_data</code>, <code>port_import_webhits</code>,
+<code>port_logfix_session</code>, <code>port_middleware</code>, <code>port_whoisonline</code>.</p>
+<p><strong>Integration (2):</strong> <code>port_pipeline</code> (full analyze + summarize chain
+on synthetic data), <code>port_realdata</code> (same chain on a captured
+production-data slice — gated by snapshot presence).</p>
+<p><strong>Coverage tests (3):</strong> <code>port_summarize_month</code> (the most
+metric-dense single port), <code>port_period_sweep</code> (24 anchor-port
+combinations exercising period boundary arithmetic),
+<code>port_invariants</code> (cross-table rules like
+<code>summary_user_vals[rowid=1] = SUM([6,7,8])</code>).</p>
+<p><strong>Defensive tests (5):</strong> <code>port_fuzz</code> (4 fuzz harnesses with 2000+
+randomized cases each), <code>port_idempotency</code> (re-runs analyze+summarize
+on the same DB), <code>port_dryrun</code> (every <code>--dry-run</code> writes zero rows),
+<code>port_empty_input</code> (each port no-ops cleanly on empty input),
+<code>port_determinism</code> (two fresh-DB runs are byte-identical).</p>
+<h2 id="running">Running</h2>
+<pre><code class="language-bash"># Bootstrap once per host (creates test DBs, loads reference data)
+tests/ab/setup_test_dbs.sh --bootstrap
+
+# Run the full A/B suite
+tests/ab/run-all.sh
+
+# Or the golden-mode round (no legacy needed)
+tests/ab/run-all-golden.sh
+
+# Run a single port
+tests/ab/port_fill_domain/run.sh
+tests/ab/port_fill_domain/run_golden.sh
+</code></pre>
+<p><code>setup_test_dbs.sh --reset</code> truncates everything and reloads
+reference data — used between tests.</p>
+<h2 id="when-the-harness-catches-things">When the harness catches things</h2>
+<p>Real bugs surfaced during the port, with their commit messages
+preserved in the log for reference:</p>
+<ul>
+<li><strong><code>fill-domain</code> day-before-month-start</strong> — legacy <code>findWeeks()</code>
+starts a week-chunk on the day BEFORE the month begins (so
+<code>2025-06-30 23:59:00</code> belongs to July 2025's first chunk).
+Caught by <code>port_fill_domain</code>; commit
+<code>A/B test: fill-domain — caught &amp; fixed day-before-month-start divergence</code>.</li>
+<li><strong><code>xlogfix_middleware_cpu.pl</code> — four real divergences</strong> in one
+commit (<code>A/B test: middleware-{wall,cpu} — caught three real divergences</code>):
+<ul>
+<li>MariaDB <code>ROUND()</code> is banker's rounding, Perl <code>int($x + 0.5)</code> is
+round-half-up → fixed to <code>FLOOR(x + 0.5)</code>.</li>
+<li><code>cpu.pl</code> only UPDATEs existing toolstart rows, never INSERTs
+(the wall version does both).</li>
+<li><code>cpu.pl</code>'s UPDATE check is <code>&lt;= 0</code> (includes <code>cputime=0</code>), not
+<code>&lt; 0</code>.</li>
+<li><code>cpu.pl</code> does not filter <code>joblog.event = '[waiting]'</code>; wall
+does.  Caught when both ports were initially symmetric.</li>
+</ul>
+</li>
+<li><strong><code>andmore-usage</code> datetime suffix</strong> — legacy stores <code>'-01'</code>,
+summarize uses <code>'-00'</code>; new port was using <code>'-00'</code> for both.
+Commit <code>A/B test: andmore-usage — caught datetime suffix divergence</code>.</li>
+<li><strong><code>logfix-session</code> cross-week state</strong> — Perl declares session
+state vars at script scope, so an in-flight session persists
+across the 4 week-chunks of a month.  The Python port initially
+reset state per chunk.  Commit <code>A/B test: logfix-session — caught cross-week state divergence</code>.</li>
+<li><strong><code>summarize-month</code> reg_users col=1 missing-JOIN</strong> — legacy
+queries <code>userlogin_lite</code> directly (no JOIN) for col=1; my port
+was unconditionally joining <code>jos_xprofiles_metrics</code> for every
+col, so when <code>xprofiles_metrics</code> is empty it under-counted.
+Commit <code>A/B test: summarize-month — caught reg_users col=1 missing-JOIN divergence</code>.</li>
+<li><strong><code>import-auth</code> bracket-strip</strong> — <code>[user[sub]]</code> should produce
+<code>user</code>, not <code>user[sub]</code>.  PHP <code>ltrim($x, '[') + rtrim($x, ']')</code>
+use charlist semantics (strip ALL leading <code>[</code> and trailing <code>]</code>);
+the port's regex was capturing the inner-bracketed content
+literally.  Commit <code>A/B: deepen 5 fixtures — caught import-auth bracket-strip bug</code>.</li>
+<li><strong><code>gen-tool-stats</code> float→int rounding</strong> — Python float bound as
+numeric literal hits MariaDB's banker's rounding; PHP stringifies
+first and hits half-away-from-zero.  <code>488.5 → 488</code> vs <code>488.5 → 489</code>.  Fix: stringify floats before binding.  Commit <code>A/B: deepen 5 more fixtures, caught gen-tool-stats float→int rounding bug</code>.</li>
+<li><strong><code>download_users</code> rowid=4 vs rowid=8 filter mismatch</strong> — the two
+rowids use DIFFERENT WHERE filters in legacy (rowid=4 doesn't
+exclude <code>login_ips</code> or cap <code>duration &lt; 900</code>), but my port was
+reusing <code>dl_users_period_tmp</code> built for rowid=8.  Caught by
+deepening <code>port_summarize_month</code>'s fixture with a registered-user
+downloader.  Commit <code>A/B: deepen summarize-month, caught download_users rowid=4 filter mismatch</code>.</li>
+<li><strong><code>summary_misc_vals</code> rowid=3 NULL handling</strong> — <code>SUM(duration)</code>
+returns NULL on an empty period; legacy <code>db_fetch</code> returns NULL →
+<code>dbquote(NULL)</code> writes empty string; the port coerced to <code>0</code>.
+Caught by <code>port_period_sweep</code> at anchor months with no data.
+Commit <code>A/B: period sweep test + fix misc_usage NULL → empty- string parity</code>.</li>
+</ul>
+<p>Plus the <strong>&quot;A/B re-baseline&quot;</strong> commit (<code>Roll back dnload-at-import and action-filter from hzmetrics.py</code>) — the most important harness
+catch.  An initial legacy snapshot included two <strong>post-aa245f7</strong>
+behaviors that had been absorbed into the new port: <code>import-apache</code>
+setting <code>dnload=1</code> inline, and <code>import-auth</code> filtering
+<code>action IN ('login','simulation')</code> at insert time.  Re-baselining
+the harness against the true pre-refactor snapshot revealed that
+the port had unintentionally inherited those changes; both got
+rolled back.  This is the divergence the docs talk about under
+&quot;bug-for-bug parity is hard to verify when your baseline is wrong.&quot;</p>
+<p>Documented in commit history under <code>A/B test: &lt;port&gt; — caught …</code>
+and <code>A/B: …</code> messages.</p>
+<h2 id="what-can-t-be-tested-locally">What can't be tested locally</h2>
+<p><code>port_realdata</code> requires a captured production-data snapshot
+(<code>tests/ab/port_realdata/snapshot/*.sql.gz</code>).  The snapshot directory
+is gitignored because the raw data contains real usernames, emails,
+and IPs; the test skips gracefully when the snapshot isn't present.
+See <code>tests/ab/port_realdata/capture.sh</code> for how to capture one when
+you have read access to a production database.</p>
+<p>Some tests touch network resources (<code>fill-ipcountry</code> hits
+<code>help.hubzero.org/ipinfo/v1</code>, <code>resolve-dns</code> uses the local resolver
+which forwards out).  These work fine offline against the cached
+results in <code>tests/ab/fixtures/</code>, but require network for fresh data.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ site_name }}</title>
+  <meta name="description" content="{{ site_description }}">
+  <link rel="stylesheet" href="{{ assets_href }}">
+</head>
+<body class="site-home">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href=".">
+        <span class="brand__name">{{ site_name }}</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="{{ github_href }}">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="home-layout" tabindex="-1">
+      <section class="hero">
+        <p class="eyebrow">HUBzero metrics pipeline</p>
+        <h1>{{ site_name }}</h1>
+        <p class="hero__tagline">{{ site_tagline }}</p>
+        <p class="hero__description">{{ site_description }}</p>
+      </section>
+
+      <section class="groups">
+        <h2 class="groups__heading">Sections</h2>
+        <div class="groups__grid">
+{{ group_cards }}
+        </div>
+      </section>
+
+      <section class="provenance">
+        <h2 class="provenance__heading">About these docs</h2>
+{{ readme_html }}
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>{{ site_name }} · <a href="{{ github_href }}">GitHub</a></p>
+    </footer>
+  </div>
+</body>
+</html>

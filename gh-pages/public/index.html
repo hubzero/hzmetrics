@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hzmetrics</title>
+  <meta name="description" content="Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways (, , , historically ).">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body class="site-home">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href=".">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="home-layout" tabindex="-1">
+      <section class="hero">
+        <p class="eyebrow">HUBzero metrics pipeline</p>
+        <h1>hzmetrics</h1>
+        <p class="hero__tagline">HUBzero metrics pipeline — one Python file, bug-for-bug compatible with the legacy PHP/Perl/Bash stack.</p>
+        <p class="hero__description">Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways (, , , historically ).</p>
+      </section>
+
+      <section class="groups">
+        <h2 class="groups__heading">Sections</h2>
+        <div class="groups__grid">
+<a class="group-card" href="overview/index.html">
+  <h3 class="group-card__title">Overview</h3>
+  <p class="group-card__summary">What hzmetrics is, why it was rewritten, and where the code came from.</p>
+  <p class="group-card__meta">3 pages</p>
+</a>
+<a class="group-card" href="reference/index.html">
+  <h3 class="group-card__title">Reference</h3>
+  <p class="group-card__summary">Pipeline internals, end-to-end data flow, summary-table decoder, glossary.</p>
+  <p class="group-card__meta">4 pages</p>
+</a>
+<a class="group-card" href="operations/index.html">
+  <h3 class="group-card__title">Operations</h3>
+  <p class="group-card__summary">Install on a new hub, day-to-day runbook, A/B test harness.</p>
+  <p class="group-card__meta">3 pages</p>
+</a>
+        </div>
+      </section>
+
+      <section class="provenance">
+        <h2 class="provenance__heading">About these docs</h2>
+<div class="prose">
+<p>Documentation for <code>hzmetrics.py</code> — the Python rewrite of the HUBzero
+metrics pipeline.</p>
+<p>Read in roughly this order if new to the project:</p>
+<ol>
+<li><strong><a href="overview/summary/">summary.md</a></strong> — one page on what this is, what it
+produces, and how it runs day-to-day.</li>
+<li><strong><a href="overview/motivations/">motivations.md</a></strong> — why we rewrote the legacy
+PHP/Perl pipeline.  What was broken, what we kept, what we changed.</li>
+<li><strong><a href="overview/history/">history.md</a></strong> — origins of the legacy code, the
+abandoned Python+Celery+Redis attempt that came in between, and how
+the current rewrite came about.</li>
+<li><strong><a href="reference/architecture/">architecture.md</a></strong> — pipeline phases, the two
+databases, key tables, scheduling, locking, and the catch-up model.</li>
+<li><strong><a href="reference/data-flow/">data-flow.md</a></strong> — concrete trace of a single
+Apache log line through every stage to its final summary cell.</li>
+<li><strong><a href="reference/usage-tables/">usage-tables.md</a></strong> — cheat sheet for the
+<code>summary_*_vals</code> tables that drive the usage-overview UI.  Adapted
+from J.M. Sperhac's &quot;Hub usage data overview and table translator.&quot;</li>
+<li><strong><a href="operations/deployment/">deployment.md</a></strong> — install on a new hub: cron,
+logrotate, schema bootstrap, optional unbound.</li>
+<li><strong><a href="operations/operations/">operations.md</a></strong> — runbook for ops tasks
+(catch-up, stuck lock, bot inflation, DNS issues).</li>
+<li><strong><a href="operations/testing/">testing.md</a></strong> — A/B + golden test modes, 26 ports.</li>
+<li><strong><a href="reference/glossary/">glossary.md</a></strong> — short definitions for everything
+above (hub, period code, dnload, domain class, rowid/colid, etc.).</li>
+</ol>
+<p>For a quick CLI reference:</p>
+<pre><code>$ python3 hzmetrics.py --help
+</code></pre>
+<p>The legacy PHP/Perl/Bash reference implementation is preserved under
+<a href="../tests/legacy/"><code>tests/legacy/</code></a> — it's the bug-for-bug parity
+target the A/B test harness compares the new code against.  See
+<a href="operations/testing/">testing.md</a> for the test suite.</p>
+<hr />
+<p>The reference HUBzero deployment for this code is the
+<a href="https://"></a> hub at Purdue.  Other hubs
+running the same scripts include , , and
+historically .</p>
+<hr />
+<p><strong>Acknowledgment.</strong>  The original HUBzero metrics package and its
+ongoing development was supported in part by .
+Long-term stewardship of the codebase has been carried by
+J.M. Sperhac (SDSC), among
+others.  This rewrite builds directly on their work.</p>
+<p><strong>Jira / ticket cross-references</strong> (HUBzero internal tracker, where
+applicable):</p>
+<ul>
+<li><strong></strong> — parent ticket for this rewrite (&quot;hubzero-metrics
+todo/status,&quot; January 2025).</li>
+<li><strong></strong> — fleet-wide metrics-process survey (&quot;hub-metrics-survey.xlsx&quot;).</li>
+<li><strong></strong> — <code>exclude_list</code> schema modernization for Purdue
+migration (April 2025).</li>
+<li><strong>, </strong> — bot identification and <code>exclude_list</code> content
+updates.</li>
+<li><strong>, </strong> — hub-specific-specific guest-user
+classification work that fed into <a href="reference/usage-tables/">usage-tables.md</a>.</li>
+<li><strong></strong> — null-handling fixes in <code>func_misc.php</code> (preserved
+bug-for-bug in the rewrite).</li>
+</ul>
+
+</div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="https://github.com/hubzero/hzmetrics">GitHub</a></p>
+    </footer>
+  </div>
+</body>
+</html>

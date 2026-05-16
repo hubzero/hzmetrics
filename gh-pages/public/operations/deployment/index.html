@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deployment | hzmetrics</title>
+  <meta name="description" content="Install on a new hub, day-to-day runbook, A/B test harness.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <p class="docs-nav__count">4 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Deployment</a></li>
+    <li><a class="docs-nav__item" href="../operations/index.html">Operations runbook</a></li>
+    <li><a class="docs-nav__item" href="../testing/index.html">Testing</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Deployment</h1>
+          <p class="docs-article__source">Source: <code>docs/deployment.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#prerequisites">Prerequisites</a></li>
+<li class="toc__item toc__item--level-2"><a href="#file-layout-post-install">File layout (post-install)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#install-via-makefile">Install via Makefile</a></li>
+<li class="toc__item toc__item--level-2"><a href="#access-cfg">access.cfg</a></li>
+<li class="toc__item toc__item--level-2"><a href="#hzmetrics-conf-optional">hzmetrics.conf (optional)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#first-time-install">First-time install</a></li>
+<li class="toc__item toc__item--level-2"><a href="#verifying-the-install">Verifying the install</a></li>
+<li class="toc__item toc__item--level-2"><a href="#logrotate">Logrotate</a></li>
+<li class="toc__item toc__item--level-2"><a href="#catch-up-after-a-stalled-host">Catch-up after a stalled host</a></li>
+<li class="toc__item toc__item--level-2"><a href="#coexistence-with-the-legacy-pipeline">Coexistence with the legacy pipeline</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>How to install <code>hzmetrics.py</code> on a new HUBzero hub.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li>A working HUBzero hub with two MariaDB schemas: <code>&lt;hub&gt;</code> (live CMS)
+and <code>&lt;hub&gt;_metrics</code> (analytics).  If the metrics DB doesn't exist
+yet, see &quot;First-time install&quot; below.</li>
+<li>Python 3.7+ on the host.  3.11 strongly preferred — earlier versions
+ship without modern <code>asyncio</code> and on Rocky 8 the system <code>python3</code> is
+3.6 which lacks <code>asyncio.run()</code>.</li>
+<li>A user with read access to the hub DB and full ownership of the
+metrics DB.  On a stock HUBzero hub this is the <code>apache</code> user; the
+cron entry is owned by <code>apache</code>.</li>
+</ul>
+<p>System packages (Rocky 8 names — adapt for other distros):</p>
+<pre><code>dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
+pip3.11 install --user aiodns                       # not packaged on Rocky 8
+</code></pre>
+<p>Versions required:</p>
+<ul>
+<li><code>aiodns</code> &gt;= 3.x (the c-ares-based async resolver used by
+<code>resolve-dns</code>)</li>
+<li><code>pymysql</code> (any current 1.x)</li>
+<li>Python &gt;= 3.7 for <code>resolve-dns</code> itself (async syntax), but the
+pipeline's <code>tick</code> self-relaunches into Python &gt;= 3.10 when invoked
+under an older interpreter — Rocky 8's system <code>/usr/bin/python3</code> is
+3.6 which lacks <code>asyncio.run()</code>, so a separate <code>python3.11</code> install
+alongside is the supported configuration.</li>
+</ul>
+<p>Test the Python version is discoverable: <code>hzmetrics.py</code> self-relaunches
+into the highest-numbered <code>python3.N</code> (≥ 3.10) it can find on <code>PATH</code>,
+so just having <code>python3.11</code> installed alongside the system <code>python3</code>
+is enough.</p>
+<h2 id="file-layout-post-install">File layout (post-install)</h2>
+<pre><code>/opt/hubzero/bin/hzmetrics.py                  the pipeline
+/opt/hubzero/bin/hzmetrics-postrotate.sh       logrotate hook
+/etc/hubzero-metrics/access.cfg                DB credentials (640, root:apache)
+/etc/hubzero-metrics/hzmetrics.conf            optional runtime overrides
+/etc/tmpfiles.d/hzmetrics.conf                 systemd-tmpfiles, creates /var/run/hzmetrics/
+/var/spool/cron/apache                         the cron entry (single line)
+/var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
+/var/run/hzmetrics/hzmetrics.state             daily state (created at runtime)
+/var/log/hubzero/metrics/hzmetrics.log         pipeline log
+</code></pre>
+<p>The legacy reference scripts under <code>tests/legacy/</code> are <strong>not</strong>
+installed on a production host.  They live in this repo only as the
+A/B-test parity reference.</p>
+<h2 id="install-via-makefile">Install via Makefile</h2>
+<p>From a checkout of this repo:</p>
+<pre><code>sudo make -C source install
+</code></pre>
+<p>The Makefile copies:</p>
+<ul>
+<li><code>hzmetrics.py</code> → <code>/opt/hubzero/bin/hzmetrics.py</code> (mode 755, owner apache)</li>
+<li><code>conf/hzmetrics-logrotate-postrotate.sh</code> → <code>/opt/hubzero/bin/hzmetrics-postrotate.sh</code></li>
+<li><code>conf/hzmetrics.tmpfiles.conf</code> → <code>/etc/tmpfiles.d/hzmetrics.conf</code></li>
+<li><code>conf/hubzero-metrics.cron.apache</code> → <code>/var/spool/cron/apache</code></li>
+<li><code>conf/hubzero-metrics.cron.d</code> → <code>/etc/cron.d/hubzero-metrics</code>  <em>(use one or the other)</em></li>
+</ul>
+<p>(<code>source/Makefile</code> lives in this repo; it's the only thing left in
+<code>source/</code> from the original packaging layout.)</p>
+<p>The cron entry is a single line, every five minutes:</p>
+<pre><code>*/5 * * * * apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+</code></pre>
+<p>Pick the format that matches your host's cron conventions:</p>
+<ul>
+<li><code>/var/spool/cron/apache</code> — apache user crontab (no user column).</li>
+<li><code>/etc/cron.d/hubzero-metrics</code> — drop-in (<code>user</code> column is the
+3rd-to-last field).</li>
+</ul>
+<p>After install, kick <code>systemd-tmpfiles</code> so <code>/var/run/hzmetrics/</code>
+exists right now (it'll be recreated automatically on every reboot):</p>
+<pre><code>sudo systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
+</code></pre>
+<h2 id="access-cfg">access.cfg</h2>
+<p>The mandatory config file.  Bare <code>$var = 'value';</code> syntax (no
+<code>&lt;?php</code>).  Read by both <code>hzmetrics.py</code> and the legacy Perl scripts:</p>
+<pre><code>$hub_dir    = '/var/www/&lt;hub&gt;';
+$hub_db     = '&lt;hub&gt;';
+$metrics_db = '&lt;hub&gt;_metrics';
+$db_host    = 'localhost';
+$db_user    = '&lt;hub&gt;';
+$db_pass    = '&lt;secret&gt;';
+$db_prefix  = 'jos_';
+</code></pre>
+<pre><code>sudo install -d -o root -g apache -m 750 /etc/hubzero-metrics
+sudo install -o root -g apache -m 640 &lt;your-cfg&gt; /etc/hubzero-metrics/access.cfg
+</code></pre>
+<p>The harness uses <code>HZMETRICS_ACCESS_CFG=&lt;path&gt;</code> to point at a test
+config — useful for one-off catch-up against a copy of production.</p>
+<h2 id="hzmetrics-conf-optional">hzmetrics.conf (optional)</h2>
+<p>Runtime tuning.  See <a href="../conf/hzmetrics.conf.sample"><code>conf/hzmetrics.conf.sample</code></a>
+for the documented form.  The two settings that matter:</p>
+<pre><code>[dns]
+nameserver = system        # or 127.0.0.1 with local unbound
+concurrency = 100          # raise to 500 with unbound in front
+timeout = 2.0
+</code></pre>
+<p>Precedence (lowest to highest): built-in defaults → this file →
+<code>HZMETRICS_DNS_*</code> env vars → CLI flags.</p>
+<p>If you don't deploy this file, the built-in defaults are fine —
+<code>concurrency=100</code> against the system resolver is benchmarked clean
+against Purdue's resolvers and produces ~4 ms/IP cold.</p>
+<h2 id="first-time-install">First-time install</h2>
+<p>If <code>&lt;hub&gt;_metrics</code> doesn't exist yet:</p>
+<pre><code>sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
+</code></pre>
+<p>Creates the metrics database, every table, and seeds the static
+reference tables (<code>continents</code>, <code>countries</code>, <code>domainclass</code>,
+<code>classes</code>, etc.).  Run with <code>--dry-run</code> first to see what statements
+will execute.</p>
+<p>The CMS-side tables created by metrics
+(<code>jos_resource_stats_tools_topvals</code>, <code>jos_session_geo</code>, etc.) are
+created by the hub's own CMS migrations and shouldn't need
+anything from <code>hzmetrics.py</code>.  If they're missing, see the
+<code>exclude_list</code> schema work from PR  and check the hub's
+migration state.</p>
+<p>Apply any pending schema migrations:</p>
+<pre><code>sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
+</code></pre>
+<p><code>migrate</code> without <code>--apply</code> shows what would change.</p>
+<h2 id="verifying-the-install">Verifying the install</h2>
+<pre><code># What's the pipeline see?
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+
+# Does DNS work?
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py resolve-dns \
+    metrics web --dry-run 2025-07
+
+# Does the daily run actually do anything?
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
+</code></pre>
+<p>Watch <code>/var/log/hubzero/metrics/hzmetrics.log</code> while the run is in
+progress.  Each pipeline phase prints <code>[&lt;phase&gt;] …</code> start and end
+markers.</p>
+<h2 id="logrotate">Logrotate</h2>
+<p>The pipeline writes to a single log file in
+<code>/var/log/hubzero/metrics/</code>.  Add a logrotate stanza that invokes the
+postrotate hook so the pipeline picks up the new file without
+restarting (it reopens on the next <code>tick</code>):</p>
+<pre><code>/var/log/hubzero/metrics/hzmetrics.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    create 640 apache apache
+    postrotate
+        /opt/hubzero/bin/hzmetrics-postrotate.sh
+    endscript
+}
+</code></pre>
+<h2 id="catch-up-after-a-stalled-host">Catch-up after a stalled host</h2>
+<p>The pipeline is built to drain log backlogs on its own.  Once the
+cron entry is running:</p>
+<pre><code># What's pending?
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+
+# Either wait — `tick` will process one month per hourly :30 tick.
+# 12 months of backlog → about 6 hours of unattended catch-up.
+
+# Or do it explicitly, one month at a time, in the foreground:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
+</code></pre>
+<p>See <a href="../operations/">operations.md</a> for the runbook on common
+catch-up scenarios.</p>
+<h2 id="coexistence-with-the-legacy-pipeline">Coexistence with the legacy pipeline</h2>
+<p>If you're migrating a hub that's still running the legacy
+<code>hubzero-metrics</code> package, disable its cron entries before enabling
+the new one — they write to the same tables and concurrent runs
+will deadlock on the summary tables.  The legacy crontab looks like:</p>
+<pre><code>*/15 * * * * /opt/hubzero/bin/metrics/xlogfix_whoisonline.php
+10   0 * * * /opt/hubzero/bin/metrics/import/__fetch_apache_and_auth_log.sh
+15   0 * * * /opt/hubzero/bin/metrics/import/__import_apache_and_auth_log.sh
+30   0 * * * /opt/hubzero/bin/metrics/import/__archive_apache_and_auth_log.sh
+40   0 * * * /opt/hubzero/bin/metrics/__process_tool_metrics.sh
+50   0 * * * /opt/hubzero/bin/metrics/__process_usage_metrics.sh
+50   1 1 * * /opt/hubzero/bin/metrics/__process_usage_metrics_summary.sh
+</code></pre>
+<p>Comment all seven out before deploying the <code>hzmetrics.py tick</code> entry.</p>
+<p>The data shape is unchanged, so there's no migration step beyond
+running <code>migrate --apply</code> to pick up the indexed <code>dnload</code> column.
+The first <code>summarize-month</code> after deployment will rewrite all six
+period cells for the target month — no in-place data conversion.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motivations | hzmetrics</title>
+  <meta name="description" content="What hzmetrics is, why it was rewritten, and where the code came from.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Motivations</a></li>
+    <li><a class="docs-nav__item" href="../history/index.html">History</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <p class="docs-nav__count">4 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Overview</a></p>
+          <h1>Motivations</h1>
+          <p class="docs-article__source">Source: <code>docs/motivations.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#the-main-reason-it-stopped-keeping-up">The main reason: it stopped keeping up</a></li>
+<li class="toc__item toc__item--level-2"><a href="#performance-before-and-after">Performance before and after</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-the-rewrite-is-and-isn-t">What the rewrite is and isn&#x27;t</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-we-kept">What we kept</a></li>
+<li class="toc__item toc__item--level-2"><a href="#why-python-and-not-the-abandoned-python-with-celery-and-redis-attempt">Why Python (and not the abandoned Python-with-Celery-and-Redis attempt)</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>The hzmetrics rewrite exists for one main reason and several
+contributing ones.  This document explains what was broken with the
+legacy pipeline that justified the work, and what the rewrite did and
+didn't try to change.</p>
+<h2 id="the-main-reason-it-stopped-keeping-up">The main reason: it stopped keeping up</h2>
+<p>The legacy pipeline grew at the same time the web grew, and the web
+won.</p>
+<p>By 2024–2025 a daily metrics run on a busy hub took multiple hours.
+The slowest single step — the all-time period aggregation in
+<code>xlogfix_summary.php</code> — would run for <strong>10+ hours and sometimes crash
+MariaDB</strong>.  The bottleneck was a <code>SELECT ... WHERE content LIKE ... OR content LIKE ... [several dozen patterns]</code> chain against the <code>web</code>
+table, which on a mature hub has 30M–500M rows.  No index helps a
+<code>LIKE %x%</code> chain; every all-time summary scanned everything.</p>
+<p>Reverse DNS was the second hot spot.  The legacy <code>xlogfix_dns_v2.sh</code>
+shells out to the <code>host(1)</code> command per IP, one at a time.  Cold
+resolution against the upstream resolver clocks in at <strong>~294 ms per
+IP</strong>.  A monthly batch with tens of thousands of new IPs spends most
+of an hour just on DNS.</p>
+<p>Bot traffic made both problems worse.  In late 2024 cookie-retaining
+crawlers inflated the largest hub's &quot;unique visitors&quot; count from a typical
+~250,000/month to over 1.1M, all of which had to be ingested,
+enriched, and then partially deleted by hand-maintained &quot;clean-bots&quot;
+SQL scripts.  Some of those cleanup scripts spent three hours per
+night trying to delete rows that hadn't existed for years.</p>
+<p>By the time we reached a HUBzero hub at Purdue, three
+operational facts were obvious:</p>
+<ol>
+<li>Slow scripts on growing data become broken scripts.  The pipeline
+wasn't reliably finishing.</li>
+<li>The hand-maintained PHP+Perl+Bash mix had become hard to reason
+about — three languages, multiple include files, dozens of cron
+entries, with each generation of patches layered on top of
+incomplete documentation from the last.</li>
+<li>Catch-up was painful.  When the pipeline fell behind, no mechanism
+processed the backlog automatically — logs just piled up in
+<code>daily/</code> directories until somebody noticed.</li>
+</ol>
+<h2 id="performance-before-and-after">Performance before and after</h2>
+<p>Measured against a HUBzero hub deployment (the reference
+target for this rewrite).  Concrete numbers where we have them;
+qualitative where we don't.</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Legacy</th>
+<th>Rewrite</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reverse-DNS per IP</td>
+<td>294 ms</td>
+<td>4.2 ms (system) / 2.1 ms (unbound c=500) / ~1 ms warm-cache</td>
+<td><code>host(1)</code> shell-out → <code>aiodns</code>; benchmarked on the reference host 2026-05-13.  <strong>70× / 140× / 280×</strong> faster</td>
+</tr>
+<tr>
+<td>Reverse-DNS, 12-hub × 12-month catch-up</td>
+<td>~1000 hr</td>
+<td>~2–4 hr</td>
+<td>with centralized unbound; biggest fleet-wide win</td>
+</tr>
+<tr>
+<td>DNS for a typical month's new IPs</td>
+<td>~30+ min</td>
+<td>~30 sec</td>
+<td>At concurrency=100 against system resolver</td>
+</tr>
+<tr>
+<td>Download-detection in summary</td>
+<td><code>LIKE</code>-chain scan of <code>web</code></td>
+<td>indexed <code>dnload=1</code> lookup</td>
+<td>Was the hot loop in <code>xlogfix_summary.php</code></td>
+</tr>
+<tr>
+<td>Period 14 (all-time) summary</td>
+<td>10+ hr, sometimes crashed MariaDB</td>
+<td>minutes</td>
+<td>The combination of <code>dnload</code> column + <code>dl_users_period_tmp</code> JOIN</td>
+</tr>
+<tr>
+<td><code>login_ips</code> filter</td>
+<td><code>WHERE ip NOT IN (literal-comma-list)</code></td>
+<td>indexed temp-table JOIN</td>
+<td>List grew to 100k+ rows on mature hubs</td>
+</tr>
+<tr>
+<td><code>dl_users</code> build</td>
+<td>correlated <code>EXISTS</code> against full <code>web</code></td>
+<td>INNER JOIN driving from small <code>WHERE dnload=1</code> side</td>
+<td>The structural fix behind the period-14 win</td>
+</tr>
+<tr>
+<td><code>userlogin_lite</code> index</td>
+<td>separate (<code>user</code>), (<code>uidNumber</code>), (<code>datetime</code>)</td>
+<td>composite <code>(datetime, user)</code></td>
+<td>Better selectivity on the summary's date-bounded queries</td>
+</tr>
+<tr>
+<td><code>country_continent</code> lookups</td>
+<td>per-cell SQL query</td>
+<td>cached once at run start</td>
+<td>Across ~60 cells × 6 periods = 360 redundant queries removed</td>
+</tr>
+<tr>
+<td><code>download_sessions_tmp</code> build</td>
+<td>per-row chunked INSERTs</td>
+<td>single <code>INSERT … SELECT</code></td>
+<td>Order-of-magnitude improvement on monthly fill</td>
+</tr>
+<tr>
+<td><code>bot_useragents</code> lookup at import</td>
+<td>per-row LIKE scan</td>
+<td>exact-match indexed <code>WHERE useragent IN (…)</code></td>
+<td>Bots inflate <code>web</code> row count; bottleneck at import</td>
+</tr>
+<tr>
+<td>Catch-up after stall</td>
+<td>Manual</td>
+<td>Autonomous, one month per <code>:30</code> <code>tick</code></td>
+<td>12-month backlog: ~6 hours unattended</td>
+</tr>
+<tr>
+<td>Cron entries</td>
+<td>7 separate (whoisonline + 6 staged)</td>
+<td>1 (<code>tick</code>)</td>
+<td>One PID lock; no concurrent stages</td>
+</tr>
+<tr>
+<td>Scripts</td>
+<td>~20 <code>.php</code> / <code>.pl</code> / <code>.sh</code></td>
+<td>1 <code>hzmetrics.py</code></td>
+<td>Single Python file, one CLI</td>
+</tr>
+<tr>
+<td><code>--dry-run</code> mode</td>
+<td>Inconsistent</td>
+<td>Every mutating subcommand</td>
+<td>Verified by <code>port_dryrun</code> test</td>
+</tr>
+<tr>
+<td>Idempotency</td>
+<td>Mostly</td>
+<td>Universally</td>
+<td>Verified by <code>port_idempotency</code> test</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>dnload</code> change is the headline.  Period 14 (all-time) was
+genuinely unrunnable on mature hubs — the LIKE-chain over a 30M-row
+<code>web</code> table would hold connections for hours and occasionally OOM
+the MariaDB process.  Indexing it via a single <code>TINYINT(1)</code> column,
+with <code>backfill-dnload</code> populating historical rows in one pass,
+made the all-time period merely slow rather than impossible.</p>
+<p>The DNS scaling is the second headline.  A multi-hub catch-up
+(e.g., after a hosting migration) previously took weeks of
+operator-attended work; with a centralized <code>unbound</code> resolver in
+front of <code>aiodns</code> at concurrency=500 it's a single weekend job.</p>
+<h2 id="what-the-rewrite-is-and-isn-t">What the rewrite is and isn't</h2>
+<p>The rewrite is a focused <strong>port and optimization pass</strong>:</p>
+<ul>
+<li><strong>One Python file</strong> (<code>hzmetrics.py</code>) replaces ~20 PHP/Perl/Bash
+scripts.  Same database schemas, same metric definitions, same
+output formats.  Bug-for-bug compatible with the legacy code at the
+numbers level — verified by an A/B test harness (see
+<a href="../../operations/testing/">testing.md</a>).</li>
+<li><strong><code>async</code> DNS via <code>aiodns</code></strong> replaces fork-per-IP shell-out.
+Concurrency=100 against the system resolver runs DNS at ~4 ms/IP;
+with a local <code>unbound</code> in front of it concurrency=500 drops to
+~2 ms/IP cold and ~1 ms/IP warm — versus 294 ms/IP for the legacy
+approach.</li>
+<li><strong>Indexed <code>dnload</code> column</strong> replaces the <code>LIKE</code>-chain download
+detection.  Set once at import time (or via a one-time
+<code>backfill-dnload</code> pass for historical data), then summary queries
+read <code>WHERE w.dnload = 1</code> — bounded by the index, not the row
+count.  Period 14 (all-time) is now minutes, not hours.</li>
+<li><strong>Single cron entry</strong> replaces seven.  <code>hzmetrics.py tick</code> runs
+every 5 minutes; the per-stage scripts are now subcommands invoked
+inside one Python process.</li>
+<li><strong>Catch-up is built in</strong>.  Each <code>tick</code> invocation does at most one
+month of backlog work (so a long-stalled host gradually drains the
+log queue), guarded by a PID lock and a daily-state file.</li>
+<li><strong>Schema is self-installing</strong>.  A <code>migrations</code> table tracks applied
+schema deltas; <code>hzmetrics.py migrate --apply</code> brings any database
+up to current schema.  No more &quot;did we run the SQL by hand on this
+host?&quot;</li>
+</ul>
+<p>The rewrite <strong>isn't</strong> a redesign of the metric definitions.  Every
+existing reporting UI, downstream consumer, and grant-reporting query
+keeps working with no changes.  Where the legacy code had quirks that
+fall short of being bugs — implementation-defined orderings, slightly
+weird date math edge cases, missing tie-breakers — we preserved them.
+The A/B harness fails if the new code disagrees with legacy on any
+row of any output table.</p>
+<p>What we explicitly did <strong>not</strong> try to do:</p>
+<ul>
+<li>Solve the bot problem.  Bot mitigation lives at the firewall,
+<code>robots.txt</code>, and the <code>exclude_list</code> table — places the metrics
+pipeline reads from, not places it owns.  The rewrite makes the
+pipeline fast enough to absorb the current bot volume without
+falling over; reducing the bot volume itself is a separate
+operational concern.</li>
+<li>Add new metrics.  If a downstream consumer wants a new figure, that
+goes in a future PR with its own design discussion.</li>
+<li>Replace the live <code>whoisonline</code> map's &quot;5-minute refresh of a static
+XML file&quot; architecture.  That works fine and changing it would
+break the existing Google Maps widget.</li>
+</ul>
+<h2 id="what-we-kept">What we kept</h2>
+<p>A surprising amount of the legacy design is sound and worth keeping:</p>
+<ul>
+<li><strong>Two databases</strong> (<code>&lt;hub&gt;</code> for live CMS state, <code>&lt;hub&gt;_metrics</code> for
+enriched analytics).  The split prevents the metrics pipeline from
+ever writing to anything the CMS reads in real time, with one
+pragmatic exception (<code>jos_session_geo</code> for the whoisonline map).</li>
+<li><strong>Period codes 0/1/3/12/13/14</strong>.  Calendar year, month, quarter,
+rolling-12, fiscal year, all-time.  Stable, documented, and what
+the UI expects.</li>
+<li><strong><code>rowid</code>/<code>colid</code>/<code>period</code>/<code>datetime</code>/<code>value</code> shape</strong> of the
+summary tables.  Denormalized and a little quirky, but the existing
+reporting code is built around it and the shape is documented
+(see <a href="../../reference/usage-tables/">usage-tables.md</a>).</li>
+<li><strong>Daily run rhythm</strong>.  Process yesterday's logs overnight; recompute
+summaries for the current month each run; freeze last-month at
+end-of-month.</li>
+</ul>
+<h2 id="why-python-and-not-the-abandoned-python-with-celery-and-redis-attempt">Why Python (and not the abandoned Python-with-Celery-and-Redis attempt)</h2>
+<p>A previous attempt — <code>hubzero-analytics</code>, used on the largest hub — already
+tried to replace the legacy pipeline with Python.  It introduced
+Celery, Redis, and a parallel Truth/Provisional/Production directory
+layout for log files.  It never fully replaced the legacy pipeline on
+the hubs that adopted it (the largest hub still ran the original PHP/Perl
+fetch/import scripts in parallel) and was effectively abandoned for
+the open-source HUBzero distribution.  See <a href="../history/">history.md</a>
+for more on that.</p>
+<p>This rewrite is deliberately the opposite shape: <strong>one file, no
+broker, no daemon, no background workers</strong>.  The pipeline is short
+enough and the data volume is small enough (compared to web-scale
+workloads) that <code>cron</code> + a PID lock + a state file is a fully
+adequate scheduler.  The complexity that doomed <code>hubzero-analytics</code>
+isn't justified by the problem.</p>
+<p>Python over PHP/Perl was driven by:</p>
+<ol>
+<li><strong><code>asyncio</code> + <code>aiodns</code></strong> — the single biggest performance win
+(DNS) was natively expressible.</li>
+<li><strong><code>pymysql</code></strong> is straightforward, the standard library has
+everything else.  No framework, no ORM.</li>
+<li><strong>Operability</strong>: one file, standard <code>argparse</code> CLI, <code>--dry-run</code>
+mode on every mutating subcommand, structured logging to a single
+file.  Easier to grep, easier to run in production by hand when
+needed.</li>
+<li><strong>Testability</strong>: the A/B harness can call <code>python3 hzmetrics.py import-apache file.log</code> as easily as it can call <code>php xlogimport_apache.php file.log</code>.  The wire-equivalence test is
+exactly that: same inputs, diff the database states.</li>
+</ol>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture | hzmetrics</title>
+  <meta name="description" content="Pipeline internals, end-to-end data flow, summary-table decoder, glossary.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../data-flow/index.html">Data flow: one log line through the pipeline</a></li>
+    <li><a class="docs-nav__item" href="../usage-tables/index.html">Summary table cheat sheet</a></li>
+    <li><a class="docs-nav__item" href="../glossary/index.html">Glossary</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Architecture</h1>
+          <p class="docs-article__source">Source: <code>docs/architecture.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#the-two-databases">The two databases</a></li>
+<li class="toc__item toc__item--level-2"><a href="#tables">Tables</a></li>
+<li class="toc__item toc__item--level-3"><a href="#hub-db-hub">Hub DB (`&lt;hub&gt;`)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#metrics-db-hub-metrics">Metrics DB (`&lt;hub&gt;_metrics`)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#summary-tables">Summary tables</a></li>
+<li class="toc__item toc__item--level-2"><a href="#pipeline-stages">Pipeline stages</a></li>
+<li class="toc__item toc__item--level-3"><a href="#import">import</a></li>
+<li class="toc__item toc__item--level-3"><a href="#analyze-per-month-idempotent">analyze (per-month, idempotent)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#summarize-per-month-full-re-aggregation">summarize (per-month, full re-aggregation)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#scheduling-and-concurrency">Scheduling and concurrency</a></li>
+<li class="toc__item toc__item--level-2"><a href="#state-files">State files</a></li>
+<li class="toc__item toc__item--level-2"><a href="#cli-surface">CLI surface</a></li>
+<li class="toc__item toc__item--level-2"><a href="#where-the-code-lives">Where the code lives</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>How <code>hzmetrics.py</code> is organized and how a day's data moves through it.</p>
+<h2 id="the-two-databases">The two databases</h2>
+<p>Every HUBzero hub has two MariaDB schemas, both named after the hub:</p>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Owned by</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;hub&gt;</code></td>
+<td>CMS</td>
+<td>Live CMS state — users, profiles, resources, sessions.  Metrics reads from it; writes only <code>jos_session_geo</code> (for the whoisonline map) and <code>jos_resource_stats*</code> (per-tool aggregates surfaced by the UI).</td>
+</tr>
+<tr>
+<td><code>&lt;hub&gt;_metrics</code></td>
+<td>Pipeline</td>
+<td>Enriched analytics — <code>web</code>, <code>websessions</code>, <code>toolstart</code>, <code>userlogin</code>, <code>summary_*_vals</code>, etc.  Owned end-to-end by <code>hzmetrics.py</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>On the reference deployment these are <code></code> and
+<code>foo_metrics</code>.  Credentials are in
+<code>/etc/hubzero-metrics/access.cfg</code> (owned <code>root:apache</code>, mode 640).
+The config file uses a bare <code>$var = 'value';</code> syntax that is read by
+both the Python pipeline and the Perl scripts under
+<a href="../tests/legacy/"><code>tests/legacy/</code></a>.</p>
+<h2 id="tables">Tables</h2>
+<h3 id="hub-db-hub">Hub DB (<code>&lt;hub&gt;</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Role in pipeline</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jos_users</code>, <code>jos_user_profiles</code>, <code>jos_xprofiles</code></td>
+<td>Read by <code>import-hub-data</code> to rebuild <code>jos_xprofiles_metrics</code> every run.</td>
+</tr>
+<tr>
+<td><code>jos_resources</code>, <code>jos_resource_assoc</code></td>
+<td>Read by <code>gen-tool-stats</code> / <code>andmore-usage</code> to enumerate tools and resource hierarchies.</td>
+</tr>
+<tr>
+<td><code>jos_tool_version</code>, <code>jos_tool_version_alias</code></td>
+<td>Read to map tool versions back to canonical names.</td>
+</tr>
+<tr>
+<td><code>sessionlog</code>, <code>joblog</code></td>
+<td>Read by <code>gen-tool-stats</code> and <code>middleware-{wall,cpu}</code> for tool-session and per-job metrics.</td>
+</tr>
+<tr>
+<td><code>jos_session</code></td>
+<td>Read every 5 min by <code>whoisonline</code> for currently-online users.</td>
+</tr>
+<tr>
+<td><code>jos_session_geo</code></td>
+<td><strong>Written</strong> by <code>whoisonline</code> — IP→geocoord lookups used by the live map.</td>
+</tr>
+<tr>
+<td><code>jos_resource_stats</code>, <code>jos_resource_stats_tools</code>, <code>jos_resource_stats_tools_topvals</code>, <code>jos_stats_topvals</code></td>
+<td><strong>Written</strong> by <code>gen-tool-stats</code>/<code>gen-tool-tops</code>/<code>gen-tool-toplists</code>/<code>andmore-usage</code> — surfaced by the usage UI per resource.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metrics-db-hub-metrics">Metrics DB (<code>&lt;hub&gt;_metrics</code>)</h3>
+<p>Pipeline-owned.  The big ones:</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>One row per</th>
+<th>Set by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>web</code></td>
+<td>HTTP request (Apache log line)</td>
+<td><code>import-apache</code></td>
+</tr>
+<tr>
+<td><code>websessions</code></td>
+<td>Coalesced visitor session</td>
+<td><code>logfix-session</code></td>
+</tr>
+<tr>
+<td><code>toolstart</code></td>
+<td>Tool launch</td>
+<td><code>import-hub-data</code> + <code>middleware-{wall,cpu}</code></td>
+</tr>
+<tr>
+<td><code>userlogin</code></td>
+<td>Login / sim_login event</td>
+<td><code>import-auth</code></td>
+</tr>
+<tr>
+<td><code>webhits</code></td>
+<td>Hourly hit count</td>
+<td><code>import-webhits</code></td>
+</tr>
+<tr>
+<td><code>userlogin_lite</code></td>
+<td>Filtered view of <code>userlogin</code> (login + simulation only)</td>
+<td>Rebuilt from scratch on each <code>summarize-month</code> run</td>
+</tr>
+<tr>
+<td><code>sessionlog_metrics</code></td>
+<td>Enriched tool-session record</td>
+<td><code>import-hub-data</code></td>
+</tr>
+<tr>
+<td><code>jos_xprofiles_metrics</code></td>
+<td>User profile snapshot</td>
+<td><code>import-hub-data</code> (full rebuild from <code>&lt;hub&gt;.jos_xprofiles</code>)</td>
+</tr>
+<tr>
+<td><code>bot_useragents</code></td>
+<td>Known-bot user agent</td>
+<td><code>identify-bots</code></td>
+</tr>
+<tr>
+<td><code>exclude_list</code></td>
+<td>IP / URL / useragent / domain filter</td>
+<td>Operator (via a CMS-side migration; pipeline only reads)</td>
+</tr>
+</tbody>
+</table>
+<p>Reference tables that are read-only at pipeline runtime
+(<code>domainclass</code>, <code>classes</code>, <code>continents</code>, <code>countries</code>,
+<code>country_continent</code>, <code>regions</code>) are populated by
+<code>hzmetrics.py setup-db</code> and used during enrichment.</p>
+<h3 id="summary-tables">Summary tables</h3>
+<p>The five output tables that drive the usage reporting UI.  All have
+the same shape:</p>
+<pre><code>( rowid TINYINT,        -- per-table-defined metric index
+  colid TINYINT,        -- breakdown (1 = total, others = continent / org-type)
+  datetime DATETIME,    -- 'YYYY-MM-00 00:00:00'  (period 14 uses '0000-00-00')
+  period TINYINT,       -- 0 calendar year, 1 month, 3 quarter, 12 rolling-12mo,
+                        -- 13 fiscal year (Oct-Sep), 14 all-time
+  value VARCHAR(200),   -- the metric value (often numeric-as-string)
+  valfmt TINYINT )      -- format hint: 1=count, 2=percent, 4=jobs, 5=duration sec
+</code></pre>
+<p>The semantics of <code>rowid</code> differ per table:</p>
+<ul>
+<li><code>summary_user_vals</code> — user counts (registered, unregistered,
+downloaders).  <code>rowid=1</code> is total = sum of <code>rowid IN (6,7,8)</code>.</li>
+<li><code>summary_simusage_vals</code> — tool/simulation usage (jobs, CPU, wall).</li>
+<li><code>summary_misc_vals</code> — domains, sessions, visitors, new accounts,
+max-logins-on-day, hits.</li>
+<li><code>summary_andmore_vals</code> — per-resource user counts (different
+shape).</li>
+</ul>
+<p>The full rowid/colid decoder is in
+<a href="../usage-tables/">usage-tables.md</a>, adapted from J.M. Sperhac's
+&quot;Hub usage data overview and table translator.&quot;</p>
+<h2 id="pipeline-stages">Pipeline stages</h2>
+<p>The pipeline runs in three nested loops, all driven by
+<code>hzmetrics.py run</code> (invoked by <code>tick</code> every hour at <code>:30</code>):</p>
+<pre><code>for each pending month, oldest first:                  ┐ outer loop:
+                                                       │ catch-up across
+    import:    apache + auth logs → web, userlogin    │ multiple months
+    analyze:   per-month enrichment chain              │
+    summarize: period grids → summary_*_vals          │
+                                                       ┘
+</code></pre>
+<h3 id="import">import</h3>
+<pre><code>fetch        → concatenate daily/*.gz into staging files
+import-apache → web (one row per HTTP request)
+import-auth   → userlogin (one row per login event)
+import-webhits → webhits (hourly aggregate)
+identify-bots → bot_useragents (table of known bot UAs)
+archive       → gzip and move daily logs into imported/
+</code></pre>
+<h3 id="analyze-per-month-idempotent">analyze (per-month, idempotent)</h3>
+<p>Enrichment runs for the rows imported into <code>web</code>, <code>websessions</code>,
+<code>toolstart</code> since the last analyze.  Each step is restartable; each
+step processes only rows still missing the relevant column.</p>
+<pre><code>import-hub-data       → jos_xprofiles_metrics, sessionlog_metrics
+middleware-wall       → toolstart.walltime
+middleware-cpu        → toolstart.cputime
+resolve-dns (web)     → web.host
+resolve-dns (toolstart, sessionlog_metrics)
+fill-domain (web)     → web.domain
+fill-domain (toolstart, sessionlog_metrics)
+fill-ipcountry        → web.ipcountry, websessions.ipcountry, toolstart.ipcountry
+logfix-session        → websessions (coalesce web rows into sessions)
+clean-bots            → DELETE bot rows from web / websessions
+fill-user-info        → toolstart user-meta columns
+gen-tool-stats        → jos_resource_stats_tools
+gen-tool-tops         → jos_resource_stats_tools_topvals
+gen-tool-toplists     → jos_stats_topvals
+andmore-usage         → jos_resource_stats (per-resource counts)
+</code></pre>
+<p><code>backfill-dnload</code> is a one-shot variant that walks <code>web</code> from a given
+month forward and sets <code>web.dnload</code> from the URL pattern.
+<code>import-apache</code> sets <code>dnload</code> inline on new rows, so this is only
+needed once after the column was introduced.</p>
+<h3 id="summarize-per-month-full-re-aggregation">summarize (per-month, full re-aggregation)</h3>
+<pre><code>build_userlogin_lite       (DROP + recreate from userlogin)
+build_login_ips_table      (temp table indexing registered-user IPs)
+build_download_users_table (temp table indexing dnload=1 rows per period)
+for period in (0, 1, 3, 12, 13, 14):
+    for each metric function:
+        write a row per (rowid, colid)
+</code></pre>
+<p>The temp-table approach was a key performance win: replacing
+<code>SELECT … WHERE ip NOT IN (literal-comma-list-of-100k-IPs)</code> with a
+LEFT JOIN to an indexed temp table, and replacing a correlated
+<code>EXISTS</code> against a 30M-row <code>web</code> table with a JOIN against a
+pre-filtered <code>WHERE dnload=1</code> subset.  The all-time period (period
+14) went from &quot;10+ hours sometimes crash MariaDB&quot; to &quot;a few minutes&quot;
+after these and the indexed <code>dnload</code> column.</p>
+<p><code>summarize-month</code> always rewrites every cell it produces for the
+target month — there is no incremental summary mode.  Idempotency
+comes from <code>DELETE</code> + <code>INSERT</code> per cell, not from skipping rows.</p>
+<p>The key performance optimizations the rewrite added to summarize
+(without changing what gets produced):</p>
+<ul>
+<li><strong><code>build_login_ips_table()</code></strong> materializes the registered-user IP
+set into an indexed temp table.  Replaces a literal
+comma-separated <code>WHERE ip NOT IN (…)</code> string that on mature hubs
+grew past 100k IPs.</li>
+<li><strong><code>build_download_users_table()</code></strong> builds <code>dl_users_period_tmp</code>
+once per period via a JOIN that drives from the (small) <code>WHERE dnload=1</code> side rather than the (huge) <code>web</code> side.  Replaces a
+correlated <code>EXISTS</code> against full <code>web</code> — the structural fix
+behind the period-14 win.</li>
+<li><strong><code>download_sessions_tmp</code></strong> is built via a single <code>INSERT … SELECT</code> instead of the legacy's row-by-row chunked INSERTs.</li>
+<li><strong><code>country_continent</code> lookups</strong> are cached once at run start
+rather than re-queried per cell.</li>
+<li><strong><code>_summary_11col_cells()</code></strong> is a shared helper for the 11-column
+residency+orgtype block that <code>reg_users</code> and <code>sim_users</code> both
+emit, parametrised by the country and orgtype columns.  This is
+structural deduplication, not a behavior change.</li>
+</ul>
+<p><code>gen_tool_stats.php</code> separately had <code>_findweeks()</code> for chunking the
+month into 4 week-sized scans.  The Python port preserves the
+chunking pattern, including the <strong>legacy quirk that each week-chunk
+begins on the day BEFORE the month starts</strong> (so July 2025's first
+chunk is <code>[2025-06-30, 2025-07-07)</code>).  This came up in A/B testing
+of <code>fill-domain</code> and is documented in the
+<a href="../../operations/testing/"><code>testing.md</code></a> and the commit message for that fix.</p>
+<h2 id="scheduling-and-concurrency">Scheduling and concurrency</h2>
+<p>One cron entry:</p>
+<pre><code>*/5 * * * *  apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+</code></pre>
+<p><code>tick</code> does:</p>
+<ol>
+<li>Always: refresh <code>whoisonline</code> (jos_session_geo + xml map).</li>
+<li>If the wall clock minute is in <code>{30..34}</code>: try to acquire
+<code>/var/run/hzmetrics/hzmetrics.pid</code>.  If acquired, run the metrics
+pipeline.  If another <code>tick</code> holds the lock, exit cleanly.</li>
+</ol>
+<p>Inside <code>run</code>:</p>
+<ol>
+<li>Read <code>hzmetrics.state</code> (last-daily-run timestamp).  If a daily run
+completed today, exit without doing anything.</li>
+<li>Find the oldest pending log day.  If none, mark daily complete and
+exit.</li>
+<li>Process at most one full month of backlog per <code>run</code> invocation.</li>
+<li>Update <code>hzmetrics.state</code> if a full daily cycle finished.</li>
+</ol>
+<p>This is the catch-up mechanism: a long-stalled host gradually drains
+the log queue at one month per hour without operator intervention,
+without holding the lock for hours, and without skipping any data.</p>
+<p><code>tests/ab/port_dryrun/</code> verifies that <code>--dry-run</code> mode on every
+mutating subcommand performs zero database writes.
+<code>tests/ab/port_idempotency/</code> verifies that re-running the pipeline on
+already-processed state produces byte-identical output.
+<code>tests/ab/port_determinism/</code> verifies that two fresh-DB runs produce
+identical output.  See <a href="../../operations/testing/">testing.md</a>.</p>
+<h2 id="state-files">State files</h2>
+<ul>
+<li><code>/etc/hubzero-metrics/access.cfg</code> — DB credentials, paths.  Owned
+by root:apache, mode 640.</li>
+<li><code>/etc/hubzero-metrics/hzmetrics.conf</code> — <em>optional</em> runtime overrides
+(DNS nameserver, concurrency, timeout).  See
+<a href="../conf/hzmetrics.conf.sample"><code>conf/hzmetrics.conf.sample</code></a>.</li>
+<li><code>/var/run/hzmetrics/hzmetrics.pid</code> — PID lock, ensures one
+pipeline at a time.  Created at boot by <code>/etc/tmpfiles.d/hzmetrics.conf</code>.</li>
+<li><code>/var/run/hzmetrics/hzmetrics.state</code> — daily state (last completed
+daily-run timestamp).</li>
+<li><code>/var/log/hubzero/metrics/</code> — pipeline log directory.</li>
+<li><code>/var/log/httpd/daily/</code>, <code>/var/log/hubzero/daily/</code> — incoming log
+files.  Pipeline reads, processes, and moves them to <code>imported/</code>.</li>
+</ul>
+<h2 id="cli-surface">CLI surface</h2>
+<p><code>hzmetrics.py --help</code> lists everything, but the major subcommands are:</p>
+<pre><code>tick                       cron entry point (whoisonline + metrics at :30)
+run [--dry-run]            autonomous metrics run (analyze/summarize)
+whoisonline                refresh whoisonline state
+status                     show pending vs imported log state
+process --next             process oldest pending month manually
+process --month YYYY-MM    process a specific month
+import / analyze / summarize  individual stages, --month YYYY-MM
+fill-geo / backfill-dnload    one-shot backfill utilities
+migrate [--apply]          show or apply schema migrations
+setup-db [--dry-run]       create the metrics DB schema from scratch
+</code></pre>
+<p>Each mutating subcommand has <code>--dry-run</code>.  <code>--force</code> bypasses the
+daily-state-already-completed guard on <code>run</code> / <code>process</code> / <code>analyze</code> /
+<code>summarize</code>.</p>
+<h2 id="where-the-code-lives">Where the code lives</h2>
+<ul>
+<li><strong><code>hzmetrics.py</code></strong> — the entire pipeline.  ~6000 lines of Python.</li>
+<li><strong><code>conf/hzmetrics.conf.sample</code></strong> — optional runtime overrides.</li>
+<li><strong><code>conf/hubzero-metrics.cron.apache</code></strong>, <strong><code>conf/hubzero-metrics.cron.d</code></strong> —
+cron entry templates (apache crontab format and /etc/cron.d format).</li>
+<li><strong><code>conf/hzmetrics-logrotate-postrotate.sh</code></strong> — logrotate hook.</li>
+<li><strong><code>conf/hzmetrics.tmpfiles.conf</code></strong> — systemd-tmpfiles config to create
+<code>/var/run/hzmetrics/</code> at boot.</li>
+<li><strong><code>tests/legacy/</code></strong> — the original PHP/Perl/Bash pipeline preserved
+as the A/B parity reference.</li>
+<li><strong><code>tests/ab/</code></strong> — the A/B test harness (26 tests; see
+<a href="../../operations/testing/">testing.md</a>).</li>
+<li><strong><code>README.txt</code></strong> — historical hub-installation notes (largely
+superseded by these docs).</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

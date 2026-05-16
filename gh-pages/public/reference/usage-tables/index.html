@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Summary table cheat sheet | hzmetrics</title>
+  <meta name="description" content="Pipeline internals, end-to-end data flow, summary-table decoder, glossary.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../data-flow/index.html">Data flow: one log line through the pipeline</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Summary table cheat sheet</a></li>
+    <li><a class="docs-nav__item" href="../glossary/index.html">Glossary</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Summary table cheat sheet</h1>
+          <p class="docs-article__source">Source: <code>docs/usage-tables.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#common-shape">Common shape</a></li>
+<li class="toc__item toc__item--level-2"><a href="#period-codes">Period codes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#colid-breakdown-axis">colid (breakdown axis)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#summary-user-vals-rowids">`summary_user_vals` rowids</a></li>
+<li class="toc__item toc__item--level-2"><a href="#summary-simusage-vals-rowids">`summary_simusage_vals` rowids</a></li>
+<li class="toc__item toc__item--level-2"><a href="#summary-misc-vals-rowids">`summary_misc_vals` rowids</a></li>
+<li class="toc__item toc__item--level-2"><a href="#summary-andmore-vals">`summary_andmore_vals`</a></li>
+<li class="toc__item toc__item--level-2"><a href="#hub-side-jos-stats-topvals-and-jos-resource-stats-tools-topvals">Hub-side: `jos_stats_topvals` and `jos_resource_stats_tools_topvals`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#top-codes">`top` codes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#reference-domainclass-table">Reference: `domainclass` table</a></li>
+<li class="toc__item toc__item--level-2"><a href="#how-registered-vs-guest-users-are-classified">How registered vs guest users are classified</a></li>
+<li class="toc__item toc__item--level-2"><a href="#example-queries">Example queries</a></li>
+<li class="toc__item toc__item--level-2"><a href="#things-that-surprise-people">Things that surprise people</a></li>
+<li class="toc__item toc__item--level-2"><a href="#deliberately-preserved-legacy-parity-quirks">Deliberately-preserved legacy parity quirks</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>The five <code>summary_*_vals</code> tables in the metrics database are the
+output of the pipeline and the input to the usage-overview UI.  This
+document is a decoder for what their fields mean.</p>
+<p>It is closely adapted from J.M. Sperhac's
+&quot;Hub usage data overview and table translator&quot; (Jan 2025), which
+remains the most readable reference for the legacy <code>xlogfix_summary.php</code>
+that the rewrite ports.  The output values are identical — the
+rowid/colid/period/datetime/value/valfmt shape is preserved bit-for-bit
+by the rewrite.</p>
+<h2 id="common-shape">Common shape</h2>
+<p>All summary tables have the same six columns:</p>
+<pre><code>( rowid  TINYINT,    -- metric index, table-specific meaning (see below)
+  colid  TINYINT,    -- breakdown index (1=total, others=continent/orgtype)
+  datetime DATETIME, -- 'YYYY-MM-00 00:00:00' for monthly anchors;
+                     -- '0000-00-00 00:00:00' for all-time
+  period TINYINT,    -- 0=year, 1=month, 3=quarter, 12=rolling-12mo,
+                     -- 13=fiscal year (Oct-Sep), 14=all-time
+  value  VARCHAR(200), -- the metric value (numeric-as-string)
+  valfmt TINYINT )   -- 1=count, 2=percent, 4=jobs, 5=duration in seconds
+</code></pre>
+<p>The denormalized shape is awkward — the same <code>colid</code> column means
+&quot;residence&quot; for one breakdown and &quot;organization type&quot; for another —
+but every reporting tool is built around it.  The rewrite preserves
+this exactly.</p>
+<h2 id="period-codes">Period codes</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Period</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>0</code></td>
+<td>Calendar year containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td>Just that month</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td>Quarter containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>12</code></td>
+<td>Rolling 12 months ending at <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>13</code></td>
+<td>Fiscal year (Oct–Sep) containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>14</code></td>
+<td>All time (since <code>1995-01-01</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Period 14 is the historically-expensive one — see
+<a href="../../overview/motivations/">motivations.md</a> for what the rewrite did about it.</p>
+<h2 id="colid-breakdown-axis">colid (breakdown axis)</h2>
+<p>Same meaning across <code>summary_user_vals</code> and <code>summary_simusage_vals</code>:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">colid</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td><strong>Total</strong> (always — used by single-value metrics)</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td>Residence &quot;identified&quot; — total with known continent</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td>Residence — United States</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td>Residence — Asia</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td>Residence — Europe</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td>Residence — Other</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td>Organization &quot;identified&quot; — total with known org type</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td>Organization — Educational</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>9</code></td>
+<td>Organization — Industry</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>10</code></td>
+<td>Organization — Government</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>11</code></td>
+<td>Organization — Other</td>
+</tr>
+</tbody>
+</table>
+<p><code>summary_misc_vals</code> rows are total-only and all use <code>colid=1</code>.</p>
+<p>When <code>valfmt=2</code> (percent) the value is the column count, and the UI
+divides by the colid=2 or colid=7 &quot;identified&quot; total to render
+percentages.</p>
+<h2 id="summary-user-vals-rowids"><code>summary_user_vals</code> rowids</h2>
+<p>User counts.  Critical invariant: <strong><code>rowid=1</code> (total) equals
+<code>SUM(rowid IN (6, 7, 8))</code></strong> for every <code>(datetime, period, colid, valfmt)</code> cell.  This is asserted by <code>tests/ab/port_invariants/</code>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">rowid</th>
+<th>Metric</th>
+<th>colid=1 means</th>
+<th>Breakdowns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td>Total users (= 6+7+8)</td>
+<td>All user-IP-host visits</td>
+<td>Residence, Org</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td>Simulation users</td>
+<td>Distinct sim users</td>
+<td>Residence, Org</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td>Unregistered user IPs (raw)</td>
+<td>Pre-filter unregistered count</td>
+<td>Total only</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td>Unique download user IPs</td>
+<td>Pre-filter download count</td>
+<td>Total only</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td>UNUSED</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td>Registered users</td>
+<td>Distinct users in <code>userlogin_lite</code></td>
+<td>Residence, Org</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td>Unregistered users (visitors)</td>
+<td>Distinct visitors from <code>websessions</code> (duration ≥ 900s, jobs=0, ip ∉ login_ips)</td>
+<td>Residence, Org</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td>Download users</td>
+<td>Distinct downloaders (filtered)</td>
+<td>Residence, Org</td>
+</tr>
+</tbody>
+</table>
+<h2 id="summary-simusage-vals-rowids"><code>summary_simusage_vals</code> rowids</h2>
+<p>Tool / simulation usage.  Different meanings of <code>rowid</code> from
+<code>summary_user_vals</code>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">rowid</th>
+<th>Metric</th>
+<th>valfmt</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td>Total simulation users</td>
+<td>1 count</td>
+<td>—</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td>Simulation jobs</td>
+<td>4 jobs</td>
+<td><code>COUNT(*)</code> over <code>toolstart</code> with <code>success=1</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td>CPU time</td>
+<td>5 sec</td>
+<td><code>SUM(cputime)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td>Wall time</td>
+<td>5 sec</td>
+<td><code>SUM(walltime)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td>View time</td>
+<td>5 sec</td>
+<td><code>SUM(viewtime)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td>Users with ≥10 min CPU</td>
+<td>1 count</td>
+<td>—</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td>Average jobs per user</td>
+<td>1 count</td>
+<td>Computed from #2/#1</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td>Average wall per user</td>
+<td>5 sec</td>
+<td>Computed from #4/#1</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>9</code></td>
+<td>Repeat users with ≥10 sims</td>
+<td>1 count</td>
+<td>—</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>10</code></td>
+<td>Repeat users &gt;3 months</td>
+<td>1 count</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="summary-misc-vals-rowids"><code>summary_misc_vals</code> rowids</h2>
+<p>Miscellany.  All <code>colid=1</code>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">rowid</th>
+<th>Metric</th>
+<th>valfmt</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td>Domains served</td>
+<td>1 count</td>
+<td><code>COUNT(DISTINCT domain)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td>Cumulative user sessions</td>
+<td>1 count</td>
+<td>—</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td>Cumulative session time</td>
+<td>5 sec</td>
+<td><code>SUM(duration)</code> — NULL is written as empty string (legacy quirk preserved by the port)</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td>Visitor count</td>
+<td>1 count</td>
+<td><code>COUNT(DISTINCT ip, host)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td>Visit count</td>
+<td>1 count</td>
+<td><code>COUNT(datetime)</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td>New user accounts</td>
+<td>1 count</td>
+<td>From <code>jos_xprofiles_metrics.registerDate</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td>Max user logins on a day</td>
+<td>1 count</td>
+<td><code>'N users on YYYY-MM-DD'</code> — value is a formatted string</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td>Web server hits</td>
+<td>1 count</td>
+<td><code>SUM(hits)</code> from <code>webhits</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="summary-andmore-vals"><code>summary_andmore_vals</code></h2>
+<p>Per-resource user counts, written by <code>andmore-usage</code> (the only
+summary writer that has its own table).</p>
+<pre><code>( resid  INT,        -- jos_resources.id (the resource being counted)
+  period TINYINT,    -- 1, 12, 14 only — see below
+  datetime DATETIME, -- 'YYYY-MM-00 00:00:00'
+  users  INT,        -- count of distinct users
+  valfmt TINYINT )
+</code></pre>
+<p><strong><code>andmore-usage</code> only writes periods 1, 12, and 14.</strong>  It doesn't
+produce a full period grid like the other summary tables — that's
+inherited from the legacy <code>xlogfix_andmore_usage.php</code> and preserved
+by the port.</p>
+<h2 id="hub-side-jos-stats-topvals-and-jos-resource-stats-tools-topvals">Hub-side: <code>jos_stats_topvals</code> and <code>jos_resource_stats_tools_topvals</code></h2>
+<p>The per-tool ranked toplists, written into the hub DB (not the
+metrics DB) by <code>gen-tool-toplists</code> / <code>gen-tool-tops</code>.</p>
+<pre><code>( id        INT (auto),
+  top       TINYINT,     -- which tool metric (see table below)
+  datetime  DATETIME,    -- 'YYYY-MM-00 00:00:00'
+  period    TINYINT,     -- one of the six period codes
+  rank      SMALLINT,    -- 0 = total across all tools; 1, 2, 3 ... ranked tools
+  name      VARCHAR(255),-- 'Total Simulation Jobs' at rank=0; '&lt;resid&gt; ~ &lt;title&gt;' otherwise
+  value     BIGINT )
+</code></pre>
+<p>The <code>rank=0</code> row is the special &quot;total across all tools&quot; row for
+that <code>(top, period, datetime)</code> triple.  Reporting UIs (e.g.,
+<code>hub.org/usage/tools/12</code>) display the totals as the headline number
+and the ranks 1+ as the per-tool list below.</p>
+<h3 id="top-codes"><code>top</code> codes</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:center"><code>top</code></th>
+<th style="text-align:left">Tool metric</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td style="text-align:left">Number of users</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td style="text-align:left">Number of jobs</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td style="text-align:left">Walltime</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td style="text-align:left">Simulation CPU time</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td style="text-align:left">Simulation interaction time</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>10</code></td>
+<td style="text-align:left">Number of courses</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>11</code></td>
+<td style="text-align:left">Course user count</td>
+</tr>
+</tbody>
+</table>
+<p>(From J.M. Sperhac's &quot;Hub tool stats summarized&quot; reference.)</p>
+<h2 id="reference-domainclass-table">Reference: <code>domainclass</code> table</h2>
+<p>The 6-bucket categorization that drives the orgtype breakdown in
+<code>summary_user_vals</code> colid 8–11 and <code>summary_simusage_vals</code> same.
+Stored in <code>&lt;hub&gt;_metrics.domainclass</code>:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Class</th>
+<th style="text-align:left">Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>0</code></td>
+<td style="text-align:left">Unknown (no domain information)</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td style="text-align:left">Educational institution</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td style="text-align:left">Industrial / corporate</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td style="text-align:left">Governmental</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td style="text-align:left">Internet service provider</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td style="text-align:left">Search engine</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td style="text-align:left">Press / media / publication</td>
+</tr>
+</tbody>
+</table>
+<p>The mapping is hand-maintained.  Most of the entries date to 2015
+(see Sperhac's &quot;Organization type and location&quot; reference).  Periodic
+refresh is recommended but rarely happens — adding a new
+educational, government, or industry domain to this table is what
+makes that domain show up in the right org-type bucket on the
+usage page.</p>
+<h2 id="how-registered-vs-guest-users-are-classified">How registered vs guest users are classified</h2>
+<p>Two paths into the colid 2–11 breakdowns:</p>
+<p><strong>Registered users</strong> (<code>reg_users</code>, rowid=6).  Identified by
+appearing in <code>userlogin_lite</code> (= filtered view of <code>userlogin</code> for
+login + simulation actions).  Org type and residence taken from
+their <code>jos_xprofiles_metrics</code> profile (<code>orgtype</code> and
+<code>countryresident</code> columns).  If they didn't fill out the profile,
+they roll up into &quot;unknown&quot; (colid=2 and 7 — i.e., they don't
+contribute to any of 3–6 or 8–11, only to the colid=1 total).</p>
+<p><strong>Guest / unregistered users</strong> (<code>int_users</code>, rowid=7;
+<code>download_users</code>, rowid=8).  Identified by <code>(ip, host)</code> in
+<code>websessions</code> with no matching login row.  Org type from
+<code>domainclass</code> lookup on the resolved domain.  Residence from
+<code>fill-ipcountry</code>'s GeoIP, mapped to continent via <code>country_continent</code>.</p>
+<p>The some deployments is a special case: about 10 registered accounts
+total (the maintenance staff), almost all visitors are anonymous.
+So its summary_user_vals is essentially all rowid=7 (unregistered)
+and rowid=8 (download users), with rowid=6 (registered) nearly
+zero.  Most hubs have a richer registered-user population.</p>
+<h2 id="example-queries">Example queries</h2>
+<p>These work against the live <code>&lt;hub&gt;_metrics</code> database and are exactly
+what the usage-overview UI does behind the scenes.</p>
+<p><strong>Total user visits, monthly time series:</strong></p>
+<pre><code class="language-sql">SELECT datetime, value
+FROM summary_user_vals
+WHERE rowid = 1     -- total users
+  AND colid = 1     -- total breakdown
+  AND period = 1    -- monthly
+ORDER BY datetime;
+</code></pre>
+<p><strong>All-time totals with continent breakdown for March 2025:</strong></p>
+<pre><code class="language-sql">SELECT colid, value, valfmt
+FROM summary_user_vals
+WHERE rowid = 1
+  AND period = 14
+  AND datetime = '2025-03-00'
+ORDER BY colid;
+</code></pre>
+<p>(<code>colid=3</code> is the US count, <code>colid=4..6</code> are Asia/Europe/Other.  Any
+of those that are <code>valfmt=2</code> should be displayed as <code>value / colid=2_total * 100</code>%, see the legacy <code>default.php</code> view for the
+exact rendering.)</p>
+<p><strong>Tool jobs (period 12 = rolling 12mo):</strong></p>
+<pre><code class="language-sql">SELECT datetime, value
+FROM summary_simusage_vals
+WHERE rowid = 2     -- simulation jobs
+  AND colid = 1
+  AND period = 12
+ORDER BY datetime;
+</code></pre>
+<h2 id="things-that-surprise-people">Things that surprise people</h2>
+<ul>
+<li><code>colid=2</code> and <code>colid=7</code> are &quot;identified&quot; rolled-up counts — they
+represent the population for which residence or org type is known,
+and act as denominators for the percent breakdowns at <code>colid 3..6</code>
+and <code>8..11</code>.</li>
+<li>The same <code>colid</code> column number means different things depending on
+whether you're looking at <code>3..6</code> (residence) or <code>8..11</code>
+(organization).  Both axes share the same column.</li>
+<li><code>summary_misc_vals.rowid=7</code> stores a formatted string like
+<code>'42 users on 2025-07-15'</code>.  The integer value is parseable from
+the first token; the date is parseable from the last.</li>
+<li><code>summary_misc_vals.rowid=3</code> (cum session time) writes an empty
+string when <code>SUM(duration)</code> returns NULL on an empty window — a
+legacy quirk preserved for bug-for-bug parity (see
+<code>port_period_sweep</code> in the test harness for the case that surfaced
+it).</li>
+<li><code>userlogin_lite</code> (input to <code>int_users</code> and similar) has <strong>no date
+filter</strong> in legacy.  Counts derived from it grow monotonically over
+time independent of the period being summarized.  This is a known
+design issue preserved for parity.</li>
+<li><code>summary_andmore_vals</code> only has periods 1/12/14 (not the full 6).</li>
+<li><code>summary_andmore_vals.datetime</code> uses <code>'YYYY-MM-01'</code> (day 01); the
+other summary tables use <code>'YYYY-MM-00'</code> (zero day).  Caught by an
+A/B test during the port — the convention difference comes from
+legacy <code>xlogfix_andmore_usage.php</code> using <code>$processed_on = $dthis_.'-01'</code> explicitly.</li>
+</ul>
+<h2 id="deliberately-preserved-legacy-parity-quirks">Deliberately-preserved legacy parity quirks</h2>
+<p>Edge cases the rewrite mirrors exactly to keep <code>summary_*_vals</code>
+bug-for-bug compatible with the legacy pipeline.  Each is verified
+by an A/B test and would FAIL if the new code diverged.</p>
+<table>
+<thead>
+<tr>
+<th>Quirk</th>
+<th>Where</th>
+<th>Why preserved</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>userlogin_lite</code> has no date filter on <code>int_users</code> / <code>download_users</code> queries</td>
+<td><code>summary_user_vals</code> rowid=3, rowid=4</td>
+<td>Counts inflate across runs; any reporting downstream is already calibrated to this</td>
+</tr>
+<tr>
+<td><code>jos_xprofiles_metrics</code> reflects CURRENT profile state, not state-at-activity-time</td>
+<td><code>reg_users</code> / <code>sim_users</code> org-type breakdowns</td>
+<td>Same reason — the table is fully rebuilt every run; any time-travel rewrite of historic months would shift old breakdowns</td>
+</tr>
+<tr>
+<td><code>summary_misc_vals.rowid=3</code> writes <code>''</code> when SUM is NULL</td>
+<td>empty windows</td>
+<td>Legacy <code>db_fetch(NULL)</code> → <code>dbquote(NULL) → ''</code></td>
+</tr>
+<tr>
+<td><code>summary_misc_vals.rowid=7</code> is a formatted string, not a number</td>
+<td>max-logins-on-day</td>
+<td><code>'42 users on 2025-07-15'</code></td>
+</tr>
+<tr>
+<td><code>summary_andmore_vals.datetime</code> ends in <code>-01</code>, others in <code>-00</code></td>
+<td><code>andmore-usage</code></td>
+<td>Legacy <code>$processed_on = $dthis_.'-01'</code></td>
+</tr>
+<tr>
+<td>Week-chunks start the day BEFORE the month</td>
+<td><code>fill-domain</code>, <code>clean-bots</code>, <code>gen-tool-stats</code></td>
+<td>Legacy <code>findWeeks()</code> returns <code>[$mon-1d, $mon+1w)</code> for chunk 0</td>
+</tr>
+<tr>
+<td>Banker's rounding via <code>FLOOR(x+0.5)</code>, not <code>ROUND(x)</code></td>
+<td><code>middleware-wall</code>, <code>middleware-cpu</code></td>
+<td>Perl <code>int($x+0.5)</code> is round-half-up; MariaDB <code>ROUND()</code> is banker's</td>
+</tr>
+<tr>
+<td><code>cpu.pl</code> UPDATE-only (never INSERT)</td>
+<td><code>middleware-cpu</code></td>
+<td>Legacy carries the comment &quot;Do nothing as are just importing CPUtimes&quot;</td>
+</tr>
+<tr>
+<td><code>cpu.pl</code> includes <code>event='[waiting]'</code>, wall excludes</td>
+<td><code>middleware-cpu</code></td>
+<td>Filters differ by metric; preserved per-metric</td>
+</tr>
+<tr>
+<td><code>gridstat</code> is exact-match; <code>hctest%</code> is LIKE</td>
+<td>Multiple ports</td>
+<td>So <code>gridstatx</code> is NOT excluded; <code>hctester</code> IS excluded</td>
+</tr>
+<tr>
+<td><code>download_users</code> rowid=4 uses a DIFFERENT WHERE filter than rowid=8</td>
+<td><code>summary_user_vals</code></td>
+<td>rowid=4 has no <code>login_ips</code> exclusion and no <code>duration &lt; 900</code> cap</td>
+</tr>
+<tr>
+<td>Last in-flight session of a <code>logfix-session</code> run is never emitted</td>
+<td><code>websessions</code></td>
+<td>Coalescer flushes only on session-end-detected; tail of run has none</td>
+</tr>
+<tr>
+<td><code>INSERT IGNORE</code> on <code>userlogin</code> collapses duplicate <code>(datetime, user, ip, action)</code> tuples</td>
+<td><code>import-auth</code></td>
+<td>Legacy uses INSERT IGNORE; we preserve same semantics</td>
+</tr>
+<tr>
+<td>Floats stringified before binding into SQL to hit half-away-from-zero rounding</td>
+<td><code>gen-tool-stats</code> propagate</td>
+<td>Otherwise pymysql's numeric-literal path hits banker's rounding</td>
+</tr>
+</tbody>
+</table>
+<p>All preserved quirks are documented in commit messages of the form
+<code>A/B test: &lt;port&gt; — caught … divergence</code> and the test suite would
+break if any port regressed against them.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

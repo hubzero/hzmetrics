@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Summary | hzmetrics</title>
+  <meta name="description" content="What hzmetrics is, why it was rewritten, and where the code came from.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../motivations/index.html">Motivations</a></li>
+    <li><a class="docs-nav__item" href="../history/index.html">History</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <p class="docs-nav__count">4 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Overview</a></p>
+          <h1>Summary</h1>
+          <p class="docs-article__source">Source: <code>docs/summary.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#what-it-produces">What it produces</a></li>
+<li class="toc__item toc__item--level-2"><a href="#how-it-runs">How it runs</a></li>
+<li class="toc__item toc__item--level-2"><a href="#pipeline-at-a-glance">Pipeline at a glance</a></li>
+<li class="toc__item toc__item--level-2"><a href="#who-reads-the-metrics">Who reads the metrics</a></li>
+<li class="toc__item toc__item--level-2"><a href="#reading-the-rest-of-these-docs">Reading the rest of these docs</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p><code>hzmetrics.py</code> is the analytics pipeline for a HUBzero-based science
+gateway.  It ingests Apache access logs and CMS authentication logs,
+enriches the data (reverse DNS, domain classification, GeoIP, session
+coalescing), and produces monthly summary statistics stored in a
+MariaDB metrics database.  Those statistics drive the hub's usage
+reporting pages and are used for grant reporting.</p>
+<p>The project replaces a decade-plus accumulation of PHP, Perl, and Bash
+scripts (preserved under <a href="../tests/legacy/"><code>tests/legacy/</code></a>) with a
+single Python entry point.  The wire-format, schemas, and produced
+numbers are intentionally <strong>bug-for-bug compatible</strong> with the legacy
+code — the rewrite changes the implementation, not the metric
+definitions, so existing reporting UIs and downstream consumers keep
+working unchanged.</p>
+<h2 id="what-it-produces">What it produces</h2>
+<p>Five tables in the <code>&lt;hub&gt;_metrics</code> database, written one row per
+<code>(rowid, colid, period, datetime)</code> cell:</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>summary_user_vals</code></td>
+<td>User counts (registered, unregistered, downloaders) by org type and continent</td>
+</tr>
+<tr>
+<td><code>summary_simusage_vals</code></td>
+<td>Tool/simulation usage (jobs, CPU, wall, view time)</td>
+</tr>
+<tr>
+<td><code>summary_misc_vals</code></td>
+<td>Domains, sessions, visitors, new accounts, max-logins-on-day</td>
+</tr>
+<tr>
+<td><code>summary_andmore_vals</code></td>
+<td>Per-resource user counts (separate from tool stats)</td>
+</tr>
+<tr>
+<td><code>jos_resource_stats*</code> (hub DB)</td>
+<td>Per-tool aggregate stats and ranked top-lists</td>
+</tr>
+</tbody>
+</table>
+<p>Plus three real-time-ish artifacts:</p>
+<ul>
+<li><strong><code>jos_session_geo</code></strong> (hub DB) and <strong><code>whoisonline.xml</code></strong> (web root) —
+the live &quot;who is online&quot; map, refreshed every 5 minutes.</li>
+<li><strong><code>web.dnload</code></strong> column (since 2026) — pre-computed download flag
+used by the summary's expensive period-14 (all-time) aggregations.</li>
+<li><strong><code>userlogin_lite</code></strong> — filtered view of <code>userlogin</code> rebuilt each
+summary run.</li>
+</ul>
+<p>See <a href="../../reference/usage-tables/">usage-tables.md</a> for the full rowid/colid
+decoder.</p>
+<h2 id="how-it-runs">How it runs</h2>
+<p>One cron entry, every 5 minutes:</p>
+<pre><code>*/5 * * * *  apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+</code></pre>
+<p><code>tick</code> updates the whoisonline map on every invocation.  At <code>:30</code> past
+each hour it also opportunistically runs the metrics pipeline (one
+PID-lock-guarded process at a time).  A daily-state file gates the
+metrics work to once per calendar day.</p>
+<p>If the host has been down for a while, log files just accumulate in
+<code>/var/log/httpd/daily/</code> and <code>/var/log/hubzero/daily/</code>.  Once <code>tick</code>
+resumes it works through the backlog one month per invocation — no
+manual intervention required.  For 12 months of backlog that's about 6
+hours of fully unattended catch-up.</p>
+<h2 id="pipeline-at-a-glance">Pipeline at a glance</h2>
+<pre><code>┌──────────────────────────────────────────────────────────────────┐
+│  tick (every 5 min)                                              │
+│  ├── whoisonline   (refresh session_geo + xml map)               │
+│  └── run (once per hour, :30 past)                               │
+│       ├── status check (anything pending?)                       │
+│       ├── import   (apache + auth logs → web, userlogin)         │
+│       ├── analyze  (per-month enrichment: DNS, domain, GeoIP,    │
+│       │             middleware, logfix-session, user-info,       │
+│       │             gen-tool-stats/tops/toplists)                │
+│       └── summarize  (period 0/1/3/12/13/14 grids → summary_*    │
+│                       _vals; full re-aggregation each run)       │
+└──────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p><code>hzmetrics.py status</code> reports what's pending; <code>process --next</code> runs
+one full month manually.  <code>analyze</code> and <code>summarize</code> are individually
+runnable for any month.</p>
+<h2 id="who-reads-the-metrics">Who reads the metrics</h2>
+<p>The pipeline produces numbers; different audiences read them in
+different shapes.  Knowing which is which helps when deciding what
+to fix when a number looks off:</p>
+<ul>
+<li><strong>Gateway owner / PI</strong> — total registered users, total tool runs,
+visits per month/year, geographic distribution.  Surfaced at
+<code>hub.org/usage</code> (the public usage-overview page).  Aggregated; no
+individual user data.</li>
+<li><strong>Tool contributor</strong> — per-tool ranked stats (users, jobs, CPU
+time) over rolling windows.  Surfaced at <code>hub.org/usage/tools/12</code>
+and on each tool resource's &quot;Usage&quot; tab.  Driven by
+<code>jos_resource_stats_tools_topvals</code> and <code>jos_stats_topvals</code>.</li>
+<li><strong>Operator / ops</strong> — pipeline health, log import status, exclude
+list effectiveness, bot inflation events.  Surfaced via
+<code>hzmetrics.py status</code> and the pipeline log file.  See
+<a href="../../operations/operations/">operations.md</a>.</li>
+<li><strong>Funder / grant reporting</strong> — long-window aggregates (period 12
+/ 14), often pulled by ad-hoc SQL against <code>summary_*_vals</code> rather
+than via the UI.  See <a href="../../reference/usage-tables/">usage-tables.md</a> for
+example queries.</li>
+</ul>
+<p>The bug-for-bug-parity contract of the rewrite means the existing
+UI consumers and reporting queries all keep working unchanged — the
+new pipeline produces the same numbers in the same shapes.</p>
+<h2 id="reading-the-rest-of-these-docs">Reading the rest of these docs</h2>
+<ul>
+<li><strong><a href="../motivations/">motivations.md</a></strong> — why this rewrite happened.</li>
+<li><strong><a href="../history/">history.md</a></strong> — where the code comes from.</li>
+<li><strong><a href="../../reference/architecture/">architecture.md</a></strong> — pipeline internals, tables,
+scheduling, catch-up, locking.</li>
+<li><strong><a href="../../reference/usage-tables/">usage-tables.md</a></strong> — <code>summary_*_vals</code> cheat sheet.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

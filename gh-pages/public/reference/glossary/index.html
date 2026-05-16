@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glossary | hzmetrics</title>
+  <meta name="description" content="Pipeline internals, end-to-end data flow, summary-table decoder, glossary.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzmetrics</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzmetrics">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../data-flow/index.html">Data flow: one log line through the pipeline</a></li>
+    <li><a class="docs-nav__item" href="../usage-tables/index.html">Summary table cheat sheet</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Glossary</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <p class="docs-nav__count">3 pages</p>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Glossary</h1>
+          <p class="docs-article__source">Source: <code>docs/glossary.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-3"><a href="#hub-science-gateway">Hub / science gateway</a></li>
+<li class="toc__item toc__item--level-3"><a href="#hubzero">HUBzero</a></li>
+<li class="toc__item toc__item--level-3"><a href="#hub-db-hub">Hub DB (`&lt;hub&gt;`)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#metrics-db-hub-metrics">Metrics DB (`&lt;hub&gt;_metrics`)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#web-row">Web row</a></li>
+<li class="toc__item toc__item--level-3"><a href="#web-session">Web session</a></li>
+<li class="toc__item toc__item--level-3"><a href="#tool-start">Tool start</a></li>
+<li class="toc__item toc__item--level-3"><a href="#simulation">Simulation</a></li>
+<li class="toc__item toc__item--level-3"><a href="#period">Period</a></li>
+<li class="toc__item toc__item--level-3"><a href="#datetime-convention">datetime convention</a></li>
+<li class="toc__item toc__item--level-3"><a href="#rowid-colid">rowid / colid</a></li>
+<li class="toc__item toc__item--level-3"><a href="#domain-class">Domain class</a></li>
+<li class="toc__item toc__item--level-3"><a href="#registered-vs-unregistered-guest-user">Registered vs unregistered (guest) user</a></li>
+<li class="toc__item toc__item--level-3"><a href="#tool-top-toplist-top-code">Tool top / toplist / &quot;top&quot; code</a></li>
+<li class="toc__item toc__item--level-3"><a href="#dnload">dnload</a></li>
+<li class="toc__item toc__item--level-3"><a href="#login-ips-login-ips-tmp">Login IPs / login_ips_tmp</a></li>
+<li class="toc__item toc__item--level-3"><a href="#whoisonline">whoisonline</a></li>
+<li class="toc__item toc__item--level-3"><a href="#tick">Tick</a></li>
+<li class="toc__item toc__item--level-3"><a href="#migration-schema">Migration (schema)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#access-cfg">`access.cfg`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#exclude-list">exclude_list</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a-b-parity-bug-for-bug-parity">A/B parity / bug-for-bug parity</a></li>
+<li class="toc__item toc__item--level-3"><a href="#findweeks-week-chunking">`_findweeks` / week-chunking</a></li>
+<li class="toc__item toc__item--level-3"><a href="#banker-s-rounding-the-middleware-port-quirk">Banker&#x27;s rounding (the middleware port quirk)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#gridstat-hctest-user-filter">`gridstat` / `hctest_` user filter</a></li>
+<li class="toc__item toc__item--level-3"><a href="#unflushed-last-session">Unflushed last session</a></li>
+<li class="toc__item toc__item--level-3"><a href="#two-paths-to-mysql-int-rounding">Two paths to MySQL `INT` rounding</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>Quick definitions of terms that appear across these docs.  Each entry
+is one or two sentences.</p>
+<h3 id="hub-science-gateway">Hub / science gateway</h3>
+<p>A web-accessible portal that hosts computational tools for a research
+community.  HUBzero-based hubs include  (the largest),
+, , , and historically 
+() and the some deployments.</p>
+<h3 id="hubzero">HUBzero</h3>
+<p>The CMS framework hubs are built on.  Open-source PHP with custom
+plugins, hosted at hubzero.org, sourced at github.com/hubzero.</p>
+<h3 id="hub-db-hub">Hub DB (<code>&lt;hub&gt;</code>)</h3>
+<p>The live CMS database.  Owned by HUBzero CMS.  Metrics reads it but
+generally doesn't write to it (the exceptions are
+<code>jos_resource_stats*</code> and <code>jos_session_geo</code>).</p>
+<h3 id="metrics-db-hub-metrics">Metrics DB (<code>&lt;hub&gt;_metrics</code>)</h3>
+<p>The analytics database.  Owned end-to-end by the metrics pipeline.
+Contains <code>web</code>, <code>websessions</code>, <code>toolstart</code>, <code>userlogin</code>,
+<code>summary_*_vals</code>, and the static reference tables (<code>continents</code>,
+<code>countries</code>, <code>domainclass</code>, etc.).</p>
+<h3 id="web-row">Web row</h3>
+<p>One row in <code>web</code> represents one Apache HTTP request.  Created by
+<code>import-apache</code>.  Enriched by <code>resolve-dns</code> / <code>fill-domain</code> /
+<code>fill-ipcountry</code> / <code>logfix-session</code>.</p>
+<h3 id="web-session">Web session</h3>
+<p>One row in <code>websessions</code> represents a coalesced visitor session — a
+sequence of <code>web</code> rows from the same <code>ip</code> + <code>host</code> within 1800 seconds
+of each other.  Created by <code>logfix-session</code>.</p>
+<h3 id="tool-start">Tool start</h3>
+<p>One row in <code>toolstart</code> represents a user launching a computational
+tool.  Created from <code>&lt;hub&gt;.sessionlog</code> by <code>import-hub-data</code> and
+enriched with walltime / cputime by <code>middleware-wall</code> / <code>middleware-cpu</code>.</p>
+<h3 id="simulation">Simulation</h3>
+<p>In metrics terms, a tool-launch event that resulted in a job being
+submitted.  Counted by <code>summary_simusage_vals</code> and the <code>sim_users()</code>
+function.  Distinct from a &quot;view-only&quot; tool session.</p>
+<h3 id="period">Period</h3>
+<p>The time window a summary cell represents.  Six codes:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Code</th>
+<th style="text-align:left">Span</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>0</code></td>
+<td style="text-align:left">Calendar year containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td style="text-align:left">The month itself</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td style="text-align:left">Quarter containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>12</code></td>
+<td style="text-align:left">Rolling 12 months ending at <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>13</code></td>
+<td style="text-align:left">Fiscal year (Oct–Sep) containing <code>datetime</code></td>
+</tr>
+<tr>
+<td style="text-align:center"><code>14</code></td>
+<td style="text-align:left">All time (since 1995-01-01)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="datetime-convention">datetime convention</h3>
+<p>Summary tables use <code>'YYYY-MM-00 00:00:00'</code> for monthly anchors —
+zero-padded day to mark &quot;this is a month, not a specific date&quot;.
+Period 14 (all-time) uses <code>'0000-00-00 00:00:00'</code> in some legacy
+layouts; the rewrite preserves whichever the legacy used.</p>
+<h3 id="rowid-colid">rowid / colid</h3>
+<p>The two indexes into a summary cell.  <code>rowid</code> is the metric (e.g.,
+&quot;registered users&quot;, &quot;simulation jobs&quot;, &quot;domains served&quot;); <code>colid</code> is
+the breakdown axis (1 = total; 2–6 = residence by continent; 7–11 =
+org type).  Each <code>summary_*_vals</code> table has its own <code>rowid</code> semantics;
+see <a href="../usage-tables/">usage-tables.md</a>.</p>
+<h3 id="domain-class">Domain class</h3>
+<p>A six-bucket categorization of internet domains used for the org-type
+breakdown.  Stored in the <code>domainclass</code> reference table:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Class</th>
+<th style="text-align:left">Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>0</code></td>
+<td style="text-align:left">Unknown (no domain information)</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>1</code></td>
+<td style="text-align:left">Educational institution</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td style="text-align:left">Industrial / corporate</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>3</code></td>
+<td style="text-align:left">Governmental</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>4</code></td>
+<td style="text-align:left">Internet service provider</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td style="text-align:left">Search engine</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td style="text-align:left">Press / media / publication</td>
+</tr>
+</tbody>
+</table>
+<p>The mapping is hand-maintained.  Most of the entries date to 2015;
+periodic refresh is recommended but rarely happens.  <code>fill-domain</code>
+sets the domain on each <code>web</code> / <code>websessions</code> / <code>toolstart</code> row;
+<code>fill-user-info</code> and the summary <code>int_users()</code> / <code>reg_users()</code>
+functions roll the domain up into the colid 8–11 buckets.</p>
+<h3 id="registered-vs-unregistered-guest-user">Registered vs unregistered (guest) user</h3>
+<ul>
+<li><strong>Registered</strong>: appears in <code>userlogin</code> (i.e., logged into the CMS).
+Org / residence is taken from their <code>jos_xprofiles</code> profile if they
+filled it out, otherwise treated as &quot;unknown&quot;.</li>
+<li><strong>Unregistered</strong> (or &quot;guest&quot;): not logged in.  Identified by
+<code>(ip, host)</code> pair in <code>websessions</code>.  Org / residence is inferred
+from the resolved hostname → domain → <code>domainclass</code> lookup.</li>
+</ul>
+<p>The some deployments is anonymous-dominant — about 10 registered
+accounts total — so its metrics are essentially all guest-user
+inference.</p>
+<h3 id="tool-top-toplist-top-code">Tool top / toplist / &quot;top&quot; code</h3>
+<p><code>jos_resource_stats_tools_topvals</code> and <code>jos_stats_topvals</code> store
+ranked lists of tools by various metrics.  The <code>top</code> column codes the
+metric:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center"><code>top</code></th>
+<th style="text-align:left">Tool metric</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center"><code>2</code></td>
+<td style="text-align:left">Number of users</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>5</code></td>
+<td style="text-align:left">Number of jobs</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>6</code></td>
+<td style="text-align:left">Walltime</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>7</code></td>
+<td style="text-align:left">Simulation CPU time</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>8</code></td>
+<td style="text-align:left">Simulation interaction time</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>10</code></td>
+<td style="text-align:left">Number of courses</td>
+</tr>
+<tr>
+<td style="text-align:center"><code>11</code></td>
+<td style="text-align:left">Course user count</td>
+</tr>
+</tbody>
+</table>
+<p><code>rank=0</code> is the special &quot;total across all tools&quot; row for that
+<code>(top, period, datetime)</code> triple.  <code>rank=1, 2, 3, …</code> are the
+individual tools in descending order.</p>
+<h3 id="dnload">dnload</h3>
+<p>A boolean (<code>TINYINT 0/1</code>) column on the <code>web</code> table indicating
+whether the row represents a resource download.  Set inline by
+<code>import-apache</code> for new rows; <code>backfill-dnload</code> populates the
+historical rows.  Introduced by the rewrite to replace a slow <code>LIKE</code>-
+chain in <code>xlogfix_summary.php</code>'s download detection.</p>
+<h3 id="login-ips-login-ips-tmp">Login IPs / login_ips_tmp</h3>
+<p>A temp table built at summary time, indexing every IP that appears
+in <code>userlogin_lite</code>.  Used as the &quot;registered user&quot; set against
+which <code>websessions.ip NOT IN (...)</code> filters identify unregistered
+visitors.  The rewrite materializes this as an indexed JOIN target
+instead of an in-memory comma list, dramatically speeding up the
+all-time aggregation.</p>
+<h3 id="whoisonline">whoisonline</h3>
+<p>The live &quot;who is currently online&quot; widget.  Reads
+<code>&lt;hub&gt;.jos_session</code> every 5 minutes, looks up reverse DNS + GeoIP for
+new IPs, writes <code>&lt;hub&gt;.jos_session_geo</code> and
+<code>/var/www/&lt;hub&gt;/app/site/stats/maps/whoisonline.xml</code> for the Google
+Maps widget on the public usage page.  Real-time-ish, but a separate
+concern from the daily metrics pipeline.</p>
+<h3 id="tick">Tick</h3>
+<p>The cron entry point — <code>hzmetrics.py tick</code> — that runs every 5
+minutes.  Always refreshes whoisonline; at <code>:30</code> past the hour, also
+tries to run the metrics pipeline (under PID-lock guard).</p>
+<h3 id="migration-schema">Migration (schema)</h3>
+<p>A row in <code>&lt;hub&gt;_metrics.migrations</code> recording an applied schema
+delta.  <code>hzmetrics.py migrate --apply</code> walks the unapplied migrations
+in order and runs them.  Standard schema-migration pattern.</p>
+<h3 id="access-cfg"><code>access.cfg</code></h3>
+<p><code>/etc/hubzero-metrics/access.cfg</code>.  Bare <code>$var = 'value';</code> PHP-style
+file with DB credentials.  Owned <code>root:apache</code> mode 640.  Read by
+<code>hzmetrics.py</code>, the legacy Perl scripts, and the test harness (via
+<code>HZMETRICS_ACCESS_CFG</code> env var).</p>
+<h3 id="exclude-list">exclude_list</h3>
+<p>Per-hub table in the metrics DB.  Filters bots / scanners / utility
+traffic out of metrics processing.  See PR  for the modernized
+schema; see <a href="../../operations/operations/">operations.md</a> for ops use.</p>
+<h3 id="a-b-parity-bug-for-bug-parity">A/B parity / bug-for-bug parity</h3>
+<p>The rewrite's parity contract: the new code's output tables must be
+byte-identical to the legacy code's output tables for the same input
+fixtures.  Verified by <code>tests/ab/run-all.sh</code>.  Preserved even where
+the legacy had quirks (NULL vs empty-string, implementation-defined
+ordering with no tie-breaker, etc.) — those are documented and
+matched.</p>
+<h3 id="findweeks-week-chunking"><code>_findweeks</code> / week-chunking</h3>
+<p>A legacy pattern from <code>xlogfix_summary.php</code> / <code>xlogfix_domain.php</code>:
+break a month into ~4 week-sized scans for memory-bounded
+enrichment.  Has a known quirk — each week-chunk starts on the day
+<strong>before</strong> the month begins.  So July 2025's first chunk runs from
+<code>2025-06-30</code> to <code>2025-07-07</code>, not from <code>2025-07-01</code>.  Preserved
+bug-for-bug by the rewrite.</p>
+<h3 id="banker-s-rounding-the-middleware-port-quirk">Banker's rounding (the middleware port quirk)</h3>
+<p>MariaDB's <code>ROUND()</code> on a <code>DOUBLE</code> column uses round-half-to-even
+(banker's rounding) — <code>ROUND(200.5) → 200</code>.  Perl's <code>int($x + 0.5)</code>
+in <code>xlogfix_middleware_{wall,cpu}.pl</code> is round-half-up — <code>200.5 → 201</code>.  The rewrite uses <code>FLOOR(x + 0.5)</code> instead of <code>ROUND()</code> to
+mirror the Perl semantics exactly.  Caught by the
+<code>port_middleware</code> A/B test.</p>
+<h3 id="gridstat-hctest-user-filter"><code>gridstat</code> / <code>hctest_</code> user filter</h3>
+<p>Two patterns of &quot;test account&quot; excluded from metrics processing
+across the legacy code.  <code>gridstat</code> is an <strong>exact-string</strong> match
+(so <code>gridstatx</code> is NOT excluded).  <code>hctest%</code> is a LIKE pattern (so
+<code>hctest</code>, <code>hctest_x</code>, <code>hctestlonger</code>, <code>hctester</code> are all excluded).
+Preserved bug-for-bug.</p>
+<h3 id="unflushed-last-session">Unflushed last session</h3>
+<p>A legacy quirk in <code>logfix_session.pl</code>: the very last session of
+each run never gets emitted to <code>websessions</code> if no later row
+triggers the &quot;session end found&quot; path.  Preserved by the rewrite —
+the <code>port_logfix_session</code> test fixture exercises it explicitly.</p>
+<h3 id="two-paths-to-mysql-int-rounding">Two paths to MySQL <code>INT</code> rounding</h3>
+<p>Yet another preserved quirk.  The legacy PHP stringifies values
+before binding into SQL, so MariaDB applies half-away-from-zero
+rounding when casting a float-string to INT: <code>'488.5' → 489</code>.  The
+Python port's <code>pymysql</code> originally bound Python floats as numeric
+literals, hitting banker's rounding: <code>488.5 → 488</code>.  The fix:
+stringify Python floats before binding.  Caught by the
+<code>port_gen_tool_stats</code> A/B test.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzmetrics · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>
