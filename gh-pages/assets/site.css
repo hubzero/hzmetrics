@@ -121,39 +121,36 @@ code, pre { font-family: var(--font-code); }
   min-width: 0;
 }
 
-.home-main__header {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 1.4rem;
-  margin-bottom: 1.5rem;
-}
-
-.home-main__title {
-  margin: 0 0 .35rem;
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
-  line-height: 1.15;
-  font-family: var(--font-code);
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-.home-main__tagline {
-  max-width: 55rem;
-  margin: .25rem 0 .5rem;
-  color: var(--ink-soft);
-  font-size: 1.05rem;
-}
-
-.home-main__description {
-  max-width: 55rem;
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: .95rem;
-}
-
 .home-main__about { max-width: 56rem; }
 .home-main__about > .prose { max-width: 56rem; }
+
+/* --- hero band on homepage: dark, full page-shell width, centered --- */
+.hero {
+  background: var(--panel);
+  color: #f1f4f9;
+  padding: clamp(2.5rem, 6vw, 4.5rem) clamp(1rem, 4vw, 3rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.hero__logo {
+  display: block;
+  width: clamp(72px, 12vw, 110px);
+  height: auto;
+}
+
+.hero__title {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: clamp(1.9rem, 4.8vw, 3.2rem);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+}
 
 /* Site-wide Beta badge in the sticky header — small, sits between the
    brand link and the top-nav on every page. Hidden on phones to keep
@@ -180,8 +177,9 @@ code, pre { font-family: var(--font-code); }
   .site-header__beta { display: none; }
 }
 
-/* Rubber-stamp Beta badge — adapted from mod_botshield. Sits inline
-   immediately to the right of the H1 title text (via the flex parent). */
+/* Rubber-stamp Beta badge — adapted from mod_botshield. Default size
+   fits inline next to an H1; the .hero context override below makes it
+   larger when it appears centered under the hero title. */
 .hero__beta-stamp {
   display: inline-block;
   font-family: var(--font-code);
@@ -200,6 +198,13 @@ code, pre { font-family: var(--font-code); }
   white-space: nowrap;
   text-shadow: 0 0 2px rgba(213, 74, 60, 0.18);
   vertical-align: middle;
+}
+
+.hero .hero__beta-stamp {
+  font-size: clamp(1.15rem, 2.4vw, 1.65rem);
+  border-width: 3px;
+  padding: 0.25rem 0.85rem 0.3rem;
+  opacity: 0.92;
 }
 
 /* --- group page --- */

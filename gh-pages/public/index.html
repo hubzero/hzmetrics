@@ -20,10 +20,22 @@
       </nav>
     </header>
 
+    <section class="hero">
+      <img class="hero__logo" src="assets/logo.svg" alt="" aria-hidden="true" width="96" height="96">
+      <h1 class="hero__title">Hubzero Metrics Pipeline</h1>
+      <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
+    </section>
+
     <main id="main-content" class="home-layout" tabindex="-1">
       <aside class="home-sidebar" aria-label="Documentation sections">
         <p class="docs-sidebar__eyebrow">Sections</p>
         <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Home</a></li>
+  </ul>
+</div>
 <div class="docs-nav__group">
   <a class="docs-nav__group-title" href="overview/index.html">Overview</a>
   <ul class="docs-nav__list">
@@ -53,16 +65,6 @@
       </aside>
 
       <article class="home-main">
-        <header class="home-main__header">
-          <p class="eyebrow">HUBzero metrics pipeline</p>
-          <h1 class="home-main__title">
-            <span class="home-main__title-text">hzmetrics</span>
-            <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
-          </h1>
-          <p class="home-main__tagline">HUBzero metrics pipeline — one Python file, bug-for-bug compatible with the legacy PHP/Perl/Bash stack.</p>
-          <p class="home-main__description">Documentation for hzmetrics.py: the Apache-log → MariaDB analytics pipeline that drives the public usage pages on HUBzero-based science gateways.</p>
-        </header>
-
         <section class="home-main__about">
 <div class="prose">
 <p>Documentation for <code>hzmetrics.py</code> — the Python rewrite of the HUBzero

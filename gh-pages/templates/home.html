@@ -20,6 +20,12 @@
       </nav>
     </header>
 
+    <section class="hero">
+      <img class="hero__logo" src="assets/logo.svg" alt="" aria-hidden="true" width="96" height="96">
+      <h1 class="hero__title">Hubzero Metrics Pipeline</h1>
+      <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
+    </section>
+
     <main id="main-content" class="home-layout" tabindex="-1">
       <aside class="home-sidebar" aria-label="Documentation sections">
         <p class="docs-sidebar__eyebrow">Sections</p>
@@ -29,16 +35,6 @@
       </aside>
 
       <article class="home-main">
-        <header class="home-main__header">
-          <p class="eyebrow">HUBzero metrics pipeline</p>
-          <h1 class="home-main__title">
-            <span class="home-main__title-text">{{ site_name }}</span>
-            <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
-          </h1>
-          <p class="home-main__tagline">{{ site_tagline }}</p>
-          <p class="home-main__description">{{ site_description }}</p>
-        </header>
-
         <section class="home-main__about">
 {{ readme_html }}
         </section>

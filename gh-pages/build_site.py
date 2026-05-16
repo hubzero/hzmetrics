@@ -239,6 +239,24 @@ def build_docs_nav(groups: list[dict], pages_by_group: dict, page_titles: dict,
                    current_output: Path, output_dir: Path,
                    current_group: str | None, current_slug: str | None) -> str:
     chunks = []
+
+    # Lead with a synthetic "Homepage" section that links back to the
+    # site root, so the sidebar makes it obvious there's a landing page
+    # distinct from the section groups below. .is-active when we ARE on
+    # the homepage (current_group and current_slug both None).
+    home_href = relative_href(current_output, output_dir / "index.html")
+    on_home = (current_group is None and current_slug is None)
+    home_title_classes = "docs-nav__group-title" + (" is-active" if on_home else "")
+    home_item_classes = "docs-nav__item" + (" is-active" if on_home else "")
+    chunks.append(
+        f'<div class="docs-nav__group">\n'
+        f'  <a class="{home_title_classes}" href="{escape(home_href)}">Homepage</a>\n'
+        f'  <ul class="docs-nav__list">\n'
+        f'    <li><a class="{home_item_classes}" href="{escape(home_href)}">Home</a></li>\n'
+        f'  </ul>\n'
+        f'</div>'
+    )
+
     for group in groups:
         g_slug = group["slug"]
         is_current_group = (g_slug == current_group)
