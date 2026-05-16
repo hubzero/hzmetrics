@@ -67,9 +67,9 @@ CREATE TABLE `jos_resources` (
   `title` varchar(250) NOT NULL DEFAULT '',
   `type` int(11) NOT NULL DEFAULT 0,
   `logical_type` int(11) NOT NULL DEFAULT 0,
-  `introtext` text NOT NULL,
-  `fulltxt` text NOT NULL,
-  `footertext` text NOT NULL,
+  `introtext` text NOT NULL DEFAULT '',
+  `fulltxt` text NOT NULL DEFAULT '',
+  `footertext` text NOT NULL DEFAULT '',
   `created` datetime /* mariadb-5.3 */ NOT NULL DEFAULT '0000-00-00 00:00:00',
   `created_by` int(11) NOT NULL DEFAULT 0,
   `modified` datetime /* mariadb-5.3 */ NOT NULL DEFAULT '0000-00-00 00:00:00',
@@ -117,7 +117,7 @@ CREATE TABLE `jos_resource_assoc` (
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_resource_stats` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
-  `resid` bigint(20) NOT NULL,
+  `resid` bigint(20) NOT NULL DEFAULT 0,
   `restype` int(11) DEFAULT NULL,
   `users` bigint(20) DEFAULT NULL,
   `jobs` bigint(20) DEFAULT NULL,
@@ -136,8 +136,8 @@ CREATE TABLE `jos_resource_stats` (
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_resource_stats_tools` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
-  `resid` bigint(20) NOT NULL,
-  `restype` int(11) NOT NULL,
+  `resid` bigint(20) NOT NULL DEFAULT 0,
+  `restype` int(11) NOT NULL DEFAULT 0,
   `users` bigint(20) DEFAULT NULL,
   `sessions` bigint(20) DEFAULT NULL,
   `simulations` bigint(20) DEFAULT NULL,
@@ -161,7 +161,7 @@ CREATE TABLE `jos_resource_stats_tools` (
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_resource_stats_tools_topvals` (
-  `id` bigint(20) NOT NULL,
+  `id` bigint(20) NOT NULL DEFAULT 0,
   `top` tinyint(4) NOT NULL DEFAULT 0,
   `rank` tinyint(4) NOT NULL DEFAULT 0,
   `name` varchar(255) DEFAULT NULL,
@@ -265,17 +265,17 @@ CREATE TABLE `jos_tool_version` (
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_tool_version_alias` (
-  `tool_version_id` int(11) NOT NULL,
-  `alias` varchar(255) NOT NULL
+  `tool_version_id` int(11) NOT NULL DEFAULT 0,
+  `alias` varchar(255) NOT NULL DEFAULT ''
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_user_profiles` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `user_id` int(11) NOT NULL,
-  `profile_key` varchar(100) NOT NULL,
-  `profile_value` text NOT NULL,
+  `user_id` int(11) NOT NULL DEFAULT 0,
+  `profile_key` varchar(100) NOT NULL DEFAULT '',
+  `profile_value` text NOT NULL DEFAULT '',
   `ordering` int(11) NOT NULL DEFAULT 0,
   `access` int(10) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
@@ -287,9 +287,9 @@ CREATE TABLE `jos_user_profiles` (
 CREATE TABLE `jos_users` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL DEFAULT '',
-  `givenName` varchar(255) NOT NULL,
-  `middleName` varchar(255) NOT NULL,
-  `surname` varchar(255) NOT NULL,
+  `givenName` varchar(255) NOT NULL DEFAULT '',
+  `middleName` varchar(255) NOT NULL DEFAULT '',
+  `surname` varchar(255) NOT NULL DEFAULT '',
   `username` varchar(150) NOT NULL DEFAULT '',
   `email` varchar(100) NOT NULL DEFAULT '',
   `password` varchar(127) NOT NULL DEFAULT '',
@@ -301,14 +301,14 @@ CREATE TABLE `jos_users` (
   `registerIP` varchar(40) NOT NULL DEFAULT '',
   `lastvisitDate` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
   `activation` int(11) NOT NULL DEFAULT 0,
-  `params` text NOT NULL,
+  `params` text NOT NULL DEFAULT '',
   `lastResetTime` datetime NOT NULL DEFAULT '0000-00-00 00:00:00' COMMENT 'Date of last password reset',
   `resetCount` int(11) NOT NULL DEFAULT 0 COMMENT 'Count of password resets since lastResetTime',
   `access` int(10) NOT NULL DEFAULT 0,
   `usageAgreement` tinyint(2) NOT NULL DEFAULT 0,
-  `homeDirectory` varchar(255) NOT NULL,
-  `loginShell` varchar(255) NOT NULL,
-  `ftpShell` varchar(255) NOT NULL,
+  `homeDirectory` varchar(255) NOT NULL DEFAULT '',
+  `loginShell` varchar(255) NOT NULL DEFAULT '',
+  `ftpShell` varchar(255) NOT NULL DEFAULT '',
   `secret` char(32) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uidx_username` (`username`),
@@ -323,7 +323,7 @@ CREATE TABLE `jos_users` (
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `jos_xprofiles` (
-  `uidNumber` int(11) NOT NULL,
+  `uidNumber` int(11) NOT NULL DEFAULT 0,
   `name` varchar(255) NOT NULL DEFAULT '',
   `username` varchar(150) NOT NULL DEFAULT '',
   `email` varchar(100) NOT NULL DEFAULT '',
@@ -340,7 +340,7 @@ CREATE TABLE `jos_xprofiles` (
   `countryorigin` char(2) NOT NULL DEFAULT '',
   `gender` varchar(255) NOT NULL DEFAULT '',
   `url` varchar(255) NOT NULL DEFAULT '',
-  `reason` text NOT NULL,
+  `reason` text NOT NULL DEFAULT '',
   `mailPreferenceOption` int(11) NOT NULL DEFAULT -1,
   `usageAgreement` int(11) NOT NULL DEFAULT 0,
   `modifiedDate` datetime /* mariadb-5.3 */ NOT NULL DEFAULT '0000-00-00 00:00:00',
@@ -357,8 +357,8 @@ CREATE TABLE `jos_xprofiles` (
   `picture` varchar(255) NOT NULL DEFAULT '',
   `vip` int(11) NOT NULL DEFAULT 0,
   `public` tinyint(2) NOT NULL DEFAULT 0,
-  `params` text NOT NULL,
-  `note` text NOT NULL,
+  `params` text NOT NULL DEFAULT '',
+  `note` text NOT NULL DEFAULT '',
   `shadowExpire` int(11) DEFAULT NULL,
   `locked` tinyint(4) NOT NULL DEFAULT 0,
   `orcid` varchar(255) NOT NULL DEFAULT '',

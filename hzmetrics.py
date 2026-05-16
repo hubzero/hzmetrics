@@ -451,7 +451,7 @@ METRICS_DB_DDL = [
     "CREATE DATABASE IF NOT EXISTS `{metrics_db}` DEFAULT CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`bot_useragents` (
-  `useragent` tinytext NOT NULL,
+  `useragent` tinytext NOT NULL DEFAULT '',
   PRIMARY KEY (`useragent`(255))
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
@@ -496,7 +496,7 @@ METRICS_DB_DDL = [
   `class` tinyint(4) NOT NULL DEFAULT 0,
   `country` varchar(4) NOT NULL DEFAULT '',
   `state` varchar(4) NOT NULL DEFAULT '',
-  `name` tinytext NOT NULL,
+  `name` tinytext NOT NULL DEFAULT '',
   PRIMARY KEY (`domain`),
   KEY `class` (`class`),
   KEY `domain_class` (`domain`,`class`)
@@ -511,7 +511,7 @@ METRICS_DB_DDL = [
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`exclude_list` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `filter` varchar(65) NOT NULL,
+  `filter` varchar(65) NOT NULL DEFAULT '',
   `type` varchar(65) NOT NULL DEFAULT 'domain',
   `notes` varchar(120) DEFAULT NULL,
   `date_added` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
@@ -520,13 +520,13 @@ METRICS_DB_DDL = [
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`exclude_list2` (
-  `filter` varchar(65) NOT NULL,
+  `filter` varchar(65) NOT NULL DEFAULT '',
   `type` varchar(65) NOT NULL DEFAULT 'domain',
   `notes` varchar(120) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`jos_xprofiles_metrics` (
-  `uidNumber` int(11) NOT NULL,
+  `uidNumber` int(11) NOT NULL DEFAULT 0,
   `name` varchar(255) NOT NULL DEFAULT '',
   `username` varchar(150) NOT NULL DEFAULT '',
   `email` varchar(100) NOT NULL DEFAULT '',
@@ -543,7 +543,7 @@ METRICS_DB_DDL = [
   `countryorigin` char(2) NOT NULL DEFAULT '',
   `gender` varchar(255) NOT NULL DEFAULT '',
   `url` varchar(255) NOT NULL DEFAULT '',
-  `reason` text NOT NULL,
+  `reason` text NOT NULL DEFAULT '',
   `mailPreferenceOption` int(11) NOT NULL DEFAULT -1,
   `usageAgreement` int(11) NOT NULL DEFAULT 0,
   `modifiedDate` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
@@ -560,8 +560,8 @@ METRICS_DB_DDL = [
   `picture` varchar(255) NOT NULL DEFAULT '',
   `vip` int(11) NOT NULL DEFAULT 0,
   `public` tinyint(2) NOT NULL DEFAULT 0,
-  `params` text NOT NULL,
-  `note` text NOT NULL,
+  `params` text NOT NULL DEFAULT '',
+  `note` text NOT NULL DEFAULT '',
   `shadowExpire` int(11) DEFAULT NULL,
   `location` varchar(50) DEFAULT NULL,
   `orcid` varchar(255) NOT NULL DEFAULT '',
@@ -570,7 +570,7 @@ METRICS_DB_DDL = [
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`migrations` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL DEFAULT 0,
   `description` varchar(255) DEFAULT NULL,
   `applied_at` datetime DEFAULT current_timestamp(),
   PRIMARY KEY (`id`)
@@ -595,7 +595,7 @@ METRICS_DB_DDL = [
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`sessionlog_metrics` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `sessnum` bigint(20) unsigned NOT NULL,
+  `sessnum` bigint(20) unsigned NOT NULL DEFAULT 0,
   `user` varchar(150) NOT NULL DEFAULT '',
   `ip` varchar(15) NOT NULL DEFAULT '',
   `start` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
@@ -692,7 +692,7 @@ METRICS_DB_DDL = [
   `ip` varchar(15) NOT NULL DEFAULT '',
   `host` tinytext DEFAULT NULL,
   `user` varchar(150) DEFAULT NULL,
-  `tool` tinytext NOT NULL,
+  `tool` tinytext NOT NULL DEFAULT '',
   `pid` int(11) DEFAULT NULL,
   `domain` tinytext DEFAULT NULL,
   `filesystem` tinytext DEFAULT NULL,
@@ -769,7 +769,7 @@ METRICS_DB_DDL = [
   `sessionid` bigint(20) DEFAULT NULL,
   `datetime` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
   `ipcountry` char(2) DEFAULT NULL,
-  `content` tinytext NOT NULL,
+  `content` tinytext NOT NULL DEFAULT '',
   `referrer` tinytext DEFAULT NULL,
   `useragent` tinytext DEFAULT NULL,
   `ip` varchar(15) NOT NULL DEFAULT '',
