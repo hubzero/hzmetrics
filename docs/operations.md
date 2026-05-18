@@ -10,6 +10,27 @@ for Usage Metrics Processing" runbook).
 The mechanics are different now but the questions to ask are the
 same.
 
+## Knobs the pipeline honors
+
+A few ops-relevant defaults are overridable without editing
+`/etc/hubzero-metrics/`:
+
+| Env var | What it overrides | Default |
+|---|---|---|
+| `HZMETRICS_LOG` | Pipeline log file path | `/var/log/hubzero/metrics/manage.log` |
+| `HZMETRICS_ACCESS_CFG` | DB credentials cfg path | `/etc/hubzero-metrics/access.cfg` |
+| `HZMETRICS_DNS_NAMESERVER` | resolve-dns nameserver | from `[dns]` section of hzmetrics.conf, then `system` |
+| `HZMETRICS_DNS_CONCURRENCY` | aiodns concurrency | 100 |
+| `HZMETRICS_DNS_TIMEOUT` | aiodns per-IP timeout (seconds) | 2.0 |
+
+Useful for one-off runs that shouldn't touch the production log file
+(e.g. a catch-up against a snapshot DB), or for the A/B harness.
+
+Exit codes: `main()` propagates the handler's return code.  A daily
+`cron` entry that's checking for success can rely on exit status; a
+non-zero exit indicates an operational error (missing cfg, missing
+hub_dir, mysql_exec failure, etc.).
+
 ## Pipeline is running — am I getting fresh data?
 
 ```bash
@@ -82,25 +103,32 @@ If the underlying logrotate is wrong (not putting files in `daily/`
 at all), check `/etc/logrotate.d/httpd` and `/etc/logrotate.d/hubzero`
 and compare against `conf/hzmetrics-logrotate-postrotate.sh`.
 
-## The PID lock is stuck
+## A tick says "still running" but nothing's progressing
 
-If `hzmetrics.py status` says a pipeline is running but nothing seems
-to be progressing:
+The lock is a `fcntl.flock` on `/var/run/hzmetrics/hzmetrics.pid` —
+the file's contents are the holder's PID (purely diagnostic), but the
+lock itself is the kernel-managed flock, not the file's existence.
 
 ```bash
-# Is the process actually alive?
-cat /var/run/hzmetrics/hzmetrics.pid
-ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)
-
-# If the PID is dead but the file is still there:
-sudo rm /var/run/hzmetrics/hzmetrics.pid
-
-# Next tick will pick up where it left off.
+# Who holds it?
+cat /var/run/hzmetrics/hzmetrics.pid       # the holder's PID (diagnostic only)
+ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)   # is it alive?
 ```
 
-The pipeline writes the PID file on entry and removes it on exit; an
-abrupt kill (SIGKILL, OOM, host reboot) leaves a stale file.  Safe to
-remove if the PID is gone.
+If the process is alive: it's genuinely doing work (large catch-up
+import, slow DNS round) — give it time, or follow it with `tail -F`
+on the log to see what stage it's in.
+
+If the process is dead: the kernel has already released the flock
+(`fcntl` cleans up on process exit), and the next `tick` will acquire
+cleanly.  The file may still be on disk if the process was SIGKILL'd
+before `release_lock()` ran, but a leftover unlocked file is harmless
+— do NOT `rm` a file that a running process might be holding (you'd
+unlink the inode out from under their flock and let another process
+race in).
+
+If you must force-unstick something a `tick` later: `ps` for the PID,
+confirm it's truly gone, then `rm` is safe.
 
 ## DNS resolution looks slow
 
@@ -304,7 +332,8 @@ Useful signals to put behind alerts:
 |---|---|---|
 | Pipeline is behind | `hzmetrics.py status` shows pending days | >3 pending days (autonomous catch-up should resolve within hours; sustained backlog means something is wedged) |
 | Daily run is failing | grep `ERROR` / `FAIL` in `/var/log/hubzero/metrics/manage.log` since midnight | any new occurrence |
-| PID lock is stuck | PID in `/var/run/hzmetrics/hzmetrics.pid` is dead but file is present | >2 hours since lock acquired and PID not running |
+| Cron `tick` is failing | non-zero exit status from the cron entry (`main()` propagates the handler's return code) | any new occurrence; cron emails the captured stderr to `MAILTO=` |
+| Lock held abnormally long | `cat /var/run/hzmetrics/hzmetrics.pid` then check the PID's elapsed time with `ps -o etime= -p <pid>` | lock held >2 hours by a live PID (catch-up usually completes within minutes; multi-hour holds suggest a wedge) |
 | Logrotate failing | New file in `/var/log/httpd/daily/` is not appearing | no new `<hub>-access.log-YYYYMMDD` after midnight |
 | `web` row count anomaly | Compare today's `web` row count to a 7-day rolling average | row count is >3× the average (bot inflation event) |
 | `webhits / web` ratio anomaly | `SELECT SUM(hits) FROM webhits` ÷ `COUNT(*) FROM web` for the same window | ratio drops below ~0.1 or above ~10 (suggests one of the two imports has stopped) |

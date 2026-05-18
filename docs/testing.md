@@ -51,6 +51,23 @@ on the same DB), `port_dryrun` (every `--dry-run` writes zero rows),
 
 ## Running
 
+### Prerequisites
+
+- MariaDB running locally; an account with `CREATE DATABASE` /
+  `GRANT` privileges for the bootstrap step (typically via `sudo
+  mysql` using the system socket auth).
+- PHP CLI on `PATH` — the legacy reference under `tests/legacy/`
+  shells out to `php`, `perl`, and `bash`.
+- The BIND `host(1)` utility — the legacy DNS step (`xlogfix_dns_v2.sh`
+  + `xlogfix_dns_worker.php`) shells out to `/usr/bin/host`.  On
+  Debian/Ubuntu: `sudo apt install bind9-host`.  Without it, 3
+  DNS-dependent tests (`port_pipeline`, `port_determinism`,
+  `port_whoisonline`) fail with fake mismatches where legacy reports
+  `?` / `(unknown)` while the new Python's aiodns resolves cleanly.
+- Python runtime deps from `pyproject.toml` (`pymysql`, `aiodns`).
+
+### Commands
+
 ```bash
 # Bootstrap once per host (creates test DBs, loads reference data)
 tests/ab/setup_test_dbs.sh --bootstrap
@@ -68,6 +85,13 @@ tests/ab/port_fill_domain/run_golden.sh
 
 `setup_test_dbs.sh --reset` truncates everything and reloads
 reference data — used between tests.
+
+### Running against a non-default cfg
+
+Both `setup_test_dbs.sh` and `conftest.sh` honor
+`HZMETRICS_ACCESS_CFG=<path>` (env override) — useful if your local
+MariaDB account doesn't match the cfg's `$db_user`.  Same env
+applies to per-port `run.sh` invocations.
 
 ## When the harness catches things
 

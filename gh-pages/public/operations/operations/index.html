@@ -68,10 +68,11 @@
 <nav class="toc" aria-label="On this page">
   <p class="toc__heading">On this page</p>
   <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#knobs-the-pipeline-honors">Knobs the pipeline honors</a></li>
 <li class="toc__item toc__item--level-2"><a href="#pipeline-is-running-am-i-getting-fresh-data">Pipeline is running — am I getting fresh data?</a></li>
 <li class="toc__item toc__item--level-2"><a href="#catching-up-from-a-backlog">Catching up from a backlog</a></li>
 <li class="toc__item toc__item--level-2"><a href="#my-log-files-aren-t-where-the-pipeline-looks">My log files aren&#x27;t where the pipeline looks</a></li>
-<li class="toc__item toc__item--level-2"><a href="#the-pid-lock-is-stuck">The PID lock is stuck</a></li>
+<li class="toc__item toc__item--level-2"><a href="#a-tick-says-still-running-but-nothing-s-progressing">A tick says &quot;still running&quot; but nothing&#x27;s progressing</a></li>
 <li class="toc__item toc__item--level-2"><a href="#dns-resolution-looks-slow">DNS resolution looks slow</a></li>
 <li class="toc__item toc__item--level-2"><a href="#a-month-s-summary-numbers-look-wrong">A month&#x27;s summary numbers look wrong</a></li>
 <li class="toc__item toc__item--level-2"><a href="#a-bot-is-inflating-counts">A bot is inflating counts</a></li>
@@ -92,6 +93,51 @@ HUBzero pipeline circa 2014–2016 (Sperhac's &quot;Basic new-month checks
 for Usage Metrics Processing&quot; runbook).
 The mechanics are different now but the questions to ask are the
 same.</p>
+<h2 id="knobs-the-pipeline-honors">Knobs the pipeline honors</h2>
+<p>A few ops-relevant defaults are overridable without editing
+<code>/etc/hubzero-metrics/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>What it overrides</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HZMETRICS_LOG</code></td>
+<td>Pipeline log file path</td>
+<td><code>/var/log/hubzero/metrics/manage.log</code></td>
+</tr>
+<tr>
+<td><code>HZMETRICS_ACCESS_CFG</code></td>
+<td>DB credentials cfg path</td>
+<td><code>/etc/hubzero-metrics/access.cfg</code></td>
+</tr>
+<tr>
+<td><code>HZMETRICS_DNS_NAMESERVER</code></td>
+<td>resolve-dns nameserver</td>
+<td>from <code>[dns]</code> section of hzmetrics.conf, then <code>system</code></td>
+</tr>
+<tr>
+<td><code>HZMETRICS_DNS_CONCURRENCY</code></td>
+<td>aiodns concurrency</td>
+<td>100</td>
+</tr>
+<tr>
+<td><code>HZMETRICS_DNS_TIMEOUT</code></td>
+<td>aiodns per-IP timeout (seconds)</td>
+<td>2.0</td>
+</tr>
+</tbody>
+</table>
+<p>Useful for one-off runs that shouldn't touch the production log file
+(e.g. a catch-up against a snapshot DB), or for the A/B harness.</p>
+<p>Exit codes: <code>main()</code> propagates the handler's return code.  A daily
+<code>cron</code> entry that's checking for success can rely on exit status; a
+non-zero exit indicates an operational error (missing cfg, missing
+hub_dir, mysql_exec failure, etc.).</p>
 <h2 id="pipeline-is-running-am-i-getting-fresh-data">Pipeline is running — am I getting fresh data?</h2>
 <pre><code class="language-bash"># What does the pipeline think the world looks like?
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
@@ -144,21 +190,26 @@ done
 <p>If the underlying logrotate is wrong (not putting files in <code>daily/</code>
 at all), check <code>/etc/logrotate.d/httpd</code> and <code>/etc/logrotate.d/hubzero</code>
 and compare against <code>conf/hzmetrics-logrotate-postrotate.sh</code>.</p>
-<h2 id="the-pid-lock-is-stuck">The PID lock is stuck</h2>
-<p>If <code>hzmetrics.py status</code> says a pipeline is running but nothing seems
-to be progressing:</p>
-<pre><code class="language-bash"># Is the process actually alive?
-cat /var/run/hzmetrics/hzmetrics.pid
-ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)
-
-# If the PID is dead but the file is still there:
-sudo rm /var/run/hzmetrics/hzmetrics.pid
-
-# Next tick will pick up where it left off.
+<h2 id="a-tick-says-still-running-but-nothing-s-progressing">A tick says &quot;still running&quot; but nothing's progressing</h2>
+<p>The lock is a <code>fcntl.flock</code> on <code>/var/run/hzmetrics/hzmetrics.pid</code> —
+the file's contents are the holder's PID (purely diagnostic), but the
+lock itself is the kernel-managed flock, not the file's existence.</p>
+<pre><code class="language-bash"># Who holds it?
+cat /var/run/hzmetrics/hzmetrics.pid       # the holder's PID (diagnostic only)
+ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)   # is it alive?
 </code></pre>
-<p>The pipeline writes the PID file on entry and removes it on exit; an
-abrupt kill (SIGKILL, OOM, host reboot) leaves a stale file.  Safe to
-remove if the PID is gone.</p>
+<p>If the process is alive: it's genuinely doing work (large catch-up
+import, slow DNS round) — give it time, or follow it with <code>tail -F</code>
+on the log to see what stage it's in.</p>
+<p>If the process is dead: the kernel has already released the flock
+(<code>fcntl</code> cleans up on process exit), and the next <code>tick</code> will acquire
+cleanly.  The file may still be on disk if the process was SIGKILL'd
+before <code>release_lock()</code> ran, but a leftover unlocked file is harmless
+— do NOT <code>rm</code> a file that a running process might be holding (you'd
+unlink the inode out from under their flock and let another process
+race in).</p>
+<p>If you must force-unstick something a <code>tick</code> later: <code>ps</code> for the PID,
+confirm it's truly gone, then <code>rm</code> is safe.</p>
 <h2 id="dns-resolution-looks-slow">DNS resolution looks slow</h2>
 <p>The pipeline uses <code>aiodns</code> with default <code>concurrency=100</code> against the
 system resolver.  Symptoms of DNS trouble in
@@ -323,9 +374,14 @@ Useful signals to put behind alerts:</p>
 <td>any new occurrence</td>
 </tr>
 <tr>
-<td>PID lock is stuck</td>
-<td>PID in <code>/var/run/hzmetrics/hzmetrics.pid</code> is dead but file is present</td>
-<td>&gt;2 hours since lock acquired and PID not running</td>
+<td>Cron <code>tick</code> is failing</td>
+<td>non-zero exit status from the cron entry (<code>main()</code> propagates the handler's return code)</td>
+<td>any new occurrence; cron emails the captured stderr to <code>MAILTO=</code></td>
+</tr>
+<tr>
+<td>Lock held abnormally long</td>
+<td><code>cat /var/run/hzmetrics/hzmetrics.pid</code> then check the PID's elapsed time with <code>ps -o etime= -p &lt;pid&gt;</code></td>
+<td>lock held &gt;2 hours by a live PID (catch-up usually completes within minutes; multi-hour holds suggest a wedge)</td>
 </tr>
 <tr>
 <td>Logrotate failing</td>

@@ -69,6 +69,7 @@
   <p class="toc__heading">On this page</p>
   <ul class="toc__list">
 <li class="toc__item toc__item--level-2"><a href="#prerequisites">Prerequisites</a></li>
+<li class="toc__item toc__item--level-3"><a href="#dev-installs-not-for-production">Dev installs (not for production)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#file-layout-post-install">File layout (post-install)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#install-via-makefile">Install via Makefile</a></li>
 <li class="toc__item toc__item--level-2"><a href="#access-cfg">access.cfg</a></li>
@@ -95,7 +96,8 @@ the highest <code>python3.N</code> &gt;= 3.10 it finds on <code>PATH</code>).</l
 metrics DB.  On a stock HUBzero hub this is the <code>apache</code> user; the
 cron entry is owned by <code>apache</code>.</li>
 </ul>
-<p>System packages (Rocky 8 names — adapt for other distros):</p>
+<p>Production hosts get the deps as system packages (Rocky 8 names —
+adapt for other distros):</p>
 <pre><code>dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
 pip3.11 install --user aiodns                       # not packaged on Rocky 8
 </code></pre>
@@ -113,6 +115,17 @@ alongside is the supported configuration.</li>
 into the highest-numbered <code>python3.N</code> (≥ 3.10) it can find on <code>PATH</code>,
 so just having <code>python3.11</code> installed alongside the system <code>python3</code>
 is enough.</p>
+<h3 id="dev-installs-not-for-production">Dev installs (not for production)</h3>
+<p>For a development machine where you'll run tests or hack on the
+code, <code>pyproject.toml</code> declares the same deps and wires a
+<code>hzmetrics</code> console-script entry point:</p>
+<pre><code>pip install --user --break-system-packages -e .   # PEP 668-friendly
+</code></pre>
+<p>This is <strong>not</strong> the production install path — production hosts still
+get <code>hzmetrics.py</code> dropped on <code>PATH</code> by the Makefile + cron pulled
+in via the cron.d / spool drop-in, exactly as above.  <code>pyproject.toml</code>
+is purely a dev / CI convenience so <code>pip install</code> resolves the dep
+set instead of relying on system packages being present.</p>
 <h2 id="file-layout-post-install">File layout (post-install)</h2>
 <pre><code>/opt/hubzero/bin/hzmetrics.py                  the pipeline
 /opt/hubzero/bin/hzmetrics-postrotate.sh       logrotate hook

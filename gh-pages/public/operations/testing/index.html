@@ -71,6 +71,9 @@
 <li class="toc__item toc__item--level-2"><a href="#two-test-modes">Two test modes</a></li>
 <li class="toc__item toc__item--level-2"><a href="#what-s-tested">What&#x27;s tested</a></li>
 <li class="toc__item toc__item--level-2"><a href="#running">Running</a></li>
+<li class="toc__item toc__item--level-3"><a href="#prerequisites">Prerequisites</a></li>
+<li class="toc__item toc__item--level-3"><a href="#commands">Commands</a></li>
+<li class="toc__item toc__item--level-3"><a href="#running-against-a-non-default-cfg">Running against a non-default cfg</a></li>
 <li class="toc__item toc__item--level-2"><a href="#when-the-harness-catches-things">When the harness catches things</a></li>
 <li class="toc__item toc__item--level-2"><a href="#what-can-t-be-tested-locally">What can&#x27;t be tested locally</a></li>
   </ul>
@@ -117,6 +120,24 @@ on the same DB), <code>port_dryrun</code> (every <code>--dry-run</code> writes z
 <code>port_empty_input</code> (each port no-ops cleanly on empty input),
 <code>port_determinism</code> (two fresh-DB runs are byte-identical).</p>
 <h2 id="running">Running</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>MariaDB running locally; an account with <code>CREATE DATABASE</code> /
+<code>GRANT</code> privileges for the bootstrap step (typically via <code>sudo mysql</code> using the system socket auth).</li>
+<li>PHP CLI on <code>PATH</code> — the legacy reference under <code>tests/legacy/</code>
+shells out to <code>php</code>, <code>perl</code>, and <code>bash</code>.</li>
+<li>The BIND <code>host(1)</code> utility — the legacy DNS step (<code>xlogfix_dns_v2.sh</code>
+<ul>
+<li><code>xlogfix_dns_worker.php</code>) shells out to <code>/usr/bin/host</code>.  On
+Debian/Ubuntu: <code>sudo apt install bind9-host</code>.  Without it, 3
+DNS-dependent tests (<code>port_pipeline</code>, <code>port_determinism</code>,
+<code>port_whoisonline</code>) fail with fake mismatches where legacy reports
+<code>?</code> / <code>(unknown)</code> while the new Python's aiodns resolves cleanly.</li>
+</ul>
+</li>
+<li>Python runtime deps from <code>pyproject.toml</code> (<code>pymysql</code>, <code>aiodns</code>).</li>
+</ul>
+<h3 id="commands">Commands</h3>
 <pre><code class="language-bash"># Bootstrap once per host (creates test DBs, loads reference data)
 tests/ab/setup_test_dbs.sh --bootstrap
 
@@ -132,6 +153,11 @@ tests/ab/port_fill_domain/run_golden.sh
 </code></pre>
 <p><code>setup_test_dbs.sh --reset</code> truncates everything and reloads
 reference data — used between tests.</p>
+<h3 id="running-against-a-non-default-cfg">Running against a non-default cfg</h3>
+<p>Both <code>setup_test_dbs.sh</code> and <code>conftest.sh</code> honor
+<code>HZMETRICS_ACCESS_CFG=&lt;path&gt;</code> (env override) — useful if your local
+MariaDB account doesn't match the cfg's <code>$db_user</code>.  Same env
+applies to per-port <code>run.sh</code> invocations.</p>
 <h2 id="when-the-harness-catches-things">When the harness catches things</h2>
 <p>Real bugs surfaced during the port, with their commit messages
 preserved in the log for reference:</p>

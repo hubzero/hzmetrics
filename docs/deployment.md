@@ -15,7 +15,8 @@ How to install `hzmetrics.py` on a new HUBzero hub.
   metrics DB.  On a stock HUBzero hub this is the `apache` user; the
   cron entry is owned by `apache`.
 
-System packages (Rocky 8 names — adapt for other distros):
+Production hosts get the deps as system packages (Rocky 8 names —
+adapt for other distros):
 
 ```
 dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
@@ -35,6 +36,22 @@ Test the Python version is discoverable: `hzmetrics.py` self-relaunches
 into the highest-numbered `python3.N` (≥ 3.10) it can find on `PATH`,
 so just having `python3.11` installed alongside the system `python3`
 is enough.
+
+### Dev installs (not for production)
+
+For a development machine where you'll run tests or hack on the
+code, `pyproject.toml` declares the same deps and wires a
+`hzmetrics` console-script entry point:
+
+```
+pip install --user --break-system-packages -e .   # PEP 668-friendly
+```
+
+This is **not** the production install path — production hosts still
+get `hzmetrics.py` dropped on `PATH` by the Makefile + cron pulled
+in via the cron.d / spool drop-in, exactly as above.  `pyproject.toml`
+is purely a dev / CI convenience so `pip install` resolves the dep
+set instead of relying on system packages being present.
 
 ## File layout (post-install)
 
