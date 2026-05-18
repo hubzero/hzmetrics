@@ -298,10 +298,10 @@ def is_month_fully_imported(month_str: str) -> bool:
 
 def is_month_summarized(month_str: str) -> bool:
     _, _, _, metrics_db = db_credentials()
-    dt = month_str + "-00"
     count = mysql_scalar(
         f"SELECT COUNT(*) FROM {metrics_db}.summary_user_vals "
-        f"WHERE datetime = '{dt}' AND period = 1;"
+        f"WHERE datetime = %s AND period = 1;",
+        (month_str + "-00",),
     )
     return bool(count)
 
@@ -1450,13 +1450,20 @@ def do_backfill_dnload(start_month, dry_run=False):
 
     ext_pattern = "|".join(re.escape(e) for e in DOWNLOAD_EXTS)
 
+    # Build the WHERE clause with %s placeholders.  Note: this query also
+    # contains the literal DATE_FORMAT(datetime, '%Y-%m'), whose '%' must be
+    # doubled to '%%' once we pass params — pymysql treats %s/%(name)s as
+    # placeholders and would otherwise mis-parse the format string.
     where = "dnload IS NULL"
+    params: tuple = ()
     if start_month:
-        where += f" AND datetime >= '{start_month}-01'"
+        where += " AND datetime >= %s"
+        params = (f"{start_month}-01",)
 
     months = mysql_column(
-        f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') FROM {metrics_db}.web "
-        f"WHERE {where} ORDER BY 1;"
+        f"SELECT DISTINCT DATE_FORMAT(datetime,'%%Y-%%m') FROM {metrics_db}.web "
+        f"WHERE {where} ORDER BY 1;",
+        params,
     )
     if not months:
         log.info("  No months with unprocessed rows found.")
@@ -1473,19 +1480,22 @@ def do_backfill_dnload(start_month, dry_run=False):
         label = f"  {month}"
         log.debug(f"backfill-dnload {month}")
 
+        # Same %->%% caveat as the months query above: LIKE pattern's '%'
+        # must be doubled when params=tuple is passed.
+        regex = f"^/resources/.*\\.({ext_pattern})([?#]|$)"
         sql = (
             f"UPDATE {metrics_db}.web "
             f"SET dnload = IF("
-            f"content LIKE '/resources/%/download/%' OR "
-            f"content REGEXP '^/resources/.*\\.({ext_pattern})([?#]|$)', "
+            f"content LIKE '/resources/%%/download/%%' OR "
+            f"content REGEXP %s, "
             f"1, 0) "
-            f"WHERE datetime >= '{m_start}' AND datetime < '{m_end}' AND dnload IS NULL;"
+            f"WHERE datetime >= %s AND datetime < %s AND dnload IS NULL;"
         )
 
         if dry_run:
             log.info(f"{label}  [dry-run]")
         else:
-            rc = mysql_exec(sql)
+            rc = mysql_exec(sql, (regex, m_start, m_end))
             if rc == 0:
                 log.info(f"{label} done")
             else:
