@@ -116,6 +116,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("hzmetrics")
 
@@ -288,11 +289,11 @@ def is_month_fully_imported(month_str: str) -> bool:
 def is_month_summarized(month_str: str) -> bool:
     _, _, _, metrics_db = db_credentials()
     dt = month_str + "-00"
-    rows = mysql_query(
+    count = mysql_scalar(
         f"SELECT COUNT(*) FROM {metrics_db}.summary_user_vals "
         f"WHERE datetime = '{dt}' AND period = 1;"
     )
-    return rows and rows[0] != "0"
+    return bool(count)
 
 def acquire_lock() -> bool:
     """Try to write a PID lock. Returns True if acquired, False if another instance is running.
@@ -413,13 +414,13 @@ def _automark_applied(metrics_db: str) -> None:
     for m in MIGRATIONS:
         if m.id in applied or not m.check_sql:
             continue
-        rows = mysql_query(m.check_sql.format(metrics_db=metrics_db))
-        if not rows:
+        count = mysql_scalar(m.check_sql.format(metrics_db=metrics_db))
+        if count is None:
             continue
         if m.check_expect is None:
-            already = rows[0] != "0"
+            already = count != 0
         else:
-            already = rows[0] == str(m.check_expect)
+            already = count == m.check_expect
         if already:
             mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
@@ -428,8 +429,7 @@ def _automark_applied(metrics_db: str) -> None:
             )
 
 def applied_migration_ids(metrics_db: str) -> set[int]:
-    rows = mysql_query(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;")
-    return set(int(r) for r in rows if r.isdigit())
+    return set(mysql_column(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;"))
 
 def cmd_migrate(args):
     _, _, _, metrics_db = db_credentials()
@@ -1308,28 +1308,41 @@ def db_credentials() -> tuple[str, str, str, str]:
     c = db_config()
     return c.get("db_host", ""), c.get("db_user", ""), c.get("db_pass", ""), c.get("metrics_db", "")
 
-def mysql_query(sql: str, params: tuple | list | dict | None = None) -> list[str]:
-    """Run a SELECT against the metrics DB, return list of result rows.
-
-    Each row is rendered as a tab-joined string for backwards compatibility
-    with the older `mysql -BN` shell-out output format — single-column
-    callers index rows[i] as the value directly; multi-column callers
-    split on \\t themselves.  NULL renders as the literal 'NULL', again
-    matching the prior shell behaviour.
+def mysql_query(sql: str, params: tuple | list | dict | None = None) -> list[tuple]:
+    """Run a SELECT against the metrics DB; return a list of tuples — one
+    tuple per row, with each cell as its native Python type (ints stay
+    ints, NULL → None).
 
     Callers must fully-qualify table names with {metrics_db} — no default
     database is selected on the connection.  When `params` is supplied,
     pymysql treats `%s` in `sql` as placeholders for safe value binding;
     in that case any literal `%` in the SQL must be doubled (`%%`).
+
+    See also mysql_scalar() and mysql_column() for the common
+    single-cell / single-column cases.
     """
     conn = _open_db()
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
-            return ["\t".join("NULL" if c is None else str(c) for c in row)
-                    for row in cur.fetchall()]
+            return list(cur.fetchall())
     finally:
         conn.close()
+
+def mysql_scalar(sql: str, params: tuple | list | dict | None = None) -> Any | None:
+    """Run a SELECT expected to return at most one row of one column;
+    return that single cell, or None if the query produced no rows.
+    Idiomatic for `SELECT COUNT(*) ...` / `SELECT col FROM ... LIMIT 1`."""
+    rows = mysql_query(sql, params)
+    if not rows:
+        return None
+    return rows[0][0]
+
+def mysql_column(sql: str, params: tuple | list | dict | None = None) -> list:
+    """Run a SELECT expected to return a single column; flatten to a list
+    of native-typed values (no tuple wrapping).  Idiomatic for
+    `SELECT id FROM ... ORDER BY id` style queries."""
+    return [row[0] for row in mysql_query(sql, params)]
 
 def mysql_exec(sql: str, params: tuple | list | dict | None = None) -> int:
     """Run a DML/DDL statement against the metrics DB.  Returns 0 on
@@ -1357,7 +1370,7 @@ def mysql_exec(sql: str, params: tuple | list | dict | None = None) -> int:
 def months_with_missing_geo():
     """Query DB for months that have rows with null ipcountry in the web table."""
     _, _, _, metrics_db = db_credentials()
-    return mysql_query(
+    return mysql_column(
         f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') FROM {metrics_db}.web "
         f"WHERE ipcountry IS NULL OR ipcountry = '' ORDER BY 1;"
     )
@@ -1399,7 +1412,7 @@ def do_backfill_dnload(start_month, dry_run=False):
     if start_month:
         where += f" AND datetime >= '{start_month}-01'"
 
-    months = mysql_query(
+    months = mysql_column(
         f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') FROM {metrics_db}.web "
         f"WHERE {where} ORDER BY 1;"
     )
@@ -1434,11 +1447,11 @@ def do_backfill_dnload(start_month, dry_run=False):
             log.info(f"{label} done (rc={rc})")
 
     if not dry_run:
-        rows = mysql_query(
+        count = mysql_scalar(
             f"SELECT COUNT(*) FROM information_schema.statistics "
             f"WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';"
         )
-        if rows and rows[0] == "0":
+        if count == 0:
             rc = mysql_exec(f"ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);")
             log.info(f"  Adding index on {metrics_db}.web(dnload) ... done (rc={rc})")
         else:
