@@ -4049,7 +4049,9 @@ def _gen_topcountryres(cur, hub_db, metrics_db, db_prefix,
         f"FROM {metrics_db}.sessionlog_metrics "
         f"LEFT JOIN {metrics_db}.countries ON countryresident = code "
         f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s "
-        f"GROUP BY country ORDER BY cnt DESC LIMIT 10",
+        # Tie-break by country code so the rank assignment is deterministic
+        # when two countries share a count (mirrored in legacy gen_tool_tops.php).
+        f"GROUP BY country ORDER BY cnt DESC, country ASC LIMIT 10",
         tuple(aliases) + (dstart, dstop))
     rows = cur.fetchall()
     rank = 0
@@ -4069,7 +4071,9 @@ def _gen_topdomains(cur, hub_db, metrics_db, db_prefix,
         f"SELECT DISTINCT(domain) AS dom, COUNT(DISTINCT user) AS cnt "
         f"FROM {metrics_db}.sessionlog_metrics "
         f"WHERE appname IN ({placeholders}) AND start > %s AND start < %s "
-        f"GROUP BY dom ORDER BY cnt DESC LIMIT 10",
+        # Tie-break by domain so the rank assignment is deterministic
+        # (mirrored in legacy gen_tool_tops.php).
+        f"GROUP BY dom ORDER BY cnt DESC, dom ASC LIMIT 10",
         tuple(aliases) + (dstart, dstop))
     rank = 0
     for dom, cnt in cur.fetchall():
@@ -4087,7 +4091,10 @@ def _gen_orgtypes(cur, hub_db, metrics_db, db_prefix,
         f"{metrics_db}.{db_prefix}xprofiles_metrics AS u "
         f"WHERE t.user = u.username AND t.appname IN ({placeholders}) "
         f"AND t.start > %s AND t.start < %s "
-        f"GROUP BY u.orgtype ORDER BY cnt DESC",
+        # Tie-break by orgtype so the rank assignment is deterministic
+        # when (e.g.) "Unknown" and "industry" both have the same count
+        # (mirrored in legacy gen_tool_tops.php).
+        f"GROUP BY u.orgtype ORDER BY cnt DESC, u.orgtype ASC",
         tuple(aliases) + (dstart, dstop))
     rank = 0
     for orgtype, cnt in cur.fetchall():

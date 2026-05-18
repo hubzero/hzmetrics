@@ -115,7 +115,7 @@ function gen_topdomains($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
     $rank = 0;
     $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
     db_exec($db_hub, $sql_);
-    $sql = 'SELECT DISTINCT(domain) AS dom, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY dom ORDER BY cnt DESC LIMIT 10';
+    $sql = 'SELECT DISTINCT(domain) AS dom, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY dom ORDER BY cnt DESC, dom ASC LIMIT 10';
     $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
@@ -143,7 +143,7 @@ function gen_orgtypes($db_hub, $filter, $dstart, $dstop, $id, $users, $top) {
     $rank = 0;
     $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
     db_exec($db_hub, $sql_);
-    $sql = 'SELECT DISTINCT(user.orgtype), COUNT(DISTINCT tool.user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics AS tool, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS user WHERE tool.user=user.username AND tool.appname IN ('.$filter.') AND tool.start > '.dbquote($dstart).' AND tool.start < '.dbquote($dstop).' GROUP BY user.orgtype ORDER BY cnt DESC';
+    $sql = 'SELECT DISTINCT(user.orgtype), COUNT(DISTINCT tool.user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics AS tool, '.$metrics_db.'.'.$db_prefix.'xprofiles_metrics AS user WHERE tool.user=user.username AND tool.appname IN ('.$filter.') AND tool.start > '.dbquote($dstart).' AND tool.start < '.dbquote($dstop).' GROUP BY user.orgtype ORDER BY cnt DESC, user.orgtype ASC';
     $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
@@ -171,7 +171,7 @@ function gen_topcountryres($db_hub, $filter, $dstart, $dstop, $id, $users, $top)
     $rank = 0;
     $sql_ = 'INSERT INTO '.$hub_db.'.'.$db_prefix.'resource_stats_tools_topvals VALUES ('.dbquote($id).','.dbquote($top).','.dbquote($rank).',"Total Users",'.dbquote($users).')';
     db_exec($db_hub, $sql_);
-    $sql = 'SELECT DISTINCT(countryresident) AS country, name, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics LEFT JOIN '.$metrics_db.'.countries ON countryresident=code WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY country ORDER BY cnt DESC LIMIT 10';
+    $sql = 'SELECT DISTINCT(countryresident) AS country, name, COUNT(DISTINCT user) AS cnt FROM '.$metrics_db.'.sessionlog_metrics LEFT JOIN '.$metrics_db.'.countries ON countryresident=code WHERE appname IN ('.$filter.') AND start > '.dbquote($dstart).' AND start < '.dbquote($dstop).' GROUP BY country ORDER BY cnt DESC, country ASC LIMIT 10';
     $result = mysqli_query($db_hub, $sql);
     if($result) {
         if(mysqli_num_rows($result) > 0) {
