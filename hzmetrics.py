@@ -257,15 +257,15 @@ def check_order(date_str: str, force: bool) -> None:
         return
     pending = [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*")]
     if pending and date_str > pending[0]:
-        log.info(f"ERROR: {date_str} is not the oldest pending day in daily/.")
-        log.info(f"       Oldest pending: {pending[0]}")
-        log.info(f"       Use --force to override.")
-        sys.exit(1)
+        log.error(f"{date_str} is not the oldest pending day in daily/.")
+        log.error(f"  Oldest pending: {pending[0]}")
+        log.error(f"  Use --force to override.")
+        raise SystemExit(1)
     last = last_imported_date()
     if last and date_str < last:
-        log.info(f"ERROR: {date_str} is older than the most recently imported log ({last}).")
-        log.info(f"       Use --force to override.")
-        sys.exit(1)
+        log.error(f"{date_str} is older than the most recently imported log ({last}).")
+        log.error(f"  Use --force to override.")
+        raise SystemExit(1)
 
 def previous_month(month_str: str) -> str:
     y, m = int(month_str[:4]), int(month_str[5:7])
@@ -302,9 +302,9 @@ def acquire_lock() -> bool:
                systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
     """
     if not LOCK_FILE.parent.exists():
-        log.info(f"ERROR: {LOCK_FILE.parent} does not exist.")
-        log.info(f"  Run once as root:  mkdir -p {LOCK_FILE.parent} && chown apache:apache {LOCK_FILE.parent}")
-        sys.exit(1)
+        log.error(f"{LOCK_FILE.parent} does not exist.")
+        log.error(f"  Run once as root:  mkdir -p {LOCK_FILE.parent} && chown apache:apache {LOCK_FILE.parent}")
+        raise SystemExit(1)
     if LOCK_FILE.exists():
         try:
             pid = int(LOCK_FILE.read_text().strip())
@@ -468,7 +468,7 @@ def cmd_migrate(args):
             log.info(f"    done.")
             log.debug(f"migration {m.id}: {m.description}")
         else:
-            log.info(f"    FAILED (rc={rc}) — stopping.")
+            log.error(f"    FAILED (rc={rc}) — stopping.")
             log.debug(f"migration {m.id} FAILED")
             break
 
@@ -868,7 +868,7 @@ def cmd_setup_db(args):
 
     if not dry_run:
         if errors:
-            log.info(f"{errors} statement(s) failed.")
+            log.error(f"{errors} statement(s) failed.")
         else:
             log.info(f"  {len(METRICS_DB_DDL)} statement(s) executed, database ready.")
     log.info(">>> done")
@@ -1197,8 +1197,8 @@ def cmd_import(args):
         do_import_day(date_str, dry_run)
 
     else:
-        log.info("Specify --next, --month, or --day.")
-        sys.exit(1)
+        log.error("Specify --next, --month, or --day.")
+        raise SystemExit(1)
 
     log.info(">>> done")
 
@@ -1210,9 +1210,9 @@ def cmd_import(args):
 def cmd_analyze(args):
     dry_run = args.dry_run
     if is_current_month(args.month) and not args.force:
-        log.info(f"ERROR: {args.month} is the current month and not yet complete.")
-        log.info(f"       Use --force to override.")
-        sys.exit(1)
+        log.error(f"{args.month} is the current month and not yet complete.")
+        log.error(f"  Use --force to override.")
+        raise SystemExit(1)
     if not dry_run:
         log.debug(f"=== manage.py analyze {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     do_analyze(args.month, dry_run)
@@ -1227,9 +1227,9 @@ def cmd_analyze(args):
 def cmd_summarize(args):
     dry_run = args.dry_run
     if is_current_month(args.month) and not args.force:
-        log.info(f"ERROR: {args.month} is the current month and not yet complete.")
-        log.info(f"       Use --force to override.")
-        sys.exit(1)
+        log.error(f"{args.month} is the current month and not yet complete.")
+        log.error(f"  Use --force to override.")
+        raise SystemExit(1)
     if not dry_run:
         log.debug(f"=== manage.py summarize {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     do_summarize(args.month, dry_run)
@@ -1270,8 +1270,8 @@ def cmd_process(args):
         log.info(">>> done")
         return
     else:
-        log.info("Specify --next, --month, or --day.")
-        sys.exit(1)
+        log.error("Specify --next, --month, or --day.")
+        raise SystemExit(1)
 
     check_order(days[0], args.force)
     for date_str in days:
@@ -1350,14 +1350,14 @@ def mysql_exec(sql: str, params: tuple | list | dict | None = None) -> int:
     try:
         conn = _open_db()
     except pymysql.MySQLError as e:
-        log.info(f"[mysql error] connect: {e}")
+        log.error(f"[mysql] connect failed: {e}")
         return 1
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
         return 0
     except pymysql.MySQLError as e:
-        log.info(f"[mysql error] {e}")
+        log.error(f"[mysql] {e}")
         return 1
     finally:
         conn.close()
