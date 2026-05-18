@@ -415,7 +415,9 @@ CREATE TABLE IF NOT EXISTS {metrics_db}.migrations (
 """
 
 def ensure_migrations_table(metrics_db: str) -> None:
-    mysql_exec(MIGRATIONS_TABLE_SQL.format(metrics_db=metrics_db))
+    if mysql_exec(MIGRATIONS_TABLE_SQL.format(metrics_db=metrics_db)) != 0:
+        log.error(f"failed to create {metrics_db}.migrations table; aborting")
+        raise SystemExit(1)
     _automark_applied(metrics_db)
 
 def _automark_applied(metrics_db: str) -> None:
@@ -432,11 +434,15 @@ def _automark_applied(metrics_db: str) -> None:
         else:
             already = count == m.check_expect
         if already:
-            mysql_exec(
+            rc = mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
                 f"VALUES (%s, %s);",
                 (m.id, m.description),
             )
+            if rc != 0:
+                # Non-fatal: the next `migrate` run will retry the auto-mark.
+                log.warning(f"failed to auto-mark migration {m.id} as applied; "
+                            f"will retry on next migrate run")
 
 def applied_migration_ids(metrics_db: str) -> set[int]:
     return set(mysql_column(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;"))
@@ -1358,15 +1364,15 @@ def mysql_exec(sql: str, params: tuple | list | dict | None = None) -> int:
     import pymysql
     try:
         conn = _open_db()
-    except pymysql.MySQLError as e:
-        log.error(f"[mysql] connect failed: {e}")
+    except pymysql.MySQLError:
+        log.exception("[mysql] connect failed")
         return 1
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
         return 0
-    except pymysql.MySQLError as e:
-        log.error(f"[mysql] {e}")
+    except pymysql.MySQLError:
+        log.exception("[mysql] exec failed")
         return 1
     finally:
         conn.close()
@@ -1448,7 +1454,10 @@ def do_backfill_dnload(start_month, dry_run=False):
             log.info(f"{label}  [dry-run]")
         else:
             rc = mysql_exec(sql)
-            log.info(f"{label} done (rc={rc})")
+            if rc == 0:
+                log.info(f"{label} done")
+            else:
+                log.error(f"{label} FAILED (rc={rc}); continuing with next month")
 
     if not dry_run:
         count = mysql_scalar(
@@ -1457,7 +1466,10 @@ def do_backfill_dnload(start_month, dry_run=False):
         )
         if count == 0:
             rc = mysql_exec(f"ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);")
-            log.info(f"  Adding index on {metrics_db}.web(dnload) ... done (rc={rc})")
+            if rc == 0:
+                log.info(f"  Adding index on {metrics_db}.web(dnload) ... done")
+            else:
+                log.error(f"  Adding index on {metrics_db}.web(dnload) FAILED (rc={rc})")
         else:
             log.info(f"  Index on {metrics_db}.web(dnload) already exists.")
 
