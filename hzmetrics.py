@@ -345,7 +345,13 @@ def read_state() -> dict[str, str]:
 def update_state(**kwargs: object) -> None:
     state = read_state()
     state.update({k: str(v) for k, v in kwargs.items()})
-    STATE_FILE.write_text("".join(f"{k}={v}\n" for k, v in state.items()))
+    body = "".join(f"{k}={v}\n" for k, v in state.items())
+    # Atomic write: a partial state file would mis-gate the next tick.
+    # Write to a sibling temp file then os.replace into place — POSIX
+    # guarantees the rename is atomic on the same filesystem.
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp.write_text(body)
+    os.replace(tmp, STATE_FILE)
 
 
 # ---------------------------------------------------------------------------
