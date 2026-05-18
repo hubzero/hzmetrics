@@ -87,9 +87,10 @@
 <li>A working HUBzero hub with two MariaDB schemas: <code>&lt;hub&gt;</code> (live CMS)
 and <code>&lt;hub&gt;_metrics</code> (analytics).  If the metrics DB doesn't exist
 yet, see &quot;First-time install&quot; below.</li>
-<li>Python 3.7+ on the host.  3.11 strongly preferred — earlier versions
-ship without modern <code>asyncio</code> and on Rocky 8 the system <code>python3</code> is
-3.6 which lacks <code>asyncio.run()</code>.</li>
+<li>Python 3.10+ on the host.  3.11 strongly preferred.  On Rocky 8 the
+system <code>python3</code> is 3.6, which fails <code>hzmetrics.py</code>'s minimum check;
+install <code>python3.11</code> alongside (the pipeline self-relaunches into
+the highest <code>python3.N</code> &gt;= 3.10 it finds on <code>PATH</code>).</li>
 <li>A user with read access to the hub DB and full ownership of the
 metrics DB.  On a stock HUBzero hub this is the <code>apache</code> user; the
 cron entry is owned by <code>apache</code>.</li>
@@ -103,10 +104,9 @@ pip3.11 install --user aiodns                       # not packaged on Rocky 8
 <li><code>aiodns</code> &gt;= 3.x (the c-ares-based async resolver used by
 <code>resolve-dns</code>)</li>
 <li><code>pymysql</code> (any current 1.x)</li>
-<li>Python &gt;= 3.7 for <code>resolve-dns</code> itself (async syntax), but the
-pipeline's <code>tick</code> self-relaunches into Python &gt;= 3.10 when invoked
-under an older interpreter — Rocky 8's system <code>/usr/bin/python3</code> is
-3.6 which lacks <code>asyncio.run()</code>, so a separate <code>python3.11</code> install
+<li>Python &gt;= 3.10 is enforced by <code>hzmetrics.py</code> itself (see
+<code>_MIN_PYTHON</code> at the top of the file).  On Rocky 8 the system
+<code>/usr/bin/python3</code> is 3.6, so a separate <code>python3.11</code> install
 alongside is the supported configuration.</li>
 </ul>
 <p>Test the Python version is discoverable: <code>hzmetrics.py</code> self-relaunches

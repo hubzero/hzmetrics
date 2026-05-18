@@ -7,9 +7,10 @@ How to install `hzmetrics.py` on a new HUBzero hub.
 - A working HUBzero hub with two MariaDB schemas: `<hub>` (live CMS)
   and `<hub>_metrics` (analytics).  If the metrics DB doesn't exist
   yet, see "First-time install" below.
-- Python 3.7+ on the host.  3.11 strongly preferred — earlier versions
-  ship without modern `asyncio` and on Rocky 8 the system `python3` is
-  3.6 which lacks `asyncio.run()`.
+- Python 3.10+ on the host.  3.11 strongly preferred.  On Rocky 8 the
+  system `python3` is 3.6, which fails `hzmetrics.py`'s minimum check;
+  install `python3.11` alongside (the pipeline self-relaunches into
+  the highest `python3.N` >= 3.10 it finds on `PATH`).
 - A user with read access to the hub DB and full ownership of the
   metrics DB.  On a stock HUBzero hub this is the `apache` user; the
   cron entry is owned by `apache`.
@@ -25,10 +26,9 @@ Versions required:
 - `aiodns` >= 3.x (the c-ares-based async resolver used by
   `resolve-dns`)
 - `pymysql` (any current 1.x)
-- Python >= 3.7 for `resolve-dns` itself (async syntax), but the
-  pipeline's `tick` self-relaunches into Python >= 3.10 when invoked
-  under an older interpreter — Rocky 8's system `/usr/bin/python3` is
-  3.6 which lacks `asyncio.run()`, so a separate `python3.11` install
+- Python >= 3.10 is enforced by `hzmetrics.py` itself (see
+  `_MIN_PYTHON` at the top of the file).  On Rocky 8 the system
+  `/usr/bin/python3` is 3.6, so a separate `python3.11` install
   alongside is the supported configuration.
 
 Test the Python version is discoverable: `hzmetrics.py` self-relaunches
