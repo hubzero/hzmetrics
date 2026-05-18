@@ -231,6 +231,15 @@ def last_imported_date() -> str | None:
 def is_current_month(month_str: str) -> bool:
     return month_str == date.today().strftime("%Y-%m")
 
+def _arg_yyyymm(s: str) -> str:
+    """argparse `type=` validator: accept 'YYYY-MM', reject anything else.
+
+    Used on CLI args whose value flows into SQL string interpolation, so a
+    malformed value can't widen into an injection vector."""
+    if not re.fullmatch(r"\d{4}-\d{2}", s):
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM, got {s!r}")
+    return s
+
 def check_order(date_str: str, force: bool) -> None:
     """Abort if date_str would be imported out of order."""
     if force:
@@ -401,10 +410,10 @@ def _automark_applied(metrics_db: str) -> None:
         else:
             already = rows[0] == str(m.check_expect)
         if already:
-            desc = m.description.replace("'", "''")
             mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES ({m.id}, '{desc}');"
+                f"VALUES (%s, %s);",
+                (m.id, m.description),
             )
 
 def applied_migration_ids(metrics_db: str) -> set[int]:
@@ -440,10 +449,10 @@ def cmd_migrate(args):
         log.info(f"    {sql}")
         rc = mysql_exec(sql)
         if rc == 0:
-            desc = m.description.replace("'", "''")
             mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES ({m.id}, '{desc}');"
+                f"VALUES (%s, %s);",
+                (m.id, m.description),
             )
             log.info(f"    done.")
             log.debug(f"migration {m.id}: {m.description}")
@@ -1296,7 +1305,7 @@ def db_credentials() -> tuple[str, str, str, str]:
     c = db_config()
     return c.get("db_host", ""), c.get("db_user", ""), c.get("db_pass", ""), c.get("metrics_db", "")
 
-def mysql_query(sql: str) -> list[str]:
+def mysql_query(sql: str, params: tuple | list | dict | None = None) -> list[str]:
     """Run a SELECT against the metrics DB, return list of result rows.
 
     Each row is rendered as a tab-joined string for backwards compatibility
@@ -1306,23 +1315,26 @@ def mysql_query(sql: str) -> list[str]:
     matching the prior shell behaviour.
 
     Callers must fully-qualify table names with {metrics_db} — no default
-    database is selected on the connection.
+    database is selected on the connection.  When `params` is supplied,
+    pymysql treats `%s` in `sql` as placeholders for safe value binding;
+    in that case any literal `%` in the SQL must be doubled (`%%`).
     """
     conn = _open_db()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, params)
             return ["\t".join("NULL" if c is None else str(c) for c in row)
                     for row in cur.fetchall()]
     finally:
         conn.close()
 
-def mysql_exec(sql: str) -> int:
+def mysql_exec(sql: str, params: tuple | list | dict | None = None) -> int:
     """Run a DML/DDL statement against the metrics DB.  Returns 0 on
     success, 1 on failure (prints the error).  Single-statement contract.
 
     Callers must fully-qualify table names with {metrics_db} — no default
-    database is selected on the connection."""
+    database is selected on the connection.  When `params` is supplied,
+    pymysql treats `%s` in `sql` as placeholders for safe value binding."""
     import pymysql
     try:
         conn = _open_db()
@@ -1331,7 +1343,7 @@ def mysql_exec(sql: str) -> int:
         return 1
     try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, params)
         return 0
     except pymysql.MySQLError as e:
         log.info(f"[mysql error] {e}")
@@ -5592,7 +5604,8 @@ def main() -> None:
 
     p_dnload = sub.add_parser("backfill-dnload", help="Populate web.dnload flag for historical rows")
     p_dnload.set_defaults(func=cmd_backfill_dnload)
-    p_dnload.add_argument("--start", metavar="YYYY-MM", help="Only process months >= this (default: all)")
+    p_dnload.add_argument("--start", metavar="YYYY-MM", type=_arg_yyyymm,
+        help="Only process months >= this (default: all)")
     p_dnload.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_geo = sub.add_parser("fill-geo", help="Backfill missing GeoIP country data")
