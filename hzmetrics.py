@@ -159,6 +159,9 @@ HZ_METRICS_STAGING = _PIPELINE_PATHS["metrics_log_dir"]
 STAGED_APACHE      = HZ_METRICS_STAGING / "_hub_apache.log"
 STAGED_AUTH        = HZ_METRICS_STAGING / "_hub_auth.log"
 
+# `manage.log` is a historic name from the manage.py-era pre-rename;
+# kept for path-stability so operators' logrotate / monitoring configs
+# don't break.  Override with HZMETRICS_LOG (see setup_logging).
 LOG         = HZ_METRICS_STAGING / "manage.log"
 LOCK_FILE   = Path("/var/run/hzmetrics/hzmetrics.pid")
 STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
@@ -220,6 +223,8 @@ def pending_days_for_month(month_str: str) -> list[str]:
     return [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*") if d.startswith(yyyymm)]
 
 def oldest_pending_month() -> str | None:
+    """YYYY-MM of the earliest day still sitting in daily/, or None if
+    nothing is pending — drives `process --next` and the catch-up loop."""
     files = dated_files(HTTPD_DAILY, f"{SITE}-access*log*")
     if not files:
         return None
@@ -227,10 +232,15 @@ def oldest_pending_month() -> str | None:
     return f"{d[:4]}-{d[4:6]}"
 
 def last_imported_date() -> str | None:
+    """YYYYMMDD of the most recently archived access log, or None — used
+    by check_order to refuse out-of-order imports."""
     files = dated_files("/var/log/httpd/imported", f"{SITE}-access*log*")
     return files[-1][0] if files else None
 
 def is_current_month(month_str: str) -> bool:
+    """True if `month_str` (YYYY-MM) is the calendar month we're in right
+    now — guards against scoring an in-flight month whose data is still
+    arriving (see _require_complete_month)."""
     return month_str == date.today().strftime("%Y-%m")
 
 def _require_complete_month(month: str, force: bool) -> None:
@@ -279,6 +289,8 @@ def check_order(date_str: str, force: bool) -> None:
         raise SystemExit(1)
 
 def previous_month(month_str: str) -> str:
+    """Return the YYYY-MM that immediately precedes `month_str`, rolling
+    over from January to the previous December."""
     y, m = int(month_str[:4]), int(month_str[5:7])
     m -= 1
     if m == 0:
@@ -297,10 +309,17 @@ def is_month_fully_imported(month_str: str) -> bool:
     return any(d == last for d, _ in dated_files("/var/log/httpd/imported", f"{SITE}-access*log*"))
 
 def is_month_summarized(month_str: str) -> bool:
+    """True if summarize-month has already produced rows for `month_str`.
+
+    "Summarized" specifically means at least one summary_user_vals row
+    exists at `datetime = '<YYYY-MM>-00'` with `period = 1` (PERIOD_MONTH,
+    see PERIOD_* constants).  The `-00` is the legacy PHP convention for
+    "this whole month" — datetime '2025-07-00' means July 2025 as a unit,
+    not a real day."""
     _, _, _, metrics_db = db_credentials()
     count = mysql_scalar(
         f"SELECT COUNT(*) FROM {metrics_db}.summary_user_vals "
-        f"WHERE datetime = %s AND period = 1;",
+        f"WHERE datetime = %s AND period = 1;",  # period = 1 = PERIOD_MONTH
         (month_str + "-00",),
     )
     return bool(count)
@@ -344,6 +363,10 @@ def acquire_lock() -> bool:
     return True
 
 def release_lock() -> None:
+    """Drop the flock and unlink LOCK_FILE.  Safe to call without a prior
+    acquire — does nothing if no lock is held.  (Kernel would release
+    the flock on process exit anyway; this is for the tidiness of the
+    on-disk pid file.)"""
     global _lock_fd
     if _lock_fd is not None:
         import fcntl
@@ -359,6 +382,13 @@ def release_lock() -> None:
         pass
 
 def read_state() -> dict[str, str]:
+    """Parse STATE_FILE into a {key: value} dict.  File format is one
+    `key=value\\n` per line; missing file or unparseable content returns
+    an empty dict (the next update_state will recreate it from scratch).
+
+    Tracked keys today: `analyzed=YYYY-MM-DD` — the date on which the
+    most recent `cmd_run` last invoked do_analyze, used by the daily-
+    state guard so analyze runs at most once per calendar day."""
     try:
         return dict(
             line.split("=", 1)
@@ -1163,12 +1193,19 @@ def _do_summary_stage(month_str, dry_run):
 
 
 def do_analyze(month_str, dry_run=False):
+    """Run the two enrichment stages — tool-metrics and usage-metrics — in
+    sequence.  Wraps __process_tool_metrics.sh + __process_usage_metrics.sh
+    from the legacy pipeline; called by cmd_analyze and by the catch-up
+    loop in cmd_run."""
     month_str = month_str or None
     _do_tool_metrics_stage(month_str, dry_run)
     _do_usage_metrics_stage(month_str, dry_run)
 
 
 def do_summarize(month_str, dry_run=False):
+    """Run the per-month rolling-window summary stage.  Wraps
+    __process_usage_metrics_summary.sh — called by cmd_summarize and by
+    the catch-up loop in cmd_run after do_analyze completes."""
     _do_summary_stage(month_str or None, dry_run)
 
 
@@ -1177,6 +1214,10 @@ def do_summarize(month_str, dry_run=False):
 # ---------------------------------------------------------------------------
 
 def cmd_status(args):
+    """Print pipeline state: counts and date spans of files in daily/
+    (pending import) and imported/ (already processed), plus the current
+    resolve-dns settings.  Read-only — logs to stderr + the configured
+    HZMETRICS_LOG file, no DB writes, no exit code."""
     def summarize(directory, pattern, label):
         files = dated_files(directory, pattern)
         count = len(files)
@@ -4435,15 +4476,32 @@ def do_logfix_session(month=None, *, dry_run=False):
     Walks the 4 fixed week ranges (day 1-8, 9-16, 17-24, 25-1 of next month);
     in each, streams web rows ordered by (ip, host, datetime) and emits a
     websessions row whenever IP/host changes or there is a >1800s gap.
-    Bug-for-bug quirks preserved:
+
+    Bug-for-bug quirks preserved for A/B parity — do NOT "fix" without
+    coordinating with the legacy reference under tests/legacy/logfix_session.pl:
+
       * 'video' tracking is dead in the Perl — variables exist but never
         update, so the second timeout clause always fires when the gap
-        condition does.
+        condition does.  (Perl had two near-identical session-cut conditions
+        guarded on `video`; with `video` permanently 0 the second one is
+        equivalent to the first.)
+
       * s_webevents is reset to 0 on session start but never incremented;
-        always 0 in INSERTs.
-      * The last in-flight session of week 3 is never flushed (loop ends
-        without an emit if state is still set).
-      * INSERT IGNORE on websessions, so duplicate ids are silently dropped.
+        always 0 in INSERTs.  Looks like an event-counter that was abandoned
+        mid-implementation in the original Perl; the column stays 0 in
+        production data for the same reason.
+
+      * The last in-flight session of week 3 is never flushed.  Each week is
+        a separate Perl `while` over the week's rows, and Perl scopes the
+        session-state vars at the loop body — so when week 3's loop ends
+        with a session still open (e.g. a long-running session straddling
+        the month/week boundary at day 25), that session's final segment is
+        dropped instead of being emitted.  The new port mirrors this rather
+        than emitting a partial trailing row, because doing so would diverge
+        from legacy websessions counts and fail the A/B test.
+
+      * INSERT IGNORE on websessions, so duplicate ids are silently dropped
+        (legacy id collisions across re-runs of the same month).
     """
     import pymysql.cursors
 
