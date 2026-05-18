@@ -4376,25 +4376,25 @@ def do_logfix_session(month=None, *, dry_run=False):
 
     # Build the 4 week ranges exactly as the Perl does (note the trailing
     # week crosses month/year boundaries; we keep the same integer math).
-    weekbegin = [f"{year}-{mon}-1"]
+    weekbegin = [f"{year:04d}-{mon:02d}-01"]
     weekend   = []
     firstday    = 1
     lastweekday = firstday + 7
-    weekend.append(f"{year}-{mon}-{lastweekday}")
+    weekend.append(f"{year:04d}-{mon:02d}-{lastweekday:02d}")
     cur_y, cur_m = year, mon
     for i in range(1, 4):
         firstday += 8
-        weekbegin.append(f"{cur_y}-{cur_m}-{firstday}")
+        weekbegin.append(f"{cur_y:04d}-{cur_m:02d}-{firstday:02d}")
         if i < 3:
             lastweekday = firstday + 7
-            weekend.append(f"{cur_y}-{cur_m}-{lastweekday}")
+            weekend.append(f"{cur_y:04d}-{cur_m:02d}-{lastweekday:02d}")
         else:
             if cur_m > 11:
                 cur_m = 1
                 cur_y += 1
             else:
                 cur_m += 1
-            weekend.append(f"{cur_y}-{cur_m}-1")
+            weekend.append(f"{cur_y:04d}-{cur_m:02d}-01")
 
     log.info(f"[logfix-session] month={year:04d}-{mon:02d}")
     for i in range(4):
