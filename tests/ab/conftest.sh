@@ -7,7 +7,7 @@ set -euo pipefail
 AB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$AB_DIR/../.." && pwd)"
 FIXTURES="$AB_DIR/fixtures"
-ACCESS_CFG="$FIXTURES/test_access.cfg"
+ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-$FIXTURES/test_access.cfg}"
 LEGACY_DIR="$REPO/tests/legacy"
 
 # DB connection vars from the test cfg.
