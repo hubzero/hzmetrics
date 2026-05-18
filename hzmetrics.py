@@ -234,7 +234,7 @@ def oldest_pending_month() -> str | None:
 def last_imported_date() -> str | None:
     """YYYYMMDD of the most recently archived access log, or None — used
     by check_order to refuse out-of-order imports."""
-    files = dated_files("/var/log/httpd/imported", f"{SITE}-access*log*")
+    files = dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*")
     return files[-1][0] if files else None
 
 def is_current_month(month_str: str) -> bool:
@@ -322,7 +322,7 @@ def last_day_of_month(month_str: str) -> str:
 def is_month_fully_imported(month_str: str) -> bool:
     """True if the last calendar day of month_str is present in imported/."""
     last = last_day_of_month(month_str)
-    return any(d == last for d, _ in dated_files("/var/log/httpd/imported", f"{SITE}-access*log*"))
+    return any(d == last for d, _ in dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*"))
 
 def is_month_summarized(month_str: str) -> bool:
     """True if summarize-month has already produced rows for `month_str`.
@@ -1265,7 +1265,7 @@ def cmd_status(args):
     summarize(HZ_DAILY,    "cmsauth*log*",         "cmsauth      ")
 
     log.info("=== imported/ (already processed) ===")
-    summarize("/var/log/httpd/imported",   f"{SITE}-access*log*", "httpd  ")
+    summarize(HTTPD_IMPORTED,              f"{SITE}-access*log*", "httpd  ")
     summarize("/var/log/hubzero/imported", "cmsauth*log*",         "hubzero")
 
     log.info("=== resolve-dns settings ===")
