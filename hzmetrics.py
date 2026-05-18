@@ -1272,7 +1272,7 @@ def cmd_process(args):
 
     if is_current_month(month_str) and not args.force:
         log.info(f">>> {month_str} is the current month — skipping analysis until it ends.")
-        log.info(f"    Run: manage.py analyze --month {month_str}")
+        log.info(f"    Run: hzmetrics.py analyze --month {month_str}")
     else:
         log.info(f">>> {'[dry-run] would analyze' if dry_run else 'analyzing'} {month_str}")
         do_analyze(month_str, dry_run)
