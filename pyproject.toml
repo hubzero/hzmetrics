@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hzmetrics"
+version = "0.1.0"
+description = "Apache log → MariaDB analytics pipeline for HUBzero science gateways."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Nicholas J. Kisseberth"},
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pymysql>=1.0",
+    "aiodns>=3.0",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Logging",
+]
+
+[project.urls]
+Homepage = "https://github.com/hubzero/hzmetrics"
+Documentation = "https://hubzero.github.io/hzmetrics/"
+Source = "https://github.com/hubzero/hzmetrics"
+
+[project.scripts]
+hzmetrics = "hzmetrics:main"
+
+[tool.setuptools]
+py-modules = ["hzmetrics"]

@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+# pip / setuptools build artifacts (pyproject.toml is committed; these are not)
+*.egg-info/
+build/
+dist/
 # Ignore everything under tests/ by default, but whitelist the A/B harness
 tests/*
 !tests/legacy/
