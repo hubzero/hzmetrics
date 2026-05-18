@@ -57,35 +57,35 @@ def _relaunch_if_needed():
     # list of (parsed_version, exe_path) tuples, de-duped by realpath so a
     # symlink farm doesn't probe the same binary twice.
     import re as _re
+    from pathlib import Path as _Path
     pat = _re.compile(r"^python3\.(\d+)$")
-    self_real = os.path.realpath(sys.executable)
+    self_real = _Path(sys.executable).resolve()
     seen = {self_real}
     cands = []  # list of ((major, minor), exe)
     for d in os.environ.get("PATH", "").split(os.pathsep):
         if not d:
             continue
         try:
-            entries = os.listdir(d)
+            entries = list(_Path(d).iterdir())
         except OSError:
             continue
-        for name in entries:
-            m = pat.match(name)
+        for entry in entries:
+            m = pat.match(entry.name)
             if not m:
                 continue
             minor = int(m.group(1))
             if (3, minor) < _MIN_PYTHON:
                 continue
-            exe = os.path.join(d, name)
-            if not os.access(exe, os.X_OK):
+            if not os.access(entry, os.X_OK):
                 continue
             try:
-                real = os.path.realpath(exe)
+                real = entry.resolve()
             except OSError:
                 continue
             if real in seen:
                 continue
             seen.add(real)
-            cands.append(((3, minor), exe))
+            cands.append(((3, minor), str(entry)))
 
     # Try highest version first.
     cands.sort(reverse=True)
