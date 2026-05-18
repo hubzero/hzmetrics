@@ -109,10 +109,13 @@ _relaunch_if_needed()
 
 import argparse
 import gzip
+import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+log = logging.getLogger("hzmetrics")
 
 
 def _pipeline_paths():
@@ -162,44 +165,39 @@ STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
 # helpers
 # ---------------------------------------------------------------------------
 
-def log_open():
-    """Open the pipeline log for append.  Honors HZMETRICS_LOG env override
-    so the A/B test harness (running as the developer's UID, not apache)
-    can write to a path it actually owns."""
-    log_path = Path(os.environ.get("HZMETRICS_LOG", str(LOG)))
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    return open(log_path, "a")
+def setup_logging():
+    """Configure the `hzmetrics` logger with a timestamped format on both
+    stderr (for cron-emailed output) and the persistent pipeline log file.
 
-def run(cmd, logfile=None, dry_run=False):
-    """Run a command, streaming output to stdout and optionally a logfile."""
-    label = "[dry-run] " if dry_run else ""
-    cmd_str = ' '.join(str(c) for c in cmd)
-    ts_start = datetime.now()
-    print(f">>> {label}{cmd_str}", flush=True)
-    if dry_run:
-        return
-    if logfile:
-        logfile.write(f">>> {cmd_str}  @ {ts_start}\n")
-        logfile.flush()
-    with subprocess.Popen(
-        [str(c) for c in cmd],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    ) as proc:
-        for line in proc.stdout:
-            line = line.decode("utf-8", errors="replace")
-            print(line, end="", flush=True)
-            if logfile:
-                logfile.write(line)
-                logfile.flush()
-        proc.wait()
-        ts_end = datetime.now()
-        elapsed = ts_end - ts_start
-        if logfile:
-            logfile.write(f"<<< {cmd_str}  @ {ts_end}  elapsed {elapsed}\n")
-            logfile.flush()
-        if proc.returncode != 0:
-            print(f"[exit {proc.returncode}]", flush=True)
+    Log file path defaults to LOG and may be overridden via the
+    HZMETRICS_LOG env var — used by the A/B test harness (running as the
+    developer's UID, not apache) to write to a path it actually owns.
+
+    Idempotent: re-invocation replaces any previously installed handlers
+    so test setups can call it more than once."""
+    log.setLevel(logging.DEBUG)
+    for h in list(log.handlers):
+        log.removeHandler(h)
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    stream = logging.StreamHandler()
+    stream.setLevel(logging.INFO)
+    stream.setFormatter(fmt)
+    log.addHandler(stream)
+
+    log_path = Path(os.environ.get("HZMETRICS_LOG", str(LOG)))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(fmt)
+        log.addHandler(file_handler)
+    except OSError as e:
+        log.warning("could not open %s for append: %s", log_path, e)
 
 def dated_files(directory, pattern):
     """Return sorted list of (date_str, Path) for files matching pattern in directory."""
@@ -238,14 +236,14 @@ def check_order(date_str, force):
         return
     pending = [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*")]
     if pending and date_str > pending[0]:
-        print(f"ERROR: {date_str} is not the oldest pending day in daily/.")
-        print(f"       Oldest pending: {pending[0]}")
-        print(f"       Use --force to override.")
+        log.info(f"ERROR: {date_str} is not the oldest pending day in daily/.")
+        log.info(f"       Oldest pending: {pending[0]}")
+        log.info(f"       Use --force to override.")
         sys.exit(1)
     last = last_imported_date()
     if last and date_str < last:
-        print(f"ERROR: {date_str} is older than the most recently imported log ({last}).")
-        print(f"       Use --force to override.")
+        log.info(f"ERROR: {date_str} is older than the most recently imported log ({last}).")
+        log.info(f"       Use --force to override.")
         sys.exit(1)
 
 def previous_month(month_str):
@@ -283,8 +281,8 @@ def acquire_lock():
                systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
     """
     if not LOCK_FILE.parent.exists():
-        print(f"ERROR: {LOCK_FILE.parent} does not exist.")
-        print(f"  Run once as root:  mkdir -p {LOCK_FILE.parent} && chown apache:apache {LOCK_FILE.parent}")
+        log.info(f"ERROR: {LOCK_FILE.parent} does not exist.")
+        log.info(f"  Run once as root:  mkdir -p {LOCK_FILE.parent} && chown apache:apache {LOCK_FILE.parent}")
         sys.exit(1)
     if LOCK_FILE.exists():
         try:
@@ -403,44 +401,43 @@ def cmd_migrate(args):
     ensure_migrations_table(metrics_db)
     applied = applied_migration_ids(metrics_db)
 
-    print(f"{'ID':<4}  {'STATUS':<9}  DESCRIPTION")
-    print("-" * 72)
+    log.info(f"{'ID':<4}  {'STATUS':<9}  DESCRIPTION")
+    log.info("-" * 72)
     for m in MIGRATIONS:
         status = "applied" if m["id"] in applied else "PENDING"
-        print(f"{m['id']:<4}  {status:<9}  {m['description']}")
+        log.info(f"{m['id']:<4}  {status:<9}  {m['description']}")
 
     pending = [m for m in MIGRATIONS if m["id"] not in applied]
     if not pending:
-        print("\nAll migrations applied.")
+        log.info("All migrations applied.")
         return
 
-    print(f"\n{len(pending)} pending migration(s).")
+    log.info(f"{len(pending)} pending migration(s).")
 
     if not args.apply:
-        print("Run with --apply to execute them.")
+        log.info("Run with --apply to execute them.")
         return
 
-    with log_open() as logfile:
-        logfile.write(f"\n=== manage.py migrate --apply  @ {datetime.now()} ===\n")
-        for m in pending:
-            sql = m["sql"].format(metrics_db=metrics_db)
-            print(f"\n[{m['id']}] {m['description']}")
-            print(f"    {sql}")
-            rc = mysql_exec(sql)
-            if rc == 0:
-                desc = m["description"].replace("'", "''")
-                mysql_exec(
-                    f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                    f"VALUES ({m['id']}, '{desc}');"
-                )
-                print(f"    done.")
-                logfile.write(f"migration {m['id']}: {m['description']}\n")
-            else:
-                print(f"    FAILED (rc={rc}) — stopping.")
-                logfile.write(f"migration {m['id']} FAILED\n")
-                break
+    log.debug(f"=== manage.py migrate --apply  @ {datetime.now()} ===")
+    for m in pending:
+        sql = m["sql"].format(metrics_db=metrics_db)
+        log.info(f"[{m['id']}] {m['description']}")
+        log.info(f"    {sql}")
+        rc = mysql_exec(sql)
+        if rc == 0:
+            desc = m["description"].replace("'", "''")
+            mysql_exec(
+                f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
+                f"VALUES ({m['id']}, '{desc}');"
+            )
+            log.info(f"    done.")
+            log.debug(f"migration {m['id']}: {m['description']}")
+        else:
+            log.info(f"    FAILED (rc={rc}) — stopping.")
+            log.debug(f"migration {m['id']} FAILED")
+            break
 
-    print("\n>>> done")
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +825,7 @@ def cmd_setup_db(args):
         sql = stmt.format(metrics_db=metrics_db)
         label = sql.split("\n")[0][:72]
         if dry_run:
-            print(f"  [dry-run] {label}")
+            log.info(f"  [dry-run] {label}")
             continue
         rc = mysql_exec(sql)
         if rc != 0:
@@ -836,10 +833,10 @@ def cmd_setup_db(args):
 
     if not dry_run:
         if errors:
-            print(f"\n{errors} statement(s) failed.")
+            log.info(f"{errors} statement(s) failed.")
         else:
-            print(f"  {len(METRICS_DB_DDL)} statement(s) executed, database ready.")
-    print(">>> done")
+            log.info(f"  {len(METRICS_DB_DDL)} statement(s) executed, database ready.")
+    log.info(">>> done")
 
 
 DOWNLOAD_EXTS = [
@@ -901,17 +898,13 @@ def _numbered_backup_dst(dst):
         n += 1
 
 
-def do_fetch_logs(date_filter=None, *, logfile=None, dry_run=False):
+def do_fetch_logs(date_filter=None, *, dry_run=False):
     """Concatenate dated daily logs into the metrics staging files.
 
     Port of import/__fetch_apache_and_auth_log.sh.  With date_filter=None
     we glob all files in daily/; with date_filter='YYYYMMDD' we keep
     only files whose name contains that substring (catch-up mode).
     """
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     if date_filter:
         apache_pat  = f"{SITE}-access*log*{date_filter}*"
         cmsauth_pat = f"cmsauth*log*{date_filter}*"
@@ -922,12 +915,12 @@ def do_fetch_logs(date_filter=None, *, logfile=None, dry_run=False):
     apache_files  = sorted(HTTPD_DAILY.glob(apache_pat))
     cmsauth_files = sorted(HZ_DAILY.glob(cmsauth_pat))
 
-    log(f"[fetch-logs] {HTTPD_DAILY}/{apache_pat}: {len(apache_files)} file(s)")
-    log(f"[fetch-logs] {HZ_DAILY}/{cmsauth_pat}: {len(cmsauth_files)} file(s)")
+    log.info(f"[fetch-logs] {HTTPD_DAILY}/{apache_pat}: {len(apache_files)} file(s)")
+    log.info(f"[fetch-logs] {HZ_DAILY}/{cmsauth_pat}: {len(cmsauth_files)} file(s)")
 
     if dry_run:
         for f in apache_files + cmsauth_files:
-            log(f"  [dry-run] would zcat: {f}")
+            log.info(f"  [dry-run] would zcat: {f}")
         return 0
 
     HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
@@ -936,25 +929,21 @@ def do_fetch_logs(date_filter=None, *, logfile=None, dry_run=False):
         with open(STAGED_APACHE, "wb") as out:
             for f in apache_files:
                 _stream_decompress(f, out)
-        log(f"  -> {STAGED_APACHE}")
+        log.info(f"  -> {STAGED_APACHE}")
     if cmsauth_files:
         with open(STAGED_AUTH, "wb") as out:
             for f in cmsauth_files:
                 _stream_decompress(f, out)
-        log(f"  -> {STAGED_AUTH}")
+        log.info(f"  -> {STAGED_AUTH}")
     return 0
 
 
-def do_archive_logs(date_filter=None, *, logfile=None, dry_run=False):
+def do_archive_logs(date_filter=None, *, dry_run=False):
     """gzip each daily log in place and move it to imported/.
 
     Port of import/__archive_apache_and_auth_log.sh.  Handles four globs:
     {site}-access*, new-{site}-access*, cmsauth*, cmsdebug*.
     """
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     def pat(base):
         return f"{base}{date_filter}*" if date_filter else base
 
@@ -968,146 +957,136 @@ def do_archive_logs(date_filter=None, *, logfile=None, dry_run=False):
         files = sorted(src_dir.glob(p))
         if not files:
             continue
-        log(f"[archive-logs] {src_dir}/{p}: {len(files)} file(s)")
+        log.info(f"[archive-logs] {src_dir}/{p}: {len(files)} file(s)")
         if dry_run:
             for f in files:
-                log(f"  [dry-run] would gzip+move: {f} -> {dst_dir}/")
+                log.info(f"  [dry-run] would gzip+move: {f} -> {dst_dir}/")
             continue
         dst_dir.mkdir(parents=True, exist_ok=True)
         for f in files:
             gz = f if f.suffix == ".gz" else _gzip_in_place(f)
             dst = _numbered_backup_dst(dst_dir / gz.name)
             shutil.move(str(gz), str(dst))
-            log(f"  archived: {f.name} -> {dst}")
+            log.info(f"  archived: {f.name} -> {dst}")
     return 0
 
 
-def do_import_staged_logs(*, logfile=None, dry_run=False):
+def do_import_staged_logs(*, dry_run=False):
     """Run the import-* stages against the staged log files, then move
     each staged file to _prev_*.log.  Port of
     import/__import_apache_and_auth_log.sh.
     """
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     if not dry_run:
         HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
 
     if STAGED_APACHE.exists():
-        log(f"[import-staged] {STAGED_APACHE}")
-        do_import_webhits(str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
-        do_identify_bots( str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
-        do_import_apache( str(STAGED_APACHE), logfile=logfile, dry_run=dry_run)
+        log.info(f"[import-staged] {STAGED_APACHE}")
+        do_import_webhits(str(STAGED_APACHE), dry_run=dry_run)
+        do_identify_bots( str(STAGED_APACHE), dry_run=dry_run)
+        do_import_apache( str(STAGED_APACHE), dry_run=dry_run)
         if not dry_run:
             prev = HZ_METRICS_STAGING / "_prev_hub_apache.log"
             STAGED_APACHE.replace(prev)
-            log(f"  -> {prev}")
+            log.info(f"  -> {prev}")
     else:
-        log(f"[import-staged] {STAGED_APACHE}: not present, skipping")
+        log.info(f"[import-staged] {STAGED_APACHE}: not present, skipping")
 
     if STAGED_AUTH.exists():
-        log(f"[import-staged] {STAGED_AUTH}")
-        do_import_auth(str(STAGED_AUTH), logfile=logfile, dry_run=dry_run)
+        log.info(f"[import-staged] {STAGED_AUTH}")
+        do_import_auth(str(STAGED_AUTH), dry_run=dry_run)
         if not dry_run:
             prev = HZ_METRICS_STAGING / "_prev_hub_auth.log"
             STAGED_AUTH.replace(prev)
-            log(f"  -> {prev}")
+            log.info(f"  -> {prev}")
     else:
-        log(f"[import-staged] {STAGED_AUTH}: not present, skipping")
+        log.info(f"[import-staged] {STAGED_AUTH}: not present, skipping")
     return 0
 
 
-def do_import_day(date_str, logfile, dry_run=False):
+def do_import_day(date_str, dry_run=False):
     """Fetch, import, then archive logs for a single day.  date_str is
     'YYYYMMDD'."""
     if dry_run:
         access  = sorted(HTTPD_DAILY.glob(f"{SITE}-access*log*{date_str}*"))
         cmsauth = sorted(HZ_DAILY.glob(   f"cmsauth*log*{date_str}*"))
         for f in access + cmsauth:
-            print(f"    [dry-run] would fetch: {f}")
+            log.info(f"    [dry-run] would fetch: {f}")
         if not access:
-            print(f"    [dry-run] WARNING: no access log found for {date_str} in {HTTPD_DAILY}")
+            log.info(f"    [dry-run] WARNING: no access log found for {date_str} in {HTTPD_DAILY}")
         if not cmsauth:
-            print(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in {HZ_DAILY}")
-    do_fetch_logs(       date_str, logfile=logfile, dry_run=dry_run)
-    do_import_staged_logs(         logfile=logfile, dry_run=dry_run)
-    do_archive_logs(     date_str, logfile=logfile, dry_run=dry_run)
+            log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in {HZ_DAILY}")
+    do_fetch_logs(       date_str, dry_run=dry_run)
+    do_import_staged_logs(         dry_run=dry_run)
+    do_archive_logs(     date_str, dry_run=dry_run)
 
 
 def cmd_fetch_logs(args):
-    with log_open() as lf:
-        return do_fetch_logs(args.date or None, logfile=lf, dry_run=args.dry_run)
+    return do_fetch_logs(args.date or None, dry_run=args.dry_run)
 
 
 def cmd_archive_logs(args):
-    with log_open() as lf:
-        return do_archive_logs(args.date or None, logfile=lf, dry_run=args.dry_run)
+    return do_archive_logs(args.date or None, dry_run=args.dry_run)
 
-def _stage_banner(name, logfile):
-    """Mark a pipeline stage boundary in stdout + logfile."""
-    line = f"\n=== {name} ==="
-    print(line, flush=True)
-    if logfile:
-        logfile.write(line + "\n")
-        logfile.flush()
+def _stage_banner(name):
+    """Mark a pipeline stage boundary."""
+    log.info("=== %s ===", name)
 
 
-def _do_tool_metrics_stage(month_str, logfile, dry_run):
+def _do_tool_metrics_stage(month_str, dry_run):
     """Run the per-month tool-metrics enrichment + stats chain in-process.
     Direct port of __process_tool_metrics.sh."""
-    _stage_banner("tool-metrics", logfile)
-    do_import_hub_data(logfile=logfile, dry_run=dry_run)
+    _stage_banner("tool-metrics")
+    do_import_hub_data(dry_run=dry_run)
     do_resolve_dns("metrics", "sessionlog_metrics", month_str,
-                   logfile=logfile, dry_run=dry_run)
+                   dry_run=dry_run)
     do_fill_domain("metrics", "sessionlog_metrics", month_str,
-                   logfile=logfile, dry_run=dry_run)
+                   dry_run=dry_run)
     do_fill_user_info("metrics", "sessionlog_metrics", month_str,
-                      logfile=logfile, dry_run=dry_run)
+                      dry_run=dry_run)
     do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
-                      logfile=logfile, dry_run=dry_run)
-    do_gen_tool_stats(month_str,    logfile=logfile, dry_run=dry_run)
-    do_gen_tool_tops(month_str,     logfile=logfile, dry_run=dry_run)
-    do_gen_tool_toplists(month_str, logfile=logfile, dry_run=dry_run)
+                      dry_run=dry_run)
+    do_gen_tool_stats(month_str,    dry_run=dry_run)
+    do_gen_tool_tops(month_str,     dry_run=dry_run)
+    do_gen_tool_toplists(month_str, dry_run=dry_run)
 
 
-def _do_usage_metrics_stage(month_str, logfile, dry_run):
+def _do_usage_metrics_stage(month_str, dry_run):
     """Run the per-month web / toolstart / websessions enrichment chain
     in-process.  Direct port of __process_usage_metrics.sh."""
-    _stage_banner("usage-metrics", logfile)
-    do_import_hub_data(logfile=logfile, dry_run=dry_run)
-    do_middleware_wall(logfile=logfile, dry_run=dry_run)
-    do_middleware_cpu( logfile=logfile, dry_run=dry_run)
-    do_resolve_dns("metrics", "web",       month_str, logfile=logfile, dry_run=dry_run)
-    do_resolve_dns("metrics", "toolstart", month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_domain("metrics", "web",       month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_domain("metrics", "toolstart", month_str, logfile=logfile, dry_run=dry_run)
-    do_logfix_session(month_str, logfile=logfile, dry_run=dry_run)
-    do_clean_bots("web",         month_str, logfile=logfile, dry_run=dry_run)
-    do_clean_bots("websessions", month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_user_info("metrics", "toolstart",   month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "web",         month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "websessions", month_str, logfile=logfile, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "toolstart",   month_str, logfile=logfile, dry_run=dry_run)
+    _stage_banner("usage-metrics")
+    do_import_hub_data(dry_run=dry_run)
+    do_middleware_wall(dry_run=dry_run)
+    do_middleware_cpu( dry_run=dry_run)
+    do_resolve_dns("metrics", "web",       month_str, dry_run=dry_run)
+    do_resolve_dns("metrics", "toolstart", month_str, dry_run=dry_run)
+    do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
+    do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
+    do_logfix_session(month_str, dry_run=dry_run)
+    do_clean_bots("web",         month_str, dry_run=dry_run)
+    do_clean_bots("websessions", month_str, dry_run=dry_run)
+    do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
+    do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
 
 
-def _do_summary_stage(month_str, logfile, dry_run):
+def _do_summary_stage(month_str, dry_run):
     """Run the per-month rolling-window summary stage in-process.
     Direct port of __process_usage_metrics_summary.sh."""
-    _stage_banner("summary", logfile)
-    do_import_hub_data(logfile=logfile, dry_run=dry_run)
-    do_summarize_month(month_str, logfile=logfile, dry_run=dry_run)
-    do_andmore_usage( month_str, logfile=logfile, dry_run=dry_run)
+    _stage_banner("summary")
+    do_import_hub_data(dry_run=dry_run)
+    do_summarize_month(month_str, dry_run=dry_run)
+    do_andmore_usage( month_str, dry_run=dry_run)
 
 
-def do_analyze(month_str, logfile, dry_run=False):
+def do_analyze(month_str, dry_run=False):
     month_str = month_str or None
-    _do_tool_metrics_stage(month_str,  logfile, dry_run)
-    _do_usage_metrics_stage(month_str, logfile, dry_run)
+    _do_tool_metrics_stage(month_str, dry_run)
+    _do_usage_metrics_stage(month_str, dry_run)
 
 
-def do_summarize(month_str, logfile, dry_run=False):
-    _do_summary_stage(month_str or None, logfile, dry_run)
+def do_summarize(month_str, dry_run=False):
+    _do_summary_stage(month_str or None, dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1119,30 +1098,30 @@ def cmd_status(args):
         files = dated_files(directory, pattern)
         count = len(files)
         if count == 0:
-            print(f"  {label}: 0")
+            log.info(f"  {label}: 0")
             return
         oldest, newest = files[0][0], files[-1][0]
         span = f"({oldest})" if oldest == newest else f"({oldest} .. {newest})"
-        print(f"  {label}: {count}  {span}")
+        log.info(f"  {label}: {count}  {span}")
 
-    print("=== daily/ (pending import) ===")
+    log.info("=== daily/ (pending import) ===")
     summarize(HTTPD_DAILY, f"{SITE}-access*log*", "httpd access")
     summarize(HZ_DAILY,    "cmsauth*log*",         "cmsauth      ")
 
-    print("\n=== imported/ (already processed) ===")
+    log.info("=== imported/ (already processed) ===")
     summarize("/var/log/httpd/imported",   f"{SITE}-access*log*", "httpd  ")
     summarize("/var/log/hubzero/imported", "cmsauth*log*",         "hubzero")
 
-    print("\n=== resolve-dns settings ===")
+    log.info("=== resolve-dns settings ===")
     try:
         conf_present = HZMETRICS_CONF.is_file()
         conf_src = str(HZMETRICS_CONF) if conf_present else "(not present — using defaults / env)"
     except PermissionError:
         conf_src = f"{HZMETRICS_CONF} (no read access — using defaults / env)"
-    print(f"  config file: {conf_src}")
-    print(f"  nameserver : {DNS_NAMESERVER}")
-    print(f"  concurrency: {DNS_CONCURRENCY}")
-    print(f"  timeout    : {DNS_TIMEOUT}s")
+    log.info(f"  config file: {conf_src}")
+    log.info(f"  nameserver : {DNS_NAMESERVER}")
+    log.info(f"  concurrency: {DNS_CONCURRENCY}")
+    log.info(f"  timeout    : {DNS_TIMEOUT}s")
 
 
 # ---------------------------------------------------------------------------
@@ -1151,43 +1130,42 @@ def cmd_status(args):
 
 def cmd_import(args):
     dry_run = args.dry_run
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py import {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
+    if not dry_run:
+        log.debug(f"=== manage.py import {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
 
-        if args.next:
-            month_str = oldest_pending_month()
-            if not month_str:
-                print("Nothing pending in daily/.")
-                return
-            days = pending_days_for_month(month_str)
-            check_order(days[0], args.force)
-            print(f"{'[dry-run] would import' if dry_run else 'Importing'} {len(days)} day(s) for {month_str}")
-            for date_str in days:
-                print(f"\n--- {date_str} ---")
-                do_import_day(date_str, logfile, dry_run)
+    if args.next:
+        month_str = oldest_pending_month()
+        if not month_str:
+            log.info("Nothing pending in daily/.")
+            return
+        days = pending_days_for_month(month_str)
+        check_order(days[0], args.force)
+        log.info(f"{'[dry-run] would import' if dry_run else 'Importing'} {len(days)} day(s) for {month_str}")
+        for date_str in days:
+            log.info(f"--- {date_str} ---")
+            do_import_day(date_str, dry_run)
 
-        elif args.month:
-            days = pending_days_for_month(args.month)
-            if not days:
-                print(f"No pending days in daily/ for {args.month}.")
-                return
-            check_order(days[0], args.force)
-            print(f"{'[dry-run] would import' if dry_run else 'Importing'} {len(days)} day(s) for {args.month}")
-            for date_str in days:
-                print(f"\n--- {date_str} ---")
-                do_import_day(date_str, logfile, dry_run)
+    elif args.month:
+        days = pending_days_for_month(args.month)
+        if not days:
+            log.info(f"No pending days in daily/ for {args.month}.")
+            return
+        check_order(days[0], args.force)
+        log.info(f"{'[dry-run] would import' if dry_run else 'Importing'} {len(days)} day(s) for {args.month}")
+        for date_str in days:
+            log.info(f"--- {date_str} ---")
+            do_import_day(date_str, dry_run)
 
-        elif args.day:
-            date_str = args.day.replace("-", "")
-            check_order(date_str, args.force)
-            do_import_day(date_str, logfile, dry_run)
+    elif args.day:
+        date_str = args.day.replace("-", "")
+        check_order(date_str, args.force)
+        do_import_day(date_str, dry_run)
 
-        else:
-            print("Specify --next, --month, or --day.")
-            sys.exit(1)
+    else:
+        log.info("Specify --next, --month, or --day.")
+        sys.exit(1)
 
-        print(">>> done")
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -1197,15 +1175,14 @@ def cmd_import(args):
 def cmd_analyze(args):
     dry_run = args.dry_run
     if is_current_month(args.month) and not args.force:
-        print(f"ERROR: {args.month} is the current month and not yet complete.")
-        print(f"       Use --force to override.")
+        log.info(f"ERROR: {args.month} is the current month and not yet complete.")
+        log.info(f"       Use --force to override.")
         sys.exit(1)
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py analyze {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
-        do_analyze(args.month, logfile, dry_run)
-        do_summarize(args.month, logfile, dry_run)
-    print(">>> done")
+    if not dry_run:
+        log.debug(f"=== manage.py analyze {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
+    do_analyze(args.month, dry_run)
+    do_summarize(args.month, dry_run)
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -1215,14 +1192,13 @@ def cmd_analyze(args):
 def cmd_summarize(args):
     dry_run = args.dry_run
     if is_current_month(args.month) and not args.force:
-        print(f"ERROR: {args.month} is the current month and not yet complete.")
-        print(f"       Use --force to override.")
+        log.info(f"ERROR: {args.month} is the current month and not yet complete.")
+        log.info(f"       Use --force to override.")
         sys.exit(1)
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py summarize {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
-        do_summarize(args.month, logfile, dry_run)
-    print(">>> done")
+    if not dry_run:
+        log.debug(f"=== manage.py summarize {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
+    do_summarize(args.month, dry_run)
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -1231,53 +1207,52 @@ def cmd_summarize(args):
 
 def cmd_process(args):
     dry_run = args.dry_run
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py process {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
+    if not dry_run:
+        log.debug(f"=== manage.py process {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
 
-        if args.next:
-            month_str = oldest_pending_month()
-            if not month_str:
-                print("Nothing pending in daily/.")
-                return
-            days = pending_days_for_month(month_str)
-            print(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
-        elif args.month:
-            month_str = args.month
-            days = pending_days_for_month(month_str)
-            if days:
-                print(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
-        elif args.day:
-            date_str = args.day.replace("-", "")
-            month_str = args.day[:7]
-            check_order(date_str, args.force)
-            do_import_day(date_str, logfile, dry_run)
-            if is_current_month(month_str) and not args.force:
-                print(f">>> {month_str} is the current month — skipping analysis until it ends.")
-            else:
-                do_analyze(month_str, logfile, dry_run)
-                do_summarize(month_str, logfile, dry_run)
-            print(">>> done")
+    if args.next:
+        month_str = oldest_pending_month()
+        if not month_str:
+            log.info("Nothing pending in daily/.")
             return
-        else:
-            print("Specify --next, --month, or --day.")
-            sys.exit(1)
-
-        check_order(days[0], args.force)
-        for date_str in days:
-            print(f"\n--- {date_str} ---")
-            do_import_day(date_str, logfile, dry_run)
-
+        days = pending_days_for_month(month_str)
+        log.info(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
+    elif args.month:
+        month_str = args.month
+        days = pending_days_for_month(month_str)
+        if days:
+            log.info(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
+    elif args.day:
+        date_str = args.day.replace("-", "")
+        month_str = args.day[:7]
+        check_order(date_str, args.force)
+        do_import_day(date_str, dry_run)
         if is_current_month(month_str) and not args.force:
-            print(f"\n>>> {month_str} is the current month — skipping analysis until it ends.")
-            print(f"    Run: manage.py analyze --month {month_str}")
+            log.info(f">>> {month_str} is the current month — skipping analysis until it ends.")
         else:
-            print(f"\n>>> {'[dry-run] would analyze' if dry_run else 'analyzing'} {month_str}")
-            do_analyze(month_str, logfile, dry_run)
-            print(f"\n>>> {'[dry-run] would summarize' if dry_run else 'summarizing'} {month_str}")
-            do_summarize(month_str, logfile, dry_run)
+            do_analyze(month_str, dry_run)
+            do_summarize(month_str, dry_run)
+        log.info(">>> done")
+        return
+    else:
+        log.info("Specify --next, --month, or --day.")
+        sys.exit(1)
 
-        print(">>> done")
+    check_order(days[0], args.force)
+    for date_str in days:
+        log.info(f"--- {date_str} ---")
+        do_import_day(date_str, dry_run)
+
+    if is_current_month(month_str) and not args.force:
+        log.info(f">>> {month_str} is the current month — skipping analysis until it ends.")
+        log.info(f"    Run: manage.py analyze --month {month_str}")
+    else:
+        log.info(f">>> {'[dry-run] would analyze' if dry_run else 'analyzing'} {month_str}")
+        do_analyze(month_str, dry_run)
+        log.info(f">>> {'[dry-run] would summarize' if dry_run else 'summarizing'} {month_str}")
+        do_summarize(month_str, dry_run)
+
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -1337,14 +1312,14 @@ def mysql_exec(sql):
     try:
         conn = _open_db()
     except pymysql.MySQLError as e:
-        print(f"[mysql error] connect: {e}", flush=True)
+        log.info(f"[mysql error] connect: {e}")
         return 1
     try:
         with conn.cursor() as cur:
             cur.execute(sql)
         return 0
     except pymysql.MySQLError as e:
-        print(f"[mysql error] {e}", flush=True)
+        log.info(f"[mysql error] {e}")
         return 1
     finally:
         conn.close()
@@ -1357,9 +1332,9 @@ def months_with_missing_geo():
         f"WHERE ipcountry IS NULL OR ipcountry = '' ORDER BY 1;"
     )
 
-def do_fill_geo(month_str, logfile, dry_run=False):
+def do_fill_geo(month_str, dry_run=False):
     for db, table in IPCOUNTRY_TABLES:
-        do_fill_ipcountry(db, table, month_str, logfile=logfile, dry_run=dry_run)
+        do_fill_ipcountry(db, table, month_str, dry_run=dry_run)
 
 def cmd_fill_geo(args):
     dry_run = args.dry_run
@@ -1367,28 +1342,27 @@ def cmd_fill_geo(args):
     if args.all:
         months = months_with_missing_geo()
         if not months:
-            print("No months with missing GeoIP data found.")
+            log.info("No months with missing GeoIP data found.")
             return
-        print(f"{'[dry-run] would fill' if dry_run else 'Filling'} GeoIP for {len(months)} month(s): {months[0]} .. {months[-1]}")
+        log.info(f"{'[dry-run] would fill' if dry_run else 'Filling'} GeoIP for {len(months)} month(s): {months[0]} .. {months[-1]}")
     else:
         months = [args.month]
-        print(f"{'[dry-run] would fill' if dry_run else 'Filling'} GeoIP for {args.month}")
+        log.info(f"{'[dry-run] would fill' if dry_run else 'Filling'} GeoIP for {args.month}")
 
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py fill-geo {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
-        for month_str in months:
-            print(f"\n--- {month_str} ---")
-            do_fill_geo(month_str, logfile, dry_run)
+    if not dry_run:
+        log.debug(f"=== manage.py fill-geo {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
+    for month_str in months:
+        log.info(f"--- {month_str} ---")
+        do_fill_geo(month_str, dry_run)
 
-    print(">>> done")
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
 # backfill-dnload  (populate web.dnload for historical rows)
 # ---------------------------------------------------------------------------
 
-def do_backfill_dnload(start_month, logfile, dry_run=False):
+def do_backfill_dnload(start_month, dry_run=False):
     _, _, _, metrics_db = db_credentials()
 
     ext_pattern = "|".join(re.escape(e) for e in DOWNLOAD_EXTS)
@@ -1402,10 +1376,10 @@ def do_backfill_dnload(start_month, logfile, dry_run=False):
         f"WHERE {where} ORDER BY 1;"
     )
     if not months:
-        print("  No months with unprocessed rows found.")
+        log.info("  No months with unprocessed rows found.")
         return
 
-    print(f"  Will backfill {len(months)} month(s): {months[0]} .. {months[-1]}")
+    log.info(f"  Will backfill {len(months)} month(s): {months[0]} .. {months[-1]}")
 
     for month in months:
         m = datetime.strptime(month + "-01", "%Y-%m-%d")
@@ -1414,9 +1388,7 @@ def do_backfill_dnload(start_month, logfile, dry_run=False):
         m_end   = next_m.strftime("%Y-%m-%d")
 
         label = f"  {month}"
-        if logfile:
-            logfile.write(f"backfill-dnload {month}\n")
-            logfile.flush()
+        log.debug(f"backfill-dnload {month}")
 
         sql = (
             f"UPDATE {metrics_db}.web "
@@ -1428,11 +1400,10 @@ def do_backfill_dnload(start_month, logfile, dry_run=False):
         )
 
         if dry_run:
-            print(f"{label}  [dry-run]", flush=True)
+            log.info(f"{label}  [dry-run]")
         else:
-            print(f"{label} ...", end="", flush=True)
             rc = mysql_exec(sql)
-            print(f" done (rc={rc})", flush=True)
+            log.info(f"{label} done (rc={rc})")
 
     if not dry_run:
         rows = mysql_query(
@@ -1440,20 +1411,18 @@ def do_backfill_dnload(start_month, logfile, dry_run=False):
             f"WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';"
         )
         if rows and rows[0] == "0":
-            print(f"  Adding index on {metrics_db}.web(dnload) ...", end="", flush=True)
             rc = mysql_exec(f"ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);")
-            print(f" done (rc={rc})", flush=True)
+            log.info(f"  Adding index on {metrics_db}.web(dnload) ... done (rc={rc})")
         else:
-            print(f"  Index on {metrics_db}.web(dnload) already exists.")
+            log.info(f"  Index on {metrics_db}.web(dnload) already exists.")
 
 
 def cmd_backfill_dnload(args):
     dry_run = args.dry_run
-    with log_open() as logfile:
-        if not dry_run:
-            logfile.write(f"\n=== manage.py backfill-dnload {' '.join(sys.argv[1:])}  @ {datetime.now()} ===\n")
-        do_backfill_dnload(args.start, logfile, dry_run)
-    print(">>> done")
+    if not dry_run:
+        log.debug(f"=== manage.py backfill-dnload {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
+    do_backfill_dnload(args.start, dry_run)
+    log.info(">>> done")
 
 
 # ---------------------------------------------------------------------------
@@ -1560,7 +1529,7 @@ def _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng):
         info = info[:-4]
     return info
 
-def do_whoisonline(*, logfile=None, dry_run=False):
+def do_whoisonline(*, dry_run=False):
     """Refresh hub.jos_session_geo from jos_session, resolve DNS / domain /
     GeoIP for new IPs, and rewrite the whoisonline.xml file consumed by
     the hub's Google Maps widget.  Direct port of xlogfix_whoisonline.php.
@@ -1572,8 +1541,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
     metrics_db = cfg.get('metrics_db', '')
     if not hub_db or not hub_dir:
         msg = "[whoisonline] missing hub_db / hub_dir in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     map_dir = Path(hub_dir) / "app/site/stats/maps"
@@ -1582,16 +1550,11 @@ def do_whoisonline(*, logfile=None, dry_run=False):
     xml_file = map_dir / "whoisonline.xml"
     if not map_dir.is_dir():
         msg = f"[whoisonline] map dir missing: {map_dir}"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     if dry_run:
-        log(f"[whoisonline] dry-run: would update {hub_db}.{db_prefix}session_geo "
+        log.info(f"[whoisonline] dry-run: would update {hub_db}.{db_prefix}session_geo "
             f"and write {xml_file}")
         return 0
 
@@ -1635,7 +1598,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
             unresolved = [r[0] for r in cur.fetchall()]
 
         if unresolved:
-            log(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
+            log.info(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
             import asyncio
             try:
                 pairs = asyncio.run(_resolve_ips_async(
@@ -1645,7 +1608,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
                     DNS_TIMEOUT))
             except ImportError as e:
                 msg = (f"[whoisonline] aiodns unavailable ({e}); skipping DNS step")
-                log(msg)
+                log.info(msg)
                 pairs = [(ip, ip) for ip in unresolved]
             with conn.cursor() as cur:
                 for ip, host in pairs:
@@ -1665,7 +1628,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
             geo_targets = list(cur.fetchall())
 
         if geo_targets:
-            log(f"[whoisonline] geo lookups for {len(geo_targets)} IP(s)")
+            log.info(f"[whoisonline] geo lookups for {len(geo_targets)} IP(s)")
         for n_ip, domain, bot in geo_targets:
             if not bot:
                 bot = _whoisonline_checkforbot(conn, metrics_db, domain)
@@ -1710,7 +1673,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
             )
         xml_lines.append("</markers>")
         xml_file.write_text("\n".join(xml_lines) + "\n")
-        log(f"[whoisonline] wrote {xml_file} ({len(locations)} marker(s))")
+        log.info(f"[whoisonline] wrote {xml_file} ({len(locations)} marker(s))")
 
         # 7. Final stale-session cleanup (PHP runs clear_stale_sessions twice)
         with conn.cursor() as cur:
@@ -1725,8 +1688,7 @@ def do_whoisonline(*, logfile=None, dry_run=False):
 
 
 def cmd_whoisonline(args):
-    with log_open() as lf:
-        return do_whoisonline(logfile=lf, dry_run=args.dry_run)
+    return do_whoisonline(dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1740,7 +1702,7 @@ def cmd_tick(args):
     at_metrics_tick = (datetime.now().minute == 30)
 
     # Always update the who-is-online map — fast, no lock needed.
-    do_whoisonline(logfile=None, dry_run=args.dry_run)
+    do_whoisonline(dry_run=args.dry_run)
 
     # At :30 past each hour, attempt a full metrics run.
     # cmd_run acquires its own lock, so concurrent ticks fast-exit there.
@@ -1797,7 +1759,7 @@ def _read_dns_config():
                 concurrency = cp.getint("dns", "concurrency", fallback=concurrency)
                 timeout     = cp.getfloat("dns", "timeout",  fallback=timeout)
         except (configparser.Error, ValueError) as e:
-            print(f"[warn] {HZMETRICS_CONF}: {e}; using defaults", flush=True)
+            log.info(f"[warn] {HZMETRICS_CONF}: {e}; using defaults")
 
     ns = os.environ.get("HZMETRICS_DNS_NAMESERVER", ns)
     try:
@@ -1909,7 +1871,7 @@ def parse_date_range(spec):
 
 def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                    nameserver=DNS_NAMESERVER, concurrency=DNS_CONCURRENCY,
-                   timeout=DNS_TIMEOUT, logfile=None, dry_run=False):
+                   timeout=DNS_TIMEOUT, dry_run=False):
     """
     Reverse-DNS resolve unresolved IPs in <db>.<table>.  Replaces the
     PHP/shell xlogfix_dns_v2.sh + xlogfix_dns_worker.php fan-out with
@@ -1931,8 +1893,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
     except ImportError as e:
         msg = (f"[resolve-dns] missing dependency: {e}. "
                f"Install via 'python3 -m pip install aiodns pymysql' (needs python >= 3.7).")
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 1
 
     _, _, _, metrics_db = db_credentials()
@@ -1942,11 +1903,11 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
         db_name = hub_db_name()
     else:
         msg = f"[resolve-dns] unknown db_key {db_key!r}; expected 'metrics' or 'hub'"
-        print(msg, flush=True)
+        log.info(msg)
         return 2
     if not db_name:
         msg = f"[resolve-dns] could not resolve DB name for db_key={db_key!r} from access.cfg"
-        print(msg, flush=True)
+        log.info(msg)
         return 2
 
     # sessionlog_metrics is keyed on 'start'; everyone else on 'datetime'
@@ -1961,8 +1922,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                 start_d, end_d = parse_date_range(date_spec)
             except ValueError as e:
                 msg = f"[resolve-dns] {e}"
-                print(msg, flush=True)
-                if logfile: logfile.write(msg + "\n")
+                log.info(msg)
                 return 2
         else:
             end_d = date.today()
@@ -1994,10 +1954,6 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
         f"AND (host IS NULL OR host = '')"
     )
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     # Use one pymysql connection for the whole flow: select, async resolve
     # (network-bound, releases the connection), then temp-table insert +
     # update join.  Temp table is per-connection so it has to be one conn.
@@ -2007,7 +1963,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
             cur.execute(sel_sql)
             ips = [r[0] for r in cur.fetchall()]
 
-            log(f"[resolve-dns] {db_name}.{table} {scope_label}: "
+            log.info(f"[resolve-dns] {db_name}.{table} {scope_label}: "
                 f"{len(ips)} unresolved IPs (ns={nameserver}, c={concurrency})")
             if not ips or dry_run:
                 return 0
@@ -2019,7 +1975,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
             resolved_count = sum(1 for _, h in pairs if h != "?")
             no_ptr   = len(pairs) - resolved_count
             rate     = len(pairs) / wall if wall > 0 else 0
-            log(f"[resolve-dns] resolved={resolved_count} no_ptr={no_ptr} "
+            log.info(f"[resolve-dns] resolved={resolved_count} no_ptr={no_ptr} "
                 f"wall={wall:.1f}s rate={rate:.0f} IPs/s")
 
             cur.execute(
@@ -2033,7 +1989,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                 f"SET t.host = d.host "
                 f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred}")
             updated = cur.rowcount
-            log(f"[resolve-dns] applied: {updated} rows updated in {table}")
+            log.info(f"[resolve-dns] applied: {updated} rows updated in {table}")
             return 0
     finally:
         conn.close()
@@ -2064,7 +2020,7 @@ def _findweeks(start_d, end_d):
         chunk_start = chunk_end
 
 def do_clean_bots(table, date_spec=None, *, all_dates=False,
-                  logfile=None, dry_run=False):
+                  dry_run=False):
     """DELETE rows in <table> whose domain or host matches an entry in
     foo_metrics.exclude_list (types 'domain' and 'host').  Faithful
     port of xlogfix_clean.php — same SQL shape, same week-chunked DELETEs,
@@ -2072,16 +2028,14 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
     """
     if table not in CLEAN_BOTS_TABLES:
         msg = f"[clean-bots] table {table!r} not supported (expected one of {CLEAN_BOTS_TABLES})"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     _, _, _, metrics_db = db_credentials()
 
     if all_dates:
         msg = "[clean-bots] --all not supported (DELETE needs a bounded range)"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if date_spec:
@@ -2089,13 +2043,11 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
             start_d, end_d = parse_date_range(date_spec)
         except ValueError as e:
             msg = f"[clean-bots] {e}"
-            print(msg, flush=True)
-            if logfile: logfile.write(msg + "\n")
+            log.info(msg)
             return 2
         if start_d is None or end_d is None:
             msg = "[clean-bots] open-ended ranges not supported"
-            print(msg, flush=True)
-            if logfile: logfile.write(msg + "\n")
+            log.info(msg)
             return 2
     else:
         # default: current month-to-today (mirrors PHP behavior when no
@@ -2103,10 +2055,6 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
         today = date.today()
         start_d = today.replace(day=1)
         end_d   = today + timedelta(days=1)
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     conn = _open_db(metrics_db)
     try:
@@ -2117,17 +2065,17 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
             host_filters = [r[0] for r in cur.fetchall()]
 
             chunks = list(_findweeks(start_d, end_d))
-            log(f"[clean-bots] {metrics_db}.{table} {start_d}..{end_d}: "
+            log.info(f"[clean-bots] {metrics_db}.{table} {start_d}..{end_d}: "
                 f"{len(domain_filters)} domain filter(s), {len(host_filters)} host filter(s), "
                 f"{len(chunks)} week chunk(s)")
 
             if dry_run:
                 for c_start, c_end in chunks:
-                    log(f"  [dry-run] chunk {c_start} < datetime <= {c_end}")
+                    log.info(f"  [dry-run] chunk {c_start} < datetime <= {c_end}")
                 for f in domain_filters:
-                    log(f"  [dry-run] domain = {f!r}")
+                    log.info(f"  [dry-run] domain = {f!r}")
                 for f in host_filters:
-                    log(f"  [dry-run] host LIKE {f!r}")
+                    log.info(f"  [dry-run] host LIKE {f!r}")
                 return 0
 
             total_deleted = 0
@@ -2145,18 +2093,17 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
                         (c_start, c_end, f))
                     total_deleted += cur.rowcount
 
-            log(f"[clean-bots] deleted {total_deleted} rows from {table}")
+            log.info(f"[clean-bots] deleted {total_deleted} rows from {table}")
             return 0
     finally:
         conn.close()
 
 def cmd_clean_bots(args):
-    with log_open() as lf:
-        return do_clean_bots(
-            args.table, args.date_spec,
-            all_dates=args.all,
-            logfile=lf, dry_run=args.dry_run,
-        )
+    return do_clean_bots(
+        args.table, args.date_spec,
+        all_dates=args.all,
+        dry_run=args.dry_run,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2164,7 +2111,7 @@ def cmd_clean_bots(args):
 #                   from the hub DB; ports xlogimport_tool_and_reg_user_data.php)
 # ---------------------------------------------------------------------------
 
-def do_import_hub_data(*, logfile=None, dry_run=False):
+def do_import_hub_data(*, dry_run=False):
     """Copy tool session starts and registered-user profiles from the
     hub DB into the metrics DB.  Faithful port of
     xlogimport_tool_and_reg_user_data.php:
@@ -2181,13 +2128,8 @@ def do_import_hub_data(*, logfile=None, dry_run=False):
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not metrics_db or not hub_db:
         msg = f"[import-hub-data] missing metrics_db / hub_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     stmts = [
         (
@@ -2216,24 +2158,23 @@ def do_import_hub_data(*, logfile=None, dry_run=False):
 
     if dry_run:
         for sql, desc in stmts:
-            log(f"  [dry-run] {desc}")
-            log(f"            {sql.split(' SELECT ')[0]} ...")
+            log.info(f"  [dry-run] {desc}")
+            log.info(f"            {sql.split(' SELECT ')[0]} ...")
         return 0
 
     conn = _open_db()
     try:
         with conn.cursor() as cur:
             for sql, desc in stmts:
-                log(f"[import-hub-data] {desc}")
+                log.info(f"[import-hub-data] {desc}")
                 cur.execute(sql)
-                log(f"                  rows affected: {cur.rowcount}")
+                log.info(f"                  rows affected: {cur.rowcount}")
         return 0
     finally:
         conn.close()
 
 def cmd_import_hub_data(args):
-    with log_open() as lf:
-        return do_import_hub_data(logfile=lf, dry_run=args.dry_run)
+    return do_import_hub_data(dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -2259,7 +2200,7 @@ def _ip_excluded(ip, filters):
             return True
     return False
 
-def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
+def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     """Parse a cmsauth-format file and INSERT IGNORE login/simulation
     events into metrics.userlogin.  Faithful port of xlogimport_authlog.php
     against the source-tree version (which filters action ∈ {login,
@@ -2272,13 +2213,8 @@ def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
         msg = "[import-auth] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     # Pull the IP exclusion list once
     conn = _open_db(metrics_db)
@@ -2343,7 +2279,7 @@ def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
         if src is not sys.stdin:
             src.close()
 
-    log(f"[import-auth] parsed {total} line(s); "
+    log.info(f"[import-auth] parsed {total} line(s); "
         f"login/simulation kept = {len(rows)}; "
         f"unrecognized = {unrec}; "
         f"filtered = {skipped_filter}; "
@@ -2365,13 +2301,12 @@ def do_import_auth(input_file, *, batch_size=5000, logfile=None, dry_run=False):
     finally:
         conn.close()
 
-    log(f"[import-auth] inserted {inserted} new row(s) into userlogin "
+    log.info(f"[import-auth] inserted {inserted} new row(s) into userlogin "
         f"(others were duplicates rejected by INSERT IGNORE)")
     return 0
 
 def cmd_import_auth(args):
-    with log_open() as lf:
-        return do_import_auth(args.input_file, logfile=lf, dry_run=args.dry_run)
+    return do_import_auth(args.input_file, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -2388,7 +2323,7 @@ USER_INFO_PARAMS = [
 ]
 
 def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
-                      logfile=None, dry_run=False):
+                      dry_run=False):
     """Fill countrycitizen / countryresident / orgtype columns on rows
     in <table> by joining usernames against hub.jos_users +
     hub.jos_user_profiles.  Ports xlogfix_user_info.php.
@@ -2411,8 +2346,7 @@ def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not metrics_db or not hub_db:
         msg = "[fill-user-info] missing metrics_db / hub_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if db_key == "metrics":
@@ -2421,15 +2355,11 @@ def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
         db_name = hub_db
     else:
         msg = f"[fill-user-info] unknown db_key {db_key!r}"
-        print(msg, flush=True)
+        log.info(msg)
         return 2
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     if date_spec or all_dates:
-        log(f"[fill-user-info] {db_name}.{table}: date arg ignored (matching "
+        log.info(f"[fill-user-info] {db_name}.{table}: date arg ignored (matching "
             f"the PHP behaviour — UPDATE has no date filter, only user filter)")
 
     conn = _open_db()
@@ -2449,22 +2379,21 @@ def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
                     f"AND up.profile_value <> ''"
                 )
                 if dry_run:
-                    log(f"  [dry-run] {column} <- profile_key={profile_key!r}")
+                    log.info(f"  [dry-run] {column} <- profile_key={profile_key!r}")
                     continue
                 cur.execute(update_sql, (profile_key,))
-                log(f"[fill-user-info] {column}: {cur.rowcount} row(s) updated")
+                log.info(f"[fill-user-info] {column}: {cur.rowcount} row(s) updated")
                 grand_total += cur.rowcount
             if not dry_run:
-                log(f"[fill-user-info] {db_name}.{table}: {grand_total} total updates")
+                log.info(f"[fill-user-info] {db_name}.{table}: {grand_total} total updates")
         return 0
     finally:
         conn.close()
 
 def cmd_fill_user_info(args):
-    with log_open() as lf:
-        return do_fill_user_info(args.db_key, args.table, args.date_spec,
-                                 all_dates=args.all,
-                                 logfile=lf, dry_run=args.dry_run)
+    return do_fill_user_info(args.db_key, args.table, args.date_spec,
+                             all_dates=args.all,
+                             dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -2509,7 +2438,7 @@ def _ua_is_bot(ua):
             return True
     return False
 
-def do_identify_bots(input_file, *, logfile=None, dry_run=False):
+def do_identify_bots(input_file, *, dry_run=False):
     """Scan an apache-format staged log file, collect unique user-agent
     strings that match any of the bot substring filters, and INSERT IGNORE
     them into metrics.bot_useragents.  Then DELETE two whitelist
@@ -2520,13 +2449,8 @@ def do_identify_bots(input_file, *, logfile=None, dry_run=False):
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
         msg = "[identify-bots] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     unique_uas = set()
     total = 0
@@ -2554,7 +2478,7 @@ def do_identify_bots(input_file, *, logfile=None, dry_run=False):
 
     matched = [ua for ua in unique_uas if _ua_is_bot(ua)]
 
-    log(f"[identify-bots] parsed {total} line(s); "
+    log.info(f"[identify-bots] parsed {total} line(s); "
         f"unique UAs = {len(unique_uas)}; "
         f"flagged as bot = {len(matched)}; "
         f"unrecognized = {unrec}")
@@ -2562,9 +2486,9 @@ def do_identify_bots(input_file, *, logfile=None, dry_run=False):
     if dry_run or not matched:
         if dry_run and matched:
             for ua in matched[:5]:
-                log(f"  [dry-run] would insert: {ua[:120]}")
+                log.info(f"  [dry-run] would insert: {ua[:120]}")
             if len(matched) > 5:
-                log(f"  [dry-run] ... and {len(matched) - 5} more")
+                log.info(f"  [dry-run] ... and {len(matched) - 5} more")
         return 0
 
     conn = _open_db(metrics_db)
@@ -2585,13 +2509,12 @@ def do_identify_bots(input_file, *, logfile=None, dry_run=False):
     finally:
         conn.close()
 
-    log(f"[identify-bots] inserted {inserted} new bot UA(s); "
+    log.info(f"[identify-bots] inserted {inserted} new bot UA(s); "
         f"removed {removed} whitelist override(s)")
     return 0
 
 def cmd_identify_bots(args):
-    with log_open() as lf:
-        return do_identify_bots(args.input_file, logfile=lf, dry_run=args.dry_run)
+    return do_identify_bots(args.input_file, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -2617,7 +2540,7 @@ def _search_array(needle, filters):
 # Backwards-compatible alias for code that already called _ip_excluded.
 _ip_excluded = _search_array
 
-def do_import_webhits(input_file, *, logfile=None, dry_run=False):
+def do_import_webhits(input_file, *, dry_run=False):
     """Aggregate per-day hit counts from an apache staged log and
     INSERT one row per day into metrics.webhits.  Faithful port of
     xlogimport_webhits.php.
@@ -2634,13 +2557,8 @@ def do_import_webhits(input_file, *, logfile=None, dry_run=False):
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
         msg = "[import-webhits] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     # Pull filter lists once
     conn = _open_db(metrics_db)
@@ -2716,16 +2634,16 @@ def do_import_webhits(input_file, *, logfile=None, dry_run=False):
         if src is not sys.stdin:
             src.close()
 
-    log(f"[import-webhits] parsed {total} line(s); "
+    log.info(f"[import-webhits] parsed {total} line(s); "
         f"counted {sum(daily_hits.values())} hit(s) across {len(daily_hits)} day(s); "
         f"unrecognized = {unrec}")
 
     if dry_run or not daily_hits:
         if dry_run:
             for d, h in sorted(daily_hits.items())[:5]:
-                log(f"  [dry-run] {d}  hits={h}")
+                log.info(f"  [dry-run] {d}  hits={h}")
             if len(daily_hits) > 5:
-                log(f"  [dry-run] ... and {len(daily_hits) - 5} more day(s)")
+                log.info(f"  [dry-run] ... and {len(daily_hits) - 5} more day(s)")
         return 0
 
     conn = _open_db(metrics_db)
@@ -2739,12 +2657,11 @@ def do_import_webhits(input_file, *, logfile=None, dry_run=False):
     finally:
         conn.close()
 
-    log(f"[import-webhits] inserted {inserted} row(s) into webhits")
+    log.info(f"[import-webhits] inserted {inserted} row(s) into webhits")
     return 0
 
 def cmd_import_webhits(args):
-    with log_open() as lf:
-        return do_import_webhits(args.input_file, logfile=lf, dry_run=args.dry_run)
+    return do_import_webhits(args.input_file, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -2817,7 +2734,7 @@ def get_domain(hostname):
 FILL_DOMAIN_TABLES = ("web", "toolstart", "sessionlog_metrics")
 
 def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
-                   logfile=None, dry_run=False):
+                   dry_run=False):
     """Derive the `domain` column from `host` for unfilled rows and bulk
     UPDATE the target table.  Ports xlogfix_domain.php — same eligibility
     (domain ∈ {'', '?', NULL} AND host <> ''), same get_domain() logic,
@@ -2833,8 +2750,7 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
     hub_db     = cfg.get("hub_db", "")
     if not metrics_db:
         msg = "[fill-domain] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if db_key == "metrics":
@@ -2843,15 +2759,14 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
         db_name = hub_db
     else:
         msg = f"[fill-domain] unknown db_key {db_key!r}"
-        print(msg, flush=True)
+        log.info(msg)
         return 2
 
     if table not in FILL_DOMAIN_TABLES:
         # Not strictly enforced by the PHP, but the only callers in the
         # pipeline are these three.  Warn but proceed.
-        print(f"[fill-domain] warning: table {table!r} is not one of the "
-              f"usual targets ({FILL_DOMAIN_TABLES}); proceeding anyway",
-              flush=True)
+        log.warning(f"[fill-domain] table {table!r} is not one of the "
+                    f"usual targets ({FILL_DOMAIN_TABLES}); proceeding anyway")
 
     d_col = "start" if table == "sessionlog_metrics" else "datetime"
 
@@ -2863,8 +2778,7 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             start_d, end_d = parse_date_range(date_spec)
         except ValueError as e:
             msg = f"[fill-domain] {e}"
-            print(msg, flush=True)
-            if logfile: logfile.write(msg + "\n")
+            log.info(msg)
             return 2
     else:
         today = date.today()
@@ -2888,10 +2802,6 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
     date_pred_sql = (" AND " + " AND ".join(parts)) if parts else ""
     date_params = tuple(params)
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     scope_label = "ALL" if (start_d is None and end_d is None) \
         else f"{start_d if start_d else '...'}..{end_d if end_d else '...'}"
 
@@ -2907,7 +2817,7 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             cur.execute(select_sql, date_params)
             hosts = [r[0] for r in cur.fetchall() if r[0]]
 
-            log(f"[fill-domain] {db_name}.{table} {scope_label}: "
+            log.info(f"[fill-domain] {db_name}.{table} {scope_label}: "
                 f"{len(hosts)} distinct host(s) to derive domain from")
 
             if not hosts:
@@ -2917,9 +2827,9 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
 
             if dry_run:
                 for h, d in pairs[:5]:
-                    log(f"  [dry-run] {h!r} -> {d!r}")
+                    log.info(f"  [dry-run] {h!r} -> {d!r}")
                 if len(pairs) > 5:
-                    log(f"  [dry-run] ... and {len(pairs) - 5} more")
+                    log.info(f"  [dry-run] ... and {len(pairs) - 5} more")
                 return 0
 
             # Bulk update via temp table + JOIN
@@ -2944,16 +2854,15 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             updated = cur.rowcount
             cur.execute("DROP TEMPORARY TABLE _domain_tmp")
 
-        log(f"[fill-domain] updated {updated} row(s) in {table}")
+        log.info(f"[fill-domain] updated {updated} row(s) in {table}")
         return 0
     finally:
         conn.close()
 
 def cmd_fill_domain(args):
-    with log_open() as lf:
-        return do_fill_domain(args.db_key, args.table, args.date_spec,
-                              all_dates=args.all,
-                              logfile=lf, dry_run=args.dry_run)
+    return do_fill_domain(args.db_key, args.table, args.date_spec,
+                          all_dates=args.all,
+                          dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -3003,7 +2912,7 @@ def _is_excluded_url(url):
     if _SVN_RE.search(url):            return True
     return False
 
-def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False):
+def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     """Parse an apache staged log file and INSERT eligible rows into
     metrics.web.  Ports xlogimport_apache.php (source-tree version with
     the dnload column set).
@@ -3020,13 +2929,8 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
         msg = "[import-apache] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     # Load filter lists once
     conn = _open_db(metrics_db)
@@ -3043,7 +2947,7 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
     finally:
         conn.close()
 
-    log(f"[import-apache] loaded filters: "
+    log.info(f"[import-apache] loaded filters: "
         f"ip={len(ip_filters)} ua={len(ua_filters)} url={len(url_filters)} "
         f"bot_useragents={len(bot_uas)}")
 
@@ -3201,15 +3105,14 @@ def do_import_apache(input_file, *, batch_size=5000, logfile=None, dry_run=False
     finally:
         conn.close()
 
-    log(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
+    log.info(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
         f"eligible={len(rows_buf) if dry_run else inserted}; "
         f"skipped: status={skipped_status} filter={skipped_filter} "
         f"bot={skipped_bot} url={skipped_url}; dnload-flagged={dnload_set}")
     return 0
 
 def cmd_import_apache(args):
-    with log_open() as lf:
-        return do_import_apache(args.input_file, logfile=lf, dry_run=args.dry_run)
+    return do_import_apache(args.input_file, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -3363,7 +3266,7 @@ def _andmore_paths(cur, hub_db, db_prefix, resid_list):
                 fragments.append(("content = %s", f"/site/resources/{path}"))
     return fragments
 
-def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
+def do_andmore_usage(yearmonth=None, *, dry_run=False):
     """Per-resource distinct-user counts → hub.jos_resource_stats.
     Faithful port of xlogfix_andmore_usage.php.
 
@@ -3381,8 +3284,7 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not hub_db or not metrics_db:
         msg = "[andmore-usage] missing hub_db / metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     today = date.today()
@@ -3393,10 +3295,6 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
         ym = f"{today.year:04d}-{today.month:02d}"
         processed_on = f"{ym}-01"
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     conn = _open_db()
     try:
         with conn.cursor() as cur:
@@ -3406,7 +3304,7 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
                 f"ORDER BY publish_up DESC"
             )
             resources = cur.fetchall()
-            log(f"[andmore-usage] {len(resources)} published resource(s) to score")
+            log.info(f"[andmore-usage] {len(resources)} published resource(s) to score")
 
             n_done = 0
             n_skipped_no_paths = 0
@@ -3432,7 +3330,7 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
                     )
                     users = cur.fetchone()[0] or 0
                     if dry_run:
-                        log(f"  [dry-run] resid={resid} period={period} "
+                        log.info(f"  [dry-run] resid={resid} period={period} "
                             f"window={start}..{stop} users={users}")
                         continue
                     cur.execute(
@@ -3445,9 +3343,9 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
                     n_upserts += 1
                 n_done += 1
                 if n_done % 50 == 0:
-                    log(f"  ...processed {n_done}/{len(resources)} resources")
+                    log.info(f"  ...processed {n_done}/{len(resources)} resources")
 
-            log(f"[andmore-usage] done: {n_done} resource(s) scored, "
+            log.info(f"[andmore-usage] done: {n_done} resource(s) scored, "
                 f"{n_skipped_no_paths} skipped (no eligible paths), "
                 f"{n_upserts} resource_stats upsert(s)")
         return 0
@@ -3455,8 +3353,7 @@ def do_andmore_usage(yearmonth=None, *, logfile=None, dry_run=False):
         conn.close()
 
 def cmd_andmore_usage(args):
-    with log_open() as lf:
-        return do_andmore_usage(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+    return do_andmore_usage(args.yearmonth, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -3568,8 +3465,7 @@ def _get_ip_geodata(conn, ip, *, url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
                 root = ET.fromstring(text)
             break
         except (urllib.request.URLError, ET.ParseError, TimeoutError, OSError) as e:
-            print(f"Warning: ipinfo {ep} failed ({e}); trying next fallback",
-                  flush=True)
+            log.warning(f"ipinfo {ep} failed ({e}); trying next fallback")
             continue
     if root is None:
         return geo
@@ -3604,15 +3500,15 @@ def _get_ip_geodata(conn, ip, *, url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
                      geo['ipLATITUDE'], geo['ipLONGITUDE']),
                 )
     elif status == '_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_':
-        print("Warning: HUBzero.org IP-Geo location key invalid for this host. "
-              "Check the hub registration / hub_key setting.", flush=True)
+        log.warning("HUBzero.org IP-Geo location key invalid for this host. "
+                    "Check the hub registration / hub_key setting.")
     return geo
 
 FILL_IPCOUNTRY_TABLES = ("web", "websessions", "toolstart", "sessionlog_metrics")
 
 def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
                       url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
-                      timeout=IPCOUNTRY_TIMEOUT, logfile=None, dry_run=False):
+                      timeout=IPCOUNTRY_TIMEOUT, dry_run=False):
     """Direct port of xlogfix_ipcountry.php.  Per-IP / per-row, per-week-chunk
     SQL semantics preserved exactly — optimization is a separate concern.
     """
@@ -3621,8 +3517,7 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
     hub_db     = cfg.get("hub_db", "")
     if not metrics_db:
         msg = "[fill-ipcountry] missing metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if db_key == "metrics":
@@ -3631,15 +3526,14 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
         db_name = hub_db
     else:
         msg = f"[fill-ipcountry] unknown db_key {db_key!r}"
-        print(msg, flush=True)
+        log.info(msg)
         return 2
 
     d_col = "start" if table == "sessionlog_metrics" else "datetime"
 
     if all_dates:
         msg = "[fill-ipcountry] --all not supported; specify a date or range"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if date_spec:
@@ -3647,25 +3541,19 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
             start_d, end_d = parse_date_range(date_spec)
         except ValueError as e:
             msg = f"[fill-ipcountry] {e}"
-            print(msg, flush=True)
-            if logfile: logfile.write(msg + "\n")
+            log.info(msg)
             return 2
         if start_d is None or end_d is None:
             msg = "[fill-ipcountry] open-ended ranges not supported"
-            print(msg, flush=True)
-            if logfile: logfile.write(msg + "\n")
+            log.info(msg)
             return 2
     else:
         today = date.today()
         start_d = today.replace(day=1)
         end_d   = today + timedelta(days=1)
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     chunks = list(_findweeks(start_d, end_d))
-    log(f"[fill-ipcountry] {db_name}.{table} {start_d}..{end_d}: "
+    log.info(f"[fill-ipcountry] {db_name}.{table} {start_d}..{end_d}: "
         f"{len(chunks)} week chunk(s); url={url}")
 
     conn = _open_db()
@@ -3688,7 +3576,7 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
             if not rows:
                 continue
 
-            log(f"  chunk {c_start}..{c_end}: {len(rows)} distinct IP(s)")
+            log.info(f"  chunk {c_start}..{c_end}: {len(rows)} distinct IP(s)")
             if dry_run:
                 continue
 
@@ -3705,20 +3593,19 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
                             (country, ip),
                         )
                         total_update += cur.rowcount
-        log(f"[fill-ipcountry] done: {total_select} IP(s) considered, "
+        log.info(f"[fill-ipcountry] done: {total_select} IP(s) considered, "
             f"{total_update} row(s) updated")
         return 0
     finally:
         conn.close()
 
 def cmd_fill_ipcountry(args):
-    with log_open() as lf:
-        return do_fill_ipcountry(
-            args.db_key, args.table, args.date_spec,
-            all_dates=args.all,
-            url=args.url, hub_key=args.hub_key, timeout=args.timeout,
-            logfile=lf, dry_run=args.dry_run,
-        )
+    return do_fill_ipcountry(
+        args.db_key, args.table, args.date_spec,
+        all_dates=args.all,
+        url=args.url, hub_key=args.hub_key, timeout=args.timeout,
+        dry_run=args.dry_run,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3915,7 +3802,7 @@ def _propagate_to_resource_stats(cur, hub_db, db_prefix, dthis, period, resid):
                 f"processed_on=NOW() WHERE id = %s",
                 row + (existing_id,))
 
-def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
+def do_gen_tool_stats(yearmonth=None, *, dry_run=False):
     """For each tool resource (jos_resources.type=7), aggregate session and
     job metrics across the standard period codes and UPSERT into
     hub.<prefix>resource_stats_tools, then propagate the subset to
@@ -3926,8 +3813,7 @@ def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
     db_prefix = cfg.get('db_prefix', 'jos_')
     if not hub_db:
         msg = "[gen-tool-stats] missing hub_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if yearmonth:
@@ -3937,10 +3823,6 @@ def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
         ym = f"{today.year:04d}-{today.month:02d}"
     dthis = f"{ym}-00 00:00:00"   # matches PHP get_dates()['dthis']
 
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     conn = _open_db()
     try:
         with conn.cursor() as cur:
@@ -3949,7 +3831,7 @@ def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
                 f"WHERE type = '7' AND alias <> '' ORDER BY title"
             )
             tools = list(cur.fetchall())
-            log(f"[gen-tool-stats] {len(tools)} tool resource(s); month {ym}")
+            log.info(f"[gen-tool-stats] {len(tools)} tool resource(s); month {ym}")
 
             for resid, alias in tools:
                 aliases = _get_tool_versions_aliases(cur, hub_db, db_prefix, alias)
@@ -3969,7 +3851,7 @@ def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
                     stats = _compute_tool_stats(cur, hub_db, aliases, dstart, dstop)
 
                     if dry_run:
-                        log(f"  [dry-run] resid={resid} alias={alias!r} period={period} "
+                        log.info(f"  [dry-run] resid={resid} alias={alias!r} period={period} "
                             f"window={dstart}..{dstop} users={stats['users']} "
                             f"sims={stats['simulations']} jobs={stats['jobs']}")
                         continue
@@ -3978,14 +3860,13 @@ def do_gen_tool_stats(yearmonth=None, *, logfile=None, dry_run=False):
                                            resid, stats, dthis, period, existing_id)
                     _propagate_to_resource_stats(cur, hub_db, db_prefix,
                                                  dthis, period, resid)
-        log(f"[gen-tool-stats] done")
+        log.info(f"[gen-tool-stats] done")
         return 0
     finally:
         conn.close()
 
 def cmd_gen_tool_stats(args):
-    with log_open() as lf:
-        return do_gen_tool_stats(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+    return do_gen_tool_stats(args.yearmonth, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -4067,7 +3948,7 @@ _GEN_TOOL_TOPS = {
     GEN_TOOL_TOP_ORGTYPE:    _gen_orgtypes,
 }
 
-def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
+def do_gen_tool_tops(yearmonth=None, *, dry_run=False):
     """Top-N breakdowns (country / domain / orgtype) for each tool
     resource_stats_tools row of <yearmonth>.  Writes rows into
     hub.jos_resource_stats_tools_topvals.  Direct port of
@@ -4079,8 +3960,7 @@ def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
         msg = "[gen-tool-tops] missing hub_db / metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if yearmonth:
@@ -4089,10 +3969,6 @@ def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
         today = date.today()
         ym = f"{today.year:04d}-{today.month:02d}"
     dthis_str = f"{ym}-00"
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     conn = _open_db()
     try:
@@ -4109,7 +3985,7 @@ def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
                     f"AND res_stats.datetime = %s ORDER BY datetime DESC",
                     (dthis_str,))
                 rows = list(cur.fetchall())
-                log(f"[gen-tool-tops] top={top} processing {len(rows)} stat row(s) for {dthis_str}")
+                log.info(f"[gen-tool-tops] top={top} processing {len(rows)} stat row(s) for {dthis_str}")
 
                 for stat_id, resid, alias, users, sims, period, _dthis_str in rows:
                     aliases = _get_tool_versions_aliases(cur, hub_db, db_prefix, alias)
@@ -4118,7 +3994,7 @@ def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
                     dstart, dstop = period_dates(ym, period)
 
                     if dry_run:
-                        log(f"  [dry-run] top={top} id={stat_id} alias={alias!r} "
+                        log.info(f"  [dry-run] top={top} id={stat_id} alias={alias!r} "
                             f"period={period} window={dstart}..{dstop} users={users}")
                         continue
 
@@ -4129,14 +4005,13 @@ def do_gen_tool_tops(yearmonth=None, *, logfile=None, dry_run=False):
                         (stat_id, top))
                     _GEN_TOOL_TOPS[top](cur, hub_db, metrics_db, db_prefix,
                                         aliases, dstart, dstop, stat_id, users, top)
-        log("[gen-tool-tops] done")
+        log.info("[gen-tool-tops] done")
         return 0
     finally:
         conn.close()
 
 def cmd_gen_tool_tops(args):
-    with log_open() as lf:
-        return do_gen_tool_tops(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+    return do_gen_tool_tops(args.yearmonth, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -4157,7 +4032,7 @@ TOPLISTS_SPEC = [
 ]
 GEN_TOOL_TOPLISTS_PERIODS = (0, 1, 3, 12, 13, 14)
 
-def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
+def do_gen_tool_toplists(yearmonth=None, *, dry_run=False):
     """Per-period top-tool ranked lists into hub.jos_stats_topvals.
     Direct port of gen_tool_toplists.php.
 
@@ -4175,8 +4050,7 @@ def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
         msg = "[gen-tool-toplists] missing hub_db / metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
 
     if yearmonth:
@@ -4184,10 +4058,6 @@ def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
     else:
         today = date.today()
         ym = f"{today.year:04d}-{today.month:02d}"
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     conn = _open_db()
     try:
@@ -4198,7 +4068,7 @@ def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
                     dthis = f"{ym}-00 00:00:00"
 
                     if dry_run:
-                        log(f"  [dry-run] top={top} ({label}) period={period} "
+                        log.info(f"  [dry-run] top={top} ({label}) period={period} "
                             f"window={dstart}..{dstop}")
                         continue
 
@@ -4244,14 +4114,13 @@ def do_gen_tool_toplists(yearmonth=None, *, logfile=None, dry_run=False):
                             f"VALUES (%s, %s, %s, %s, %s, %s)",
                             (top, dthis, period, rank, f"{resid} ~ {title}", cnt or 0))
                         rank += 1
-        log("[gen-tool-toplists] done")
+        log.info("[gen-tool-toplists] done")
         return 0
     finally:
         conn.close()
 
 def cmd_gen_tool_toplists(args):
-    with log_open() as lf:
-        return do_gen_tool_toplists(args.yearmonth, logfile=lf, dry_run=args.dry_run)
+    return do_gen_tool_toplists(args.yearmonth, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -4281,7 +4150,7 @@ _MIDDLEWARE_USER_FILTER = (
     "AND s.username NOT LIKE 'hctest%' "
 )
 
-def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
+def _do_middleware_copy(metric, *, dry_run=False):
     """Common implementation for both middleware-wall and middleware-cpu.
 
     metric is the joblog column to copy and the toolstart column to
@@ -4296,13 +4165,8 @@ def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
     metrics_db = cfg.get('metrics_db', '')
     if not hub_db or not metrics_db:
         msg = f"[middleware-{metric}] missing hub_db / metrics_db in access.cfg"
-        print(msg, flush=True)
-        if logfile: logfile.write(msg + "\n")
+        log.info(msg)
         return 2
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     # Build the INSERT — only the metric column varies between wall/cpu.
     # Perl: `int($x + 0.5)` — round-half-up.  MariaDB's ROUND() on a DOUBLE
@@ -4359,8 +4223,8 @@ def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
 
     if dry_run:
         if do_insert:
-            log(f"  [dry-run] INSERT: would scan joblog×sessionlog vs toolstart")
-        log(f"  [dry-run] UPDATE: {metric} where existing row has bad value and joblog has > 0")
+            log.info(f"  [dry-run] INSERT: would scan joblog×sessionlog vs toolstart")
+        log.info(f"  [dry-run] UPDATE: {metric} where existing row has bad value and joblog has > 0")
         return 0
 
     conn = _open_db()
@@ -4372,29 +4236,27 @@ def _do_middleware_copy(metric, *, logfile=None, dry_run=False):
                 inserted = cur.rowcount
             cur.execute(update_sql)
             updated = cur.rowcount
-        log(f"[middleware-{metric}] inserted {inserted} new toolstart row(s), "
+        log.info(f"[middleware-{metric}] inserted {inserted} new toolstart row(s), "
             f"updated {metric} on {updated}")
         return 0
     finally:
         conn.close()
 
-def do_middleware_wall(*, logfile=None, dry_run=False):
+def do_middleware_wall(*, dry_run=False):
     """Direct port of xlogfix_middleware_wall.pl — copy joblog.walltime
     into metrics.toolstart, inserting missing rows."""
-    return _do_middleware_copy("walltime", logfile=logfile, dry_run=dry_run)
+    return _do_middleware_copy("walltime", dry_run=dry_run)
 
-def do_middleware_cpu(*, logfile=None, dry_run=False):
+def do_middleware_cpu(*, dry_run=False):
     """Direct port of xlogfix_middleware_cpu.pl — copy joblog.cputime
     into metrics.toolstart, inserting missing rows."""
-    return _do_middleware_copy("cputime", logfile=logfile, dry_run=dry_run)
+    return _do_middleware_copy("cputime", dry_run=dry_run)
 
 def cmd_middleware_wall(args):
-    with log_open() as lf:
-        return do_middleware_wall(logfile=lf, dry_run=args.dry_run)
+    return do_middleware_wall(dry_run=args.dry_run)
 
 def cmd_middleware_cpu(args):
-    with log_open() as lf:
-        return do_middleware_cpu(logfile=lf, dry_run=args.dry_run)
+    return do_middleware_cpu(dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -4460,7 +4322,7 @@ def _emit_websession(conn_write, s_id, s_datetime, s_ip, s_host,
             )
 
 
-def do_logfix_session(month=None, *, logfile=None, dry_run=False):
+def do_logfix_session(month=None, *, dry_run=False):
     """Direct port of logfix_session.pl.
 
     Walks the 4 fixed week ranges (day 1-8, 9-16, 17-24, 25-1 of next month);
@@ -4477,10 +4339,6 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
       * INSERT IGNORE on websessions, so duplicate ids are silently dropped.
     """
     import pymysql.cursors
-
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
 
     if month:
         try:
@@ -4515,17 +4373,17 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
                 cur_m += 1
             weekend.append(f"{cur_y}-{cur_m}-1")
 
-    log(f"[logfix-session] month={year:04d}-{mon:02d}")
+    log.info(f"[logfix-session] month={year:04d}-{mon:02d}")
     for i in range(4):
-        log(f"  week {i}: {weekbegin[i]} .. {weekend[i]}")
+        log.info(f"  week {i}: {weekbegin[i]} .. {weekend[i]}")
 
     if dry_run:
-        log("  [dry-run] not executing")
+        log.info("  [dry-run] not executing")
         return 0
 
     metrics_db = db_config().get('metrics_db', '')
     if not metrics_db:
-        log("[logfix-session] missing metrics_db in access.cfg")
+        log.info("[logfix-session] missing metrics_db in access.cfg")
         return 2
 
     conn_read  = _open_db(metrics_db)
@@ -4633,12 +4491,12 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
             finally:
                 cur_read.close()
 
-            log(f"  week {w}: emitted {week_sessions} session(s), "
+            log.info(f"  week {w}: emitted {week_sessions} session(s), "
                 f"stamped {week_events} web event(s)")
             total_sessions += week_sessions
             total_events   += week_events
 
-        log(f"[logfix-session] total: {total_sessions} session(s), "
+        log.info(f"[logfix-session] total: {total_sessions} session(s), "
             f"{total_events} web event(s), {total_jobs} toolstart job(s) linked")
         return 0
     finally:
@@ -4647,8 +4505,7 @@ def do_logfix_session(month=None, *, logfile=None, dry_run=False):
 
 
 def cmd_logfix_session(args):
-    with log_open() as lf:
-        return do_logfix_session(args.month, logfile=lf, dry_run=args.dry_run)
+    return do_logfix_session(args.month, dry_run=args.dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -5429,7 +5286,7 @@ def _summary_misc_usage(cur, metrics_db, db_prefix,
 
 
 def do_summarize_month(yearmonth=None, *, only=None, periods=None,
-                       logfile=None, dry_run=False):
+                       dry_run=False):
     """Port of xlogfix_summary.php.  Drops/rebuilds userlogin_lite, loads
     the rappture-tool alias set and the AS/EU/NOT-AS-EU country lists,
     then loops the six periods and writes summary_*_vals for each.
@@ -5437,10 +5294,6 @@ def do_summarize_month(yearmonth=None, *, only=None, periods=None,
     only:    iterable subset of SUMMARY_SECTIONS (default: all)
     periods: iterable subset of period codes (default: SUMMARY_PERIODS_DEFAULT)
     """
-    def log(s):
-        print(s, flush=True)
-        if logfile: logfile.write(s + "\n")
-
     if not yearmonth:
         # PHP default: last month.
         today = date.today()
@@ -5462,38 +5315,38 @@ def do_summarize_month(yearmonth=None, *, only=None, periods=None,
     metrics_db = cfg.get('metrics_db', '')
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
-        log("[summarize-month] missing hub_db / metrics_db in access.cfg")
+        log.info("[summarize-month] missing hub_db / metrics_db in access.cfg")
         return 2
 
-    log(f"[summarize-month] month={yearmonth} sections={','.join(sections)} "
+    log.info(f"[summarize-month] month={yearmonth} sections={','.join(sections)} "
         f"periods={','.join(str(p) for p in period_codes)}")
 
     if dry_run:
         for p in period_codes:
             dstart, dstop, dthis = _summary_get_dates(dthis_input, p)
-            log(f"  [dry-run] period={p} dthis={dthis} {dstart} .. {dstop}")
+            log.info(f"  [dry-run] period={p} dthis={dthis} {dstart} .. {dstop}")
         return 0
 
     conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
             # One-shot prep.
-            log("[summarize-month] rebuilding userlogin_lite")
+            log.info("[summarize-month] rebuilding userlogin_lite")
             _summary_rebuild_userlogin_lite(cur, metrics_db)
 
             need_sim_usage = "sim-usage" in sections
             rappture_tools_sql = ""
             if need_sim_usage:
-                log("[summarize-month] loading rappture tool aliases")
+                log.info("[summarize-month] loading rappture tool aliases")
                 rappture_tools_sql = _summary_get_rappture_tools(
                     cur, hub_db, db_prefix)
 
-            log("[summarize-month] caching country/continent lists")
+            log.info("[summarize-month] caching country/continent lists")
             continents = _summary_continents(cur, metrics_db)
 
             for period in period_codes:
                 dstart, dstop, dthis = _summary_get_dates(dthis_input, period)
-                log(f"  period={period} dthis={dthis} {dstart} .. {dstop}")
+                log.info(f"  period={period} dthis={dthis} {dstart} .. {dstop}")
 
                 # login_ips_tmp is rebuilt per-period (the IN-clause shrinks
                 # over short periods).  Always needed by int_users / dl users
@@ -5536,7 +5389,7 @@ def do_summarize_month(yearmonth=None, *, only=None, periods=None,
                         cur, metrics_db, db_prefix,
                         dthis, dstart, dstop, period)
 
-        log("[summarize-month] done")
+        log.info("[summarize-month] done")
         return 0
     finally:
         conn.close()
@@ -5549,25 +5402,22 @@ def cmd_summarize_month(args):
     periods = None
     if args.periods:
         periods = tuple(int(p) for p in args.periods.split(",") if p.strip())
-    with log_open() as lf:
-        return do_summarize_month(
-            args.yearmonth,
-            only=only, periods=periods,
-            logfile=lf, dry_run=args.dry_run,
-        )
+    return do_summarize_month(
+        args.yearmonth,
+        only=only, periods=periods,
+        dry_run=args.dry_run,
+    )
 
 
 def cmd_resolve_dns(args):
-    with log_open() as lf:
-        return do_resolve_dns(
-            args.db_key, args.table, args.date_spec,
-            all_dates=args.all,
-            nameserver=args.nameserver,
-            concurrency=args.concurrency,
-            timeout=args.timeout,
-            logfile=lf,
-            dry_run=args.dry_run,
-        )
+    return do_resolve_dns(
+        args.db_key, args.table, args.date_spec,
+        all_dates=args.all,
+        nameserver=args.nameserver,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        dry_run=args.dry_run,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5579,7 +5429,7 @@ def cmd_run(args):
 
     if not dry_run:
         if not acquire_lock():
-            print(f"[run] still running — skipping.")
+            log.info(f"[run] still running — skipping.")
             return
 
     try:
@@ -5605,60 +5455,59 @@ def cmd_run(args):
 
         # Fast exit: nothing in daily/, already analyzed today, nothing left to summarize.
         if not has_pending and analyzed_today and not prev_needs_work:
-            print(f"[run] nothing to do")
+            log.info(f"[run] nothing to do")
             return
 
-        with log_open() as logfile:
+        if not dry_run:
+            log.debug(f"=== hzmetrics.py run @ {datetime.now()} ===")
+
+        # Always import pending days for the current month first.
+        if current_pending:
+            log.info(f"[run] importing {len(current_pending)} pending day(s) for {today_str}")
+            for date_str in current_pending:
+                log.info(f"--- {date_str} ---")
+                do_import_day(date_str, dry_run)
+
+        if backlog_months:
+            # Catch-up mode: one backlog month per tick.
+            target    = backlog_months[0]
+            remaining = len(backlog_months)
+            log.info(f"[run] catch-up: {remaining} backlog month(s) — processing {target}")
             if not dry_run:
-                logfile.write(f"\n=== hzmetrics.py run @ {datetime.now()} ===\n")
+                log.debug(f"catch-up: {target} ({remaining} remaining)")
+            days = pending_days_for_month(target)
+            for date_str in days:
+                log.info(f"--- {date_str} ---")
+                do_import_day(date_str, dry_run)
+            log.info(f">>> analyzing {target}")
+            do_analyze(target, dry_run)
+            log.info(f">>> summarizing {target}")
+            do_summarize(target, dry_run)
 
-            # Always import pending days for the current month first.
-            if current_pending:
-                print(f"[run] importing {len(current_pending)} pending day(s) for {today_str}")
-                for date_str in current_pending:
-                    print(f"\n--- {date_str} ---")
-                    do_import_day(date_str, logfile, dry_run)
-
-            if backlog_months:
-                # Catch-up mode: one backlog month per tick.
-                target    = backlog_months[0]
-                remaining = len(backlog_months)
-                print(f"\n[run] catch-up: {remaining} backlog month(s) — processing {target}")
+        else:
+            # Normal mode: analyze current month once per day, then check previous month.
+            if not analyzed_today:
+                log.info(f"[run] analyzing current month {today_str}")
+                do_analyze(today_str, dry_run)
                 if not dry_run:
-                    logfile.write(f"catch-up: {target} ({remaining} remaining)\n")
-                days = pending_days_for_month(target)
-                for date_str in days:
-                    print(f"\n--- {date_str} ---")
-                    do_import_day(date_str, logfile, dry_run)
-                print(f"\n>>> analyzing {target}")
-                do_analyze(target, logfile, dry_run)
-                print(f"\n>>> summarizing {target}")
-                do_summarize(target, logfile, dry_run)
+                    update_state(analyzed=today_date)
 
-            else:
-                # Normal mode: analyze current month once per day, then check previous month.
-                if not analyzed_today:
-                    print(f"\n[run] analyzing current month {today_str}")
-                    do_analyze(today_str, logfile, dry_run)
-                    if not dry_run:
-                        update_state(analyzed=today_date)
+            if prev_needs_work:
+                log.info(f"[run] {prev} complete — analyzing and summarizing")
+                do_analyze(prev, dry_run)
+                do_summarize(prev, dry_run)
+            elif not is_month_summarized(prev):
+                last    = last_day_of_month(prev)
+                days_in = date.today().day
+                if days_in > 5:
+                    log.warning(f"[run] {prev} last day ({last}) never arrived "
+                                f"({days_in}d into {today_str}) — summarizing without it")
+                    do_analyze(prev, dry_run)
+                    do_summarize(prev, dry_run)
+                else:
+                    log.info(f"[run] {prev} last day ({last}) not yet imported — deferring")
 
-                if prev_needs_work:
-                    print(f"\n[run] {prev} complete — analyzing and summarizing")
-                    do_analyze(prev, logfile, dry_run)
-                    do_summarize(prev, logfile, dry_run)
-                elif not is_month_summarized(prev):
-                    last    = last_day_of_month(prev)
-                    days_in = date.today().day
-                    if days_in > 5:
-                        print(f"\n[run] WARNING: {prev} last day ({last}) never arrived "
-                              f"({days_in}d into {today_str}) — summarizing without it")
-                        do_analyze(prev, logfile, dry_run)
-                        do_summarize(prev, logfile, dry_run)
-                    else:
-                        print(f"\n[run] {prev} last day ({last}) not yet imported — deferring")
-
-            print("\n>>> done")
+        log.info(">>> done")
 
     finally:
         if not dry_run:
@@ -5689,20 +5538,20 @@ def main():
     p_status.set_defaults(func=cmd_status)
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
+    p_process.set_defaults(func=cmd_process)
     grp = p_process.add_mutually_exclusive_group()
     grp.add_argument("--next",  action="store_true",  help="Use the oldest pending month")
     grp.add_argument("--month", metavar="YYYY-MM",    help="Specify a month")
     grp.add_argument("--day",   metavar="YYYY-MM-DD", help="Specify a single day")
-    p_process.set_defaults(func=cmd_process)
     p_process.add_argument("--force",   action="store_true", help="Skip order and current-month checks")
     p_process.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_import = sub.add_parser("import", help="Raw log ingestion only — fetch, import, archive")
+    p_import.set_defaults(func=cmd_import)
     grp2 = p_import.add_mutually_exclusive_group()
     grp2.add_argument("--next",  action="store_true",  help="Use the oldest pending month")
     grp2.add_argument("--month", metavar="YYYY-MM",    help="Specify a month")
     grp2.add_argument("--day",   metavar="YYYY-MM-DD", help="Specify a single day")
-    p_import.set_defaults(func=cmd_import)
     p_import.add_argument("--force",    action="store_true", help="Skip order and current-month checks")
     p_import.add_argument("--dry-run",  action="store_true", help="Show what would be done without doing it")
 
@@ -5732,10 +5581,10 @@ def main():
     p_dnload.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_geo = sub.add_parser("fill-geo", help="Backfill missing GeoIP country data")
+    p_geo.set_defaults(func=cmd_fill_geo)
     grp_geo = p_geo.add_mutually_exclusive_group(required=True)
     grp_geo.add_argument("--month", metavar="YYYY-MM", help="Fill a specific month")
     grp_geo.add_argument("--all",   action="store_true", help="Fill all months with missing GeoIP data")
-    p_geo.set_defaults(func=cmd_fill_geo)
     p_geo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_hub = sub.add_parser("import-hub-data",
@@ -5978,6 +5827,7 @@ def main():
     if not getattr(args, "func", None):
         parser.print_help()
         return
+    setup_logging()
     args.func(args)
 
 if __name__ == "__main__":
