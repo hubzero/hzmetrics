@@ -4626,8 +4626,12 @@ def _summary_get_rappture_tools(cur, hub_db, db_prefix):
             # /apps/<tool>/...  → index 2 is the tool dir
             if len(parts) >= 3 and parts[2]:
                 seeds.append(parts[2])
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        # /apps may be unmounted, find may be missing, the shell may
+        # have failed — log so the summary's tool list isn't quietly
+        # truncated to just ["workspace"] with no signal.
+        log.warning(f"[summarize-month] /apps scan failed ({e}); "
+                    f"tool seeds limited to {seeds}")
     # Dedup, preserving order.
     seen = set()
     seeds = [s for s in seeds if not (s in seen or seen.add(s))]
