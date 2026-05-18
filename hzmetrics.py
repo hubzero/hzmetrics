@@ -233,6 +233,16 @@ def last_imported_date() -> str | None:
 def is_current_month(month_str: str) -> bool:
     return month_str == date.today().strftime("%Y-%m")
 
+def _require_complete_month(month: str, force: bool) -> None:
+    """Abort with a clear error if `month` is the current calendar month
+    and the caller hasn't explicitly opted in via --force.  Used by the
+    analyze / summarize entrypoints to refuse to score an in-flight
+    month, which would yield wrong rolling-window numbers."""
+    if is_current_month(month) and not force:
+        log.error(f"{month} is the current month and not yet complete.")
+        log.error(f"  Use --force to override.")
+        raise SystemExit(1)
+
 def _arg_yyyymm(s: str) -> str:
     """argparse `type=` validator: accept 'YYYY-MM', reject anything else.
 
@@ -1207,10 +1217,7 @@ def cmd_import(args):
 
 def cmd_analyze(args):
     dry_run = args.dry_run
-    if is_current_month(args.month) and not args.force:
-        log.error(f"{args.month} is the current month and not yet complete.")
-        log.error(f"  Use --force to override.")
-        raise SystemExit(1)
+    _require_complete_month(args.month, args.force)
     do_analyze(args.month, dry_run)
     do_summarize(args.month, dry_run)
     log.info(">>> done")
@@ -1222,10 +1229,7 @@ def cmd_analyze(args):
 
 def cmd_summarize(args):
     dry_run = args.dry_run
-    if is_current_month(args.month) and not args.force:
-        log.error(f"{args.month} is the current month and not yet complete.")
-        log.error(f"  Use --force to override.")
-        raise SystemExit(1)
+    _require_complete_month(args.month, args.force)
     do_summarize(args.month, dry_run)
     log.info(">>> done")
 
