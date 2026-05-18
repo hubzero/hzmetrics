@@ -262,6 +262,22 @@ def _arg_yyyymm(s: str) -> str:
         raise argparse.ArgumentTypeError(f"expected YYYY-MM, got {s!r}")
     return s
 
+def _arg_sql_identifier(s: str) -> str:
+    """argparse `type=` validator: accept SQL-identifier shape only —
+    `[A-Za-z_][A-Za-z0-9_]*` — and reject anything else.
+
+    Used on CLI args (table names) that get interpolated into SQL as
+    identifiers, since identifiers cannot be parameterized via %s.
+    Argparse `choices=` is preferable where the set of valid tables is
+    small and fixed; this regex validator is for the open-ended cases
+    (e.g., `resolve-dns <table>` works against any table with a date
+    column).
+    """
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+        raise argparse.ArgumentTypeError(
+            f"expected SQL identifier (table name), got {s!r}")
+    return s
+
 def _open_input(path: str):
     """Open `path` for reading, with `"-"` treated as stdin.
 
@@ -2496,6 +2512,10 @@ def cmd_import_auth(args):
 #                  toolstart / sessionlog_metrics rows by joining to hub
 #                  user profiles; ports xlogfix_user_info.php)
 # ---------------------------------------------------------------------------
+
+# Tables `fill-user-info` accepts as its <table> arg — must have a
+# `user` column joinable against hub_db.<prefix>users.username.
+FILL_USER_INFO_TABLES = ("toolstart", "sessionlog_metrics", "web", "websessions")
 
 # (column-in-target-table, profile_key-in-hub-user_profiles)
 USER_INFO_PARAMS = [
@@ -5933,7 +5953,7 @@ def main() -> None:
     p_fd.set_defaults(func=cmd_fill_domain)
     p_fd.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
-    p_fd.add_argument("table",
+    p_fd.add_argument("table", choices=list(FILL_DOMAIN_TABLES),
         help="Target table (web | toolstart | sessionlog_metrics)")
     p_fd.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
         help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' (default: current month)")
@@ -5966,7 +5986,7 @@ def main() -> None:
     p_ui.set_defaults(func=cmd_fill_user_info)
     p_ui.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
-    p_ui.add_argument("table",
+    p_ui.add_argument("table", choices=list(FILL_USER_INFO_TABLES),
         help="Target table (typically toolstart or sessionlog_metrics)")
     p_ui.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
         help="Accepted for CLI compat; ignored — UPDATE has no date filter")
@@ -6004,7 +6024,7 @@ def main() -> None:
     p_dns.set_defaults(func=cmd_resolve_dns)
     p_dns.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
-    p_dns.add_argument("table",
+    p_dns.add_argument("table", type=_arg_sql_identifier,
         help="Target table (web | toolstart | sessionlog_metrics | ...)")
     p_dns.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
         help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' of any combination "
