@@ -6028,7 +6028,12 @@ def main() -> None:
         return
     setup_logging()
     log.debug(f"=== hzmetrics.py {' '.join(sys.argv[1:])} ===")
-    args.func(args)
+    # Propagate the handler's return code as the process exit status so
+    # cron / CI see a real failure (do_* helpers return 1 on mysql_exec
+    # failure, 2 on config errors, etc.).  None or 0 means success.
+    rc = args.func(args)
+    if rc:
+        raise SystemExit(rc)
 
 if __name__ == "__main__":
     main()
