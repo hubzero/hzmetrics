@@ -1572,6 +1572,147 @@ def _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng):
         info = info[:-4]
     return info
 
+def _whoisonline_clear_stale(conn, hub_db, db_prefix):
+    """Delete session_geo rows older than WHOISONLINE_IDLE_TIME seconds."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE (UNIX_TIMESTAMP() - time) > %s",
+            (WHOISONLINE_IDLE_TIME,))
+
+
+def _whoisonline_populate_from_session(conn, hub_db, db_prefix):
+    """INSERT IGNORE fresh rows from jos_session — existing rows in
+    session_geo are kept so their resolved host/geo data survives."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"INSERT IGNORE INTO {hub_db}.{db_prefix}session_geo "
+            f"(ip, session_id, username, time, guest, userid) "
+            f"SELECT ip, session_id, username, time, guest, userid "
+            f"FROM {hub_db}.{db_prefix}session "
+            f"WHERE (UNIX_TIMESTAMP() - time) < %s "
+            f"GROUP BY ip, username",
+            (WHOISONLINE_IDLE_TIME,))
+
+
+def _whoisonline_propagate_known(conn, hub_db, db_prefix):
+    """Copy (host, domain) from one already-resolved session_geo row to
+    every other row carrying the same IP — avoids re-resolving an IP
+    we've already mapped earlier in this session."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT ip, host, domain FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE host <> '' AND host <> '(unknown)'")
+        for ip, host, domain in cur.fetchall():
+            cur.execute(
+                f"UPDATE {hub_db}.{db_prefix}session_geo "
+                f"SET host = %s, domain = %s WHERE ip = %s",
+                (host, domain, ip))
+
+
+def _whoisonline_resolve_dns(conn, hub_db, db_prefix):
+    """Reverse-resolve any still-unresolved IPs via aiodns (batched —
+    replaces the PHP's per-IP fork/exec to `host`) and write the
+    resulting host + domain back to session_geo."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT ip FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE (host = '' OR host IS NULL) AND ip <> ''")
+        unresolved = [r[0] for r in cur.fetchall()]
+    if not unresolved:
+        return
+
+    log.info(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
+    import asyncio
+    try:
+        pairs = asyncio.run(_resolve_ips_async(
+            unresolved,
+            DNS_NAMESERVER,
+            min(len(unresolved), DNS_CONCURRENCY),
+            DNS_TIMEOUT))
+    except ImportError as e:
+        # aiodns is a declared hard dependency in pyproject.toml; reaching
+        # this branch means a broken / partial install.  Fall back to
+        # leaving the IPs unresolved (host==ip) so the row still gets a
+        # session_geo entry, but warn loudly so ops notice the host column
+        # is wrong.
+        log.warning(f"[whoisonline] aiodns unavailable ({e}); "
+                    f"{len(unresolved)} session(s) will have "
+                    f"host=ip (install python3-aiodns to fix)")
+        pairs = [(ip, ip) for ip in unresolved]
+
+    with conn.cursor() as cur:
+        for ip, host in pairs:
+            host = host if host and host != '?' else ip
+            domain = _whoisonline_get_domain(ip, host)
+            cur.execute(
+                f"UPDATE {hub_db}.{db_prefix}session_geo "
+                f"SET host = %s, domain = %s WHERE ip = %s",
+                (host, domain, ip))
+
+
+def _whoisonline_fill_geo(conn, hub_db, db_prefix, metrics_db):
+    """For session_geo rows missing ipLATITUDE, look up GeoIP data and
+    write country / region / city / lat / lng / bot columns."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT(ip), domain, bot "
+            f"FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE ipLATITUDE IS NULL")
+        geo_targets = list(cur.fetchall())
+
+    if geo_targets:
+        log.info(f"[whoisonline] geo lookups for {len(geo_targets)} IP(s)")
+    for n_ip, domain, bot in geo_targets:
+        if not bot:
+            bot = _whoisonline_checkforbot(conn, metrics_db, domain)
+        data = _get_ip_geodata(conn, n_ip)
+        if not data:
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {hub_db}.{db_prefix}session_geo "
+                f"SET countrySHORT=%s, countryLONG=%s, ipREGION=%s, "
+                f"ipCITY=%s, ipLATITUDE=%s, ipLONGITUDE=%s, bot=%s "
+                f"WHERE ip = %s",
+                (data['countrySHORT'], data['countryLONG'],
+                 data['ipREGION'], data['ipCITY'],
+                 data['ipLATITUDE'], data['ipLONGITUDE'],
+                 bot, n_ip))
+
+
+def _whoisonline_write_xml(conn, hub_db, db_prefix, xml_file):
+    """Render the <markers> XML consumed by the hub's Google Maps widget
+    from the current session_geo state and write it to xml_file."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT ipLATITUDE, ipLONGITUDE, ipCITY, ipREGION, countrySHORT "
+            f"FROM {hub_db}.{db_prefix}session_geo "
+            f"WHERE ipLATITUDE <> '' "
+            f"GROUP BY ipLATITUDE, ipLONGITUDE")
+        locations = list(cur.fetchall())
+
+    xml_lines = ["<markers>"]
+    for lat, lng, city, region, country in locations:
+        city_str = f"_b_{city}, {region}, {country}_bb_"
+        info = _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT bot FROM {hub_db}.{db_prefix}session_geo "
+                f"WHERE ipLATITUDE = %s AND ipLONGITUDE = %s "
+                f"ORDER BY bot DESC LIMIT 1",
+                (lat, lng))
+            row = cur.fetchone()
+            bot = (row[0] if row else 0) or 0
+        xml_lines.append(
+            f'<marker lat="{lat}" lng="{lng}" '
+            f'info = "{city_str}_hr_{info}" bot = "{bot}"/>'
+        )
+    xml_lines.append("</markers>")
+    xml_file.write_text("\n".join(xml_lines) + "\n")
+    log.info(f"[whoisonline] wrote {xml_file} ({len(locations)} marker(s))")
+
+
 def do_whoisonline(*, dry_run=False):
     """Refresh hub.jos_session_geo from jos_session, resolve DNS / domain /
     GeoIP for new IPs, and rewrite the whoisonline.xml file consumed by
@@ -1583,8 +1724,7 @@ def do_whoisonline(*, dry_run=False):
     hub_dir   = cfg.get('hub_dir', '')
     metrics_db = cfg.get('metrics_db', '')
     if not hub_db or not hub_dir:
-        msg = "[whoisonline] missing hub_db / hub_dir in access.cfg"
-        log.info(msg)
+        log.info("[whoisonline] missing hub_db / hub_dir in access.cfg")
         return 2
 
     map_dir = Path(hub_dir) / "app/site/stats/maps"
@@ -1592,145 +1732,25 @@ def do_whoisonline(*, dry_run=False):
         map_dir = Path(hub_dir) / "site/stats/maps"
     xml_file = map_dir / "whoisonline.xml"
     if not map_dir.is_dir():
-        msg = f"[whoisonline] map dir missing: {map_dir}"
-        log.info(msg)
+        log.info(f"[whoisonline] map dir missing: {map_dir}")
         return 2
 
     if dry_run:
         log.info(f"[whoisonline] dry-run: would update {hub_db}.{db_prefix}session_geo "
-            f"and write {xml_file}")
+                 f"and write {xml_file}")
         return 0
 
     conn = _open_db()
     try:
-        # 1. clear stale sessions
-        with conn.cursor() as cur:
-            cur.execute(
-                f"DELETE FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE (UNIX_TIMESTAMP() - time) > %s",
-                (WHOISONLINE_IDLE_TIME,))
-
-        # 2. populate from jos_session
-        with conn.cursor() as cur:
-            cur.execute(
-                f"INSERT IGNORE INTO {hub_db}.{db_prefix}session_geo "
-                f"(ip, session_id, username, time, guest, userid) "
-                f"SELECT ip, session_id, username, time, guest, userid "
-                f"FROM {hub_db}.{db_prefix}session "
-                f"WHERE (UNIX_TIMESTAMP() - time) < %s "
-                f"GROUP BY ip, username",
-                (WHOISONLINE_IDLE_TIME,))
-
-        # 3. propagate known (host, domain) for IPs already resolved
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT DISTINCT ip, host, domain FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE host <> '' AND host <> '(unknown)'")
-            for ip, host, domain in cur.fetchall():
-                cur.execute(
-                    f"UPDATE {hub_db}.{db_prefix}session_geo "
-                    f"SET host = %s, domain = %s WHERE ip = %s",
-                    (host, domain, ip))
-
-        # 4. DNS lookup for unresolved IPs (batched via aiodns rather than
-        #    the PHP's per-IP fork/exec to `host`).
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT DISTINCT ip FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE (host = '' OR host IS NULL) AND ip <> ''")
-            unresolved = [r[0] for r in cur.fetchall()]
-
-        if unresolved:
-            log.info(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
-            import asyncio
-            try:
-                pairs = asyncio.run(_resolve_ips_async(
-                    unresolved,
-                    DNS_NAMESERVER,
-                    min(len(unresolved), DNS_CONCURRENCY),
-                    DNS_TIMEOUT))
-            except ImportError as e:
-                # aiodns is a declared hard dependency in pyproject.toml;
-                # reaching this branch means a broken / partial install.
-                # Fall back to leaving the IPs unresolved (host==ip) so the
-                # row still gets a session_geo entry, but warn loudly so ops
-                # notice the host column is wrong.
-                log.warning(f"[whoisonline] aiodns unavailable ({e}); "
-                            f"{len(unresolved)} session(s) will have "
-                            f"host=ip (install python3-aiodns to fix)")
-                pairs = [(ip, ip) for ip in unresolved]
-            with conn.cursor() as cur:
-                for ip, host in pairs:
-                    host = host if host and host != '?' else ip
-                    domain = _whoisonline_get_domain(ip, host)
-                    cur.execute(
-                        f"UPDATE {hub_db}.{db_prefix}session_geo "
-                        f"SET host = %s, domain = %s WHERE ip = %s",
-                        (host, domain, ip))
-
-        # 5. GeoIP for sessions without ipLATITUDE
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT DISTINCT(ip), domain, bot "
-                f"FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE ipLATITUDE IS NULL")
-            geo_targets = list(cur.fetchall())
-
-        if geo_targets:
-            log.info(f"[whoisonline] geo lookups for {len(geo_targets)} IP(s)")
-        for n_ip, domain, bot in geo_targets:
-            if not bot:
-                bot = _whoisonline_checkforbot(conn, metrics_db, domain)
-            data = _get_ip_geodata(conn, n_ip)
-            if not data:
-                continue
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"UPDATE {hub_db}.{db_prefix}session_geo "
-                    f"SET countrySHORT=%s, countryLONG=%s, ipREGION=%s, "
-                    f"ipCITY=%s, ipLATITUDE=%s, ipLONGITUDE=%s, bot=%s "
-                    f"WHERE ip = %s",
-                    (data['countrySHORT'], data['countryLONG'],
-                     data['ipREGION'], data['ipCITY'],
-                     data['ipLATITUDE'], data['ipLONGITUDE'],
-                     bot, n_ip))
-
-        # 6. Write the XML for Google Maps consumption
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT DISTINCT ipLATITUDE, ipLONGITUDE, ipCITY, ipREGION, countrySHORT "
-                f"FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE ipLATITUDE <> '' "
-                f"GROUP BY ipLATITUDE, ipLONGITUDE")
-            locations = list(cur.fetchall())
-
-        xml_lines = ["<markers>"]
-        for lat, lng, city, region, country in locations:
-            city_str = f"_b_{city}, {region}, {country}_bb_"
-            info = _whoisonline_get_hosts(conn, hub_db, db_prefix, lat, lng)
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT bot FROM {hub_db}.{db_prefix}session_geo "
-                    f"WHERE ipLATITUDE = %s AND ipLONGITUDE = %s "
-                    f"ORDER BY bot DESC LIMIT 1",
-                    (lat, lng))
-                row = cur.fetchone()
-                bot = (row[0] if row else 0) or 0
-            xml_lines.append(
-                f'<marker lat="{lat}" lng="{lng}" '
-                f'info = "{city_str}_hr_{info}" bot = "{bot}"/>'
-            )
-        xml_lines.append("</markers>")
-        xml_file.write_text("\n".join(xml_lines) + "\n")
-        log.info(f"[whoisonline] wrote {xml_file} ({len(locations)} marker(s))")
-
-        # 7. Final stale-session cleanup (PHP runs clear_stale_sessions twice)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"DELETE FROM {hub_db}.{db_prefix}session_geo "
-                f"WHERE (UNIX_TIMESTAMP() - time) > %s",
-                (WHOISONLINE_IDLE_TIME,))
-
+        _whoisonline_clear_stale(conn, hub_db, db_prefix)
+        _whoisonline_populate_from_session(conn, hub_db, db_prefix)
+        _whoisonline_propagate_known(conn, hub_db, db_prefix)
+        _whoisonline_resolve_dns(conn, hub_db, db_prefix)
+        _whoisonline_fill_geo(conn, hub_db, db_prefix, metrics_db)
+        _whoisonline_write_xml(conn, hub_db, db_prefix, xml_file)
+        # PHP runs clear_stale_sessions twice — keep the same cleanup pass
+        # at the end so a session that aged out mid-tick doesn't ship.
+        _whoisonline_clear_stale(conn, hub_db, db_prefix)
         return 0
     finally:
         conn.close()
