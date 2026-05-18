@@ -1165,8 +1165,6 @@ def cmd_status(args):
 
 def cmd_import(args):
     dry_run = args.dry_run
-    if not dry_run:
-        log.debug(f"=== manage.py import {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
 
     if args.next:
         month_str = oldest_pending_month()
@@ -1213,8 +1211,6 @@ def cmd_analyze(args):
         log.error(f"{args.month} is the current month and not yet complete.")
         log.error(f"  Use --force to override.")
         raise SystemExit(1)
-    if not dry_run:
-        log.debug(f"=== manage.py analyze {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     do_analyze(args.month, dry_run)
     do_summarize(args.month, dry_run)
     log.info(">>> done")
@@ -1230,8 +1226,6 @@ def cmd_summarize(args):
         log.error(f"{args.month} is the current month and not yet complete.")
         log.error(f"  Use --force to override.")
         raise SystemExit(1)
-    if not dry_run:
-        log.debug(f"=== manage.py summarize {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     do_summarize(args.month, dry_run)
     log.info(">>> done")
 
@@ -1242,8 +1236,6 @@ def cmd_summarize(args):
 
 def cmd_process(args):
     dry_run = args.dry_run
-    if not dry_run:
-        log.debug(f"=== manage.py process {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
 
     if args.next:
         month_str = oldest_pending_month()
@@ -1387,8 +1379,6 @@ def cmd_fill_geo(args):
         months = [args.month]
         log.info(f"{'[dry-run] would fill' if dry_run else 'Filling'} GeoIP for {args.month}")
 
-    if not dry_run:
-        log.debug(f"=== manage.py fill-geo {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     for month_str in months:
         log.info(f"--- {month_str} ---")
         do_fill_geo(month_str, dry_run)
@@ -1457,8 +1447,6 @@ def do_backfill_dnload(start_month, dry_run=False):
 
 def cmd_backfill_dnload(args):
     dry_run = args.dry_run
-    if not dry_run:
-        log.debug(f"=== manage.py backfill-dnload {' '.join(sys.argv[1:])}  @ {datetime.now()} ===")
     do_backfill_dnload(args.start, dry_run)
     log.info(">>> done")
 
@@ -5851,6 +5839,7 @@ def main() -> None:
         parser.print_help()
         return
     setup_logging()
+    log.debug(f"=== hzmetrics.py {' '.join(sys.argv[1:])} ===")
     args.func(args)
 
 if __name__ == "__main__":
