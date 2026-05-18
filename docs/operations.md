@@ -106,7 +106,7 @@ remove if the PID is gone.
 
 The pipeline uses `aiodns` with default `concurrency=100` against the
 system resolver.  Symptoms of DNS trouble in
-`/var/log/hubzero/metrics/hzmetrics.log`:
+`/var/log/hubzero/metrics/manage.log`:
 
 ```
 [resolve-dns] 1234/5000 ... 0.12 IP/sec  ← should be 100+
@@ -243,7 +243,7 @@ first.
 Single log file:
 
 ```
-/var/log/hubzero/metrics/hzmetrics.log
+/var/log/hubzero/metrics/manage.log
 ```
 
 Each pipeline stage prints `[<stage>] start` and `[<stage>] done`
@@ -303,7 +303,7 @@ Useful signals to put behind alerts:
 | Signal | How to check | When to alert |
 |---|---|---|
 | Pipeline is behind | `hzmetrics.py status` shows pending days | >3 pending days (autonomous catch-up should resolve within hours; sustained backlog means something is wedged) |
-| Daily run is failing | grep `ERROR` / `FAIL` in `/var/log/hubzero/metrics/hzmetrics.log` since midnight | any new occurrence |
+| Daily run is failing | grep `ERROR` / `FAIL` in `/var/log/hubzero/metrics/manage.log` since midnight | any new occurrence |
 | PID lock is stuck | PID in `/var/run/hzmetrics/hzmetrics.pid` is dead but file is present | >2 hours since lock acquired and PID not running |
 | Logrotate failing | New file in `/var/log/httpd/daily/` is not appearing | no new `<hub>-access.log-YYYYMMDD` after midnight |
 | `web` row count anomaly | Compare today's `web` row count to a 7-day rolling average | row count is >3× the average (bot inflation event) |

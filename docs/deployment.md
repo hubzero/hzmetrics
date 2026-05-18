@@ -47,7 +47,7 @@ is enough.
 /var/spool/cron/apache                         the cron entry (single line)
 /var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
 /var/run/hzmetrics/hzmetrics.state             daily state (created at runtime)
-/var/log/hubzero/metrics/hzmetrics.log         pipeline log
+/var/log/hubzero/metrics/manage.log         pipeline log
 ```
 
 The legacy reference scripts under `tests/legacy/` are **not**
@@ -175,7 +175,7 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py resolve-dns \
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
 ```
 
-Watch `/var/log/hubzero/metrics/hzmetrics.log` while the run is in
+Watch `/var/log/hubzero/metrics/manage.log` while the run is in
 progress.  Each pipeline phase prints `[<phase>] …` start and end
 markers.
 
@@ -187,7 +187,7 @@ postrotate hook so the pipeline picks up the new file without
 restarting (it reopens on the next `tick`):
 
 ```
-/var/log/hubzero/metrics/hzmetrics.log {
+/var/log/hubzero/metrics/manage.log {
     daily
     rotate 14
     compress

@@ -2403,10 +2403,17 @@ def _ip_excluded(ip, filters):
     return False
 
 def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
-    """Parse a cmsauth-format file and INSERT IGNORE login/simulation
-    events into metrics.userlogin.  Faithful port of xlogimport_authlog.php
-    against the source-tree version (which filters action ∈ {login,
-    simulation}; master inserted every action).
+    """Parse a cmsauth-format file and INSERT IGNORE every recognized
+    auth event into metrics.userlogin.
+
+    Faithful port of xlogimport_authlog.php (master branch — inserts
+    every action type unfiltered).  The source-tree variant filtered
+    insert-time to action ∈ {login, simulation}; we intentionally
+    match master instead, then narrow at migration time: migration #4
+    DELETEs every userlogin row with action NOT IN (login, simulation)
+    once, at first `migrate --apply`.  Insert-time skipping is
+    available as commented-out code in the loop below if you ever
+    want to flip back.
 
     input_file: path to the staged auth log (typically
     /var/log/hubzero/metrics/_hub_auth.log) or '-' for stdin.
@@ -2478,7 +2485,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
             rows.append((dt, uid, user, ip, action))
 
     log.info(f"[import-auth] parsed {total} line(s); "
-        f"login/simulation kept = {len(rows)}; "
+        f"kept (all actions, narrowed later by migration #4) = {len(rows)}; "
         f"unrecognized = {unrec}; "
         f"filtered = {skipped_filter}; "
         f"other-action skipped = {skipped_action}")
@@ -3108,8 +3115,9 @@ def _is_excluded_url(url):
 
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     """Parse an apache staged log file and INSERT eligible rows into
-    metrics.web.  Ports xlogimport_apache.php (source-tree version with
-    the dnload column set).
+    metrics.web.  Faithful port of xlogimport_apache.php (the 1018cc2^
+    snapshot — the column `dnload` did not exist yet in the legacy
+    schema at that point).
 
     Eligibility:
       - regex matches new or old apache log format
@@ -3117,7 +3125,12 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
       - IP / UA / URL not matched by exclude_list filters
       - useragent not present in metrics.bot_useragents (exact match)
       - URL not excluded by suffix/path rules, OR is under /resources/
-    Sets dnload=1 for resource-download URL shapes; 0 otherwise.
+
+    Does NOT set `web.dnload` inline.  The dnload column is populated
+    separately by `backfill-dnload` (which fills historical months) and
+    not at import time — matches the pre-1018cc2 legacy behavior.  An
+    in-line dnload variant is sketched in commented-out code below the
+    INSERT SQL if you ever want to flip back to the source-tree shape.
     """
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")

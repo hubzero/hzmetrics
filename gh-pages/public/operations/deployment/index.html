@@ -122,7 +122,7 @@ is enough.</p>
 /var/spool/cron/apache                         the cron entry (single line)
 /var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
 /var/run/hzmetrics/hzmetrics.state             daily state (created at runtime)
-/var/log/hubzero/metrics/hzmetrics.log         pipeline log
+/var/log/hubzero/metrics/manage.log         pipeline log
 </code></pre>
 <p>The legacy reference scripts under <code>tests/legacy/</code> are <strong>not</strong>
 installed on a production host.  They live in this repo only as the
@@ -211,7 +211,7 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py resolve-dns \
 # Does the daily run actually do anything?
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
 </code></pre>
-<p>Watch <code>/var/log/hubzero/metrics/hzmetrics.log</code> while the run is in
+<p>Watch <code>/var/log/hubzero/metrics/manage.log</code> while the run is in
 progress.  Each pipeline phase prints <code>[&lt;phase&gt;] …</code> start and end
 markers.</p>
 <h2 id="logrotate">Logrotate</h2>
@@ -219,7 +219,7 @@ markers.</p>
 <code>/var/log/hubzero/metrics/</code>.  Add a logrotate stanza that invokes the
 postrotate hook so the pipeline picks up the new file without
 restarting (it reopens on the next <code>tick</code>):</p>
-<pre><code>/var/log/hubzero/metrics/hzmetrics.log {
+<pre><code>/var/log/hubzero/metrics/manage.log {
     daily
     rotate 14
     compress

@@ -167,7 +167,7 @@ again, no operator intervention needed.
 The pipeline writes a single log file:
 
 ```
-/var/log/hubzero/metrics/hzmetrics.log
+/var/log/hubzero/metrics/manage.log
 ```
 
 Each stage prints `[<stage>] start` and `[<stage>] done` markers; a

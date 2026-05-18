@@ -162,7 +162,7 @@ remove if the PID is gone.</p>
 <h2 id="dns-resolution-looks-slow">DNS resolution looks slow</h2>
 <p>The pipeline uses <code>aiodns</code> with default <code>concurrency=100</code> against the
 system resolver.  Symptoms of DNS trouble in
-<code>/var/log/hubzero/metrics/hzmetrics.log</code>:</p>
+<code>/var/log/hubzero/metrics/manage.log</code>:</p>
 <pre><code>[resolve-dns] 1234/5000 ... 0.12 IP/sec  ← should be 100+
 </code></pre>
 <p>Check:</p>
@@ -258,7 +258,7 @@ done
 first.</p>
 <h2 id="logs-and-observability">Logs and observability</h2>
 <p>Single log file:</p>
-<pre><code>/var/log/hubzero/metrics/hzmetrics.log
+<pre><code>/var/log/hubzero/metrics/manage.log
 </code></pre>
 <p>Each pipeline stage prints <code>[&lt;stage&gt;] start</code> and <code>[&lt;stage&gt;] done</code>
 markers.  Searching for <code>FAIL</code>, <code>ERROR</code>, or <code>unrecognized</code> surfaces
@@ -319,7 +319,7 @@ Useful signals to put behind alerts:</p>
 </tr>
 <tr>
 <td>Daily run is failing</td>
-<td>grep <code>ERROR</code> / <code>FAIL</code> in <code>/var/log/hubzero/metrics/hzmetrics.log</code> since midnight</td>
+<td>grep <code>ERROR</code> / <code>FAIL</code> in <code>/var/log/hubzero/metrics/manage.log</code> since midnight</td>
 <td>any new occurrence</td>
 </tr>
 <tr>
