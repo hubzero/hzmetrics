@@ -1326,12 +1326,9 @@ def cmd_process(args):
             log.info("Nothing pending in daily/.")
             return
         days = pending_days_for_month(month_str)
-        log.info(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
     elif args.month:
         month_str = args.month
         days = pending_days_for_month(month_str)
-        if days:
-            log.info(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
     elif args.day:
         date_str = args.day.replace("-", "")
         month_str = args.day[:7]
@@ -1348,10 +1345,19 @@ def cmd_process(args):
         log.error("Specify --next, --month, or --day.")
         raise SystemExit(1)
 
-    check_order(days[0], args.force)
-    for date_str in days:
-        log.info(f"--- {date_str} ---")
-        do_import_day(date_str, dry_run)
+    # `days` may be empty: --next can race with another importer that just
+    # archived the only file, and --month can be invoked against a month
+    # whose imports already completed.  In either case, skip the import
+    # loop (check_order would IndexError on days[0]) and proceed to the
+    # analyze/summarize tail on whatever's already in the DB.
+    if days:
+        log.info(f"{'[dry-run] would process' if dry_run else 'Processing'} {len(days)} day(s) for {month_str}")
+        check_order(days[0], args.force)
+        for date_str in days:
+            log.info(f"--- {date_str} ---")
+            do_import_day(date_str, dry_run)
+    else:
+        log.info(f"No new days pending for {month_str}; analyzing existing data.")
 
     if is_current_month(month_str) and not args.force:
         log.info(f">>> {month_str} is the current month — skipping analysis until it ends.")
