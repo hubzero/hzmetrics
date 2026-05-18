@@ -366,9 +366,22 @@ def release_lock() -> None:
     """Drop the flock and unlink LOCK_FILE.  Safe to call without a prior
     acquire — does nothing if no lock is held.  (Kernel would release
     the flock on process exit anyway; this is for the tidiness of the
-    on-disk pid file.)"""
+    on-disk pid file.)
+
+    Order matters: unlink BEFORE releasing the flock, otherwise there is
+    a race window where a second process can acquire the flock on the
+    same inode, write its PID into the file, and then we unlink the
+    file *they* now own — which lets a third process create+lock a
+    fresh file and believe it's the sole holder while the second still
+    thinks it has the lock.  Unlinking while we still hold the flock
+    closes that window.
+    """
     global _lock_fd
     if _lock_fd is not None:
+        try:
+            LOCK_FILE.unlink()
+        except FileNotFoundError:
+            pass
         import fcntl
         try:
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
@@ -376,10 +389,13 @@ def release_lock() -> None:
             pass
         os.close(_lock_fd)
         _lock_fd = None
-    try:
-        LOCK_FILE.unlink()
-    except FileNotFoundError:
-        pass
+    else:
+        # No lock held — still try to tidy a stale PID file from a prior
+        # crashed run, but harmlessly noop if it isn't there.
+        try:
+            LOCK_FILE.unlink()
+        except FileNotFoundError:
+            pass
 
 def read_state() -> dict[str, str]:
     """Parse STATE_FILE into a {key: value} dict.  File format is one
