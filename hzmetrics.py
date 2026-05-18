@@ -112,6 +112,7 @@ import gzip
 import logging
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -318,49 +319,59 @@ def update_state(**kwargs):
 
 # ---------------------------------------------------------------------------
 # Schema migrations
-# Each entry: id (int, sequential), description, sql (uses {metrics_db} placeholder),
-# and check_sql (returns row count > 0 if the change already exists in the schema).
-# Applied state is tracked in metrics_db.migrations.
-# check_sql allows auto-detection of changes applied before this system existed.
+# Applied state is tracked in metrics_db.migrations.  check_sql is what
+# lets us auto-detect changes applied before this system existed: the
+# query returns a count, and the migration is considered already-applied
+# if the count is nonzero — or, when check_expect is set, if the count
+# equals check_expect (used for "rows that should no longer exist" purges).
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Migration:
+    id: int
+    description: str
+    sql: str                         # uses {metrics_db} placeholder
+    check_sql: str | None = None
+    check_expect: int | None = None  # if set, "already applied" means count == this
+
 MIGRATIONS = [
-    {
-        "id": 1,
-        "description": "Index web(dnload) — applied by backfill-dnload May 2026",
-        "sql": "ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);",
-        "check_sql": "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';",
-    },
-    {
-        "id": 2,
-        "description": "Composite index web(sessionid, dnload) — covering index for download_users JOIN",
-        "sql": "ALTER TABLE {metrics_db}.web ADD INDEX web_sessionid_dnload (sessionid, dnload);",
-        "check_sql": "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='web_sessionid_dnload';",
-    },
-    {
-        "id": 3,
-        "description": "Composite index websessions(datetime, jobs, duration, ipcountry) — filter pushdown for int/download_users",
-        "sql": "ALTER TABLE {metrics_db}.websessions ADD INDEX ws_datetime_jobs_dur_country (datetime, jobs, duration, ipcountry);",
-        "check_sql": "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_datetime_jobs_dur_country';",
-    },
-    {
-        "id": 4,
-        "description": "Purge userlogin rows with action not in (login, simulation) — detect/invalid/logout are never queried",
-        "sql": "DELETE FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
-        "check_sql": "SELECT COUNT(*) FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
-        "check_expect": 0,
-    },
-    {
-        "id": 5,
-        "description": "Index websessions(domain) — speeds up domainclass JOIN in download org queries",
-        "sql": "ALTER TABLE {metrics_db}.websessions ADD INDEX ws_domain (domain);",
-        "check_sql": "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_domain';",
-    },
-    {
-        "id": 6,
-        "description": "Index websessions(jobs, ipcountry, duration) — period-14 all-time download_users filter",
-        "sql": "ALTER TABLE {metrics_db}.websessions ADD INDEX ws_jobs_country_dur (jobs, ipcountry, duration);",
-        "check_sql": "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_jobs_country_dur';",
-    },
+    Migration(
+        id=1,
+        description="Index web(dnload) — applied by backfill-dnload May 2026",
+        sql="ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);",
+        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';",
+    ),
+    Migration(
+        id=2,
+        description="Composite index web(sessionid, dnload) — covering index for download_users JOIN",
+        sql="ALTER TABLE {metrics_db}.web ADD INDEX web_sessionid_dnload (sessionid, dnload);",
+        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='web_sessionid_dnload';",
+    ),
+    Migration(
+        id=3,
+        description="Composite index websessions(datetime, jobs, duration, ipcountry) — filter pushdown for int/download_users",
+        sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_datetime_jobs_dur_country (datetime, jobs, duration, ipcountry);",
+        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_datetime_jobs_dur_country';",
+    ),
+    Migration(
+        id=4,
+        description="Purge userlogin rows with action not in (login, simulation) — detect/invalid/logout are never queried",
+        sql="DELETE FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
+        check_sql="SELECT COUNT(*) FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
+        check_expect=0,
+    ),
+    Migration(
+        id=5,
+        description="Index websessions(domain) — speeds up domainclass JOIN in download org queries",
+        sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_domain (domain);",
+        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_domain';",
+    ),
+    Migration(
+        id=6,
+        description="Index websessions(jobs, ipcountry, duration) — period-14 all-time download_users filter",
+        sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_jobs_country_dur (jobs, ipcountry, duration);",
+        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_jobs_country_dur';",
+    ),
 ]
 
 MIGRATIONS_TABLE_SQL = """
@@ -380,16 +391,20 @@ def _automark_applied(metrics_db):
     """Mark migrations as applied if the schema change already exists (applied outside this system)."""
     applied = applied_migration_ids(metrics_db)
     for m in MIGRATIONS:
-        if m["id"] in applied or "check_sql" not in m:
+        if m.id in applied or not m.check_sql:
             continue
-        rows = mysql_query(m["check_sql"].format(metrics_db=metrics_db))
-        expect = str(m.get("check_expect", None))
-        already = (expect == "None" and rows and rows[0] != "0") or (expect != "None" and rows and rows[0] == expect)
+        rows = mysql_query(m.check_sql.format(metrics_db=metrics_db))
+        if not rows:
+            continue
+        if m.check_expect is None:
+            already = rows[0] != "0"
+        else:
+            already = rows[0] == str(m.check_expect)
         if already:
-            desc = m["description"].replace("'", "''")
+            desc = m.description.replace("'", "''")
             mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES ({m['id']}, '{desc}');"
+                f"VALUES ({m.id}, '{desc}');"
             )
 
 def applied_migration_ids(metrics_db):
@@ -404,10 +419,10 @@ def cmd_migrate(args):
     log.info(f"{'ID':<4}  {'STATUS':<9}  DESCRIPTION")
     log.info("-" * 72)
     for m in MIGRATIONS:
-        status = "applied" if m["id"] in applied else "PENDING"
-        log.info(f"{m['id']:<4}  {status:<9}  {m['description']}")
+        status = "applied" if m.id in applied else "PENDING"
+        log.info(f"{m.id:<4}  {status:<9}  {m.description}")
 
-    pending = [m for m in MIGRATIONS if m["id"] not in applied]
+    pending = [m for m in MIGRATIONS if m.id not in applied]
     if not pending:
         log.info("All migrations applied.")
         return
@@ -418,23 +433,23 @@ def cmd_migrate(args):
         log.info("Run with --apply to execute them.")
         return
 
-    log.debug(f"=== manage.py migrate --apply  @ {datetime.now()} ===")
+    log.debug(f"=== hzmetrics.py migrate --apply  @ {datetime.now()} ===")
     for m in pending:
-        sql = m["sql"].format(metrics_db=metrics_db)
-        log.info(f"[{m['id']}] {m['description']}")
+        sql = m.sql.format(metrics_db=metrics_db)
+        log.info(f"[{m.id}] {m.description}")
         log.info(f"    {sql}")
         rc = mysql_exec(sql)
         if rc == 0:
-            desc = m["description"].replace("'", "''")
+            desc = m.description.replace("'", "''")
             mysql_exec(
                 f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES ({m['id']}, '{desc}');"
+                f"VALUES ({m.id}, '{desc}');"
             )
             log.info(f"    done.")
-            log.debug(f"migration {m['id']}: {m['description']}")
+            log.debug(f"migration {m.id}: {m.description}")
         else:
             log.info(f"    FAILED (rc={rc}) — stopping.")
-            log.debug(f"migration {m['id']} FAILED")
+            log.debug(f"migration {m.id} FAILED")
             break
 
     log.info(">>> done")
