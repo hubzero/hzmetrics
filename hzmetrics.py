@@ -1646,8 +1646,14 @@ def do_whoisonline(*, dry_run=False):
                     min(len(unresolved), DNS_CONCURRENCY),
                     DNS_TIMEOUT))
             except ImportError as e:
-                msg = (f"[whoisonline] aiodns unavailable ({e}); skipping DNS step")
-                log.info(msg)
+                # aiodns is a declared hard dependency in pyproject.toml;
+                # reaching this branch means a broken / partial install.
+                # Fall back to leaving the IPs unresolved (host==ip) so the
+                # row still gets a session_geo entry, but warn loudly so ops
+                # notice the host column is wrong.
+                log.warning(f"[whoisonline] aiodns unavailable ({e}); "
+                            f"{len(unresolved)} session(s) will have "
+                            f"host=ip (install python3-aiodns to fix)")
                 pairs = [(ip, ip) for ip in unresolved]
             with conn.cursor() as cur:
                 for ip, host in pairs:
