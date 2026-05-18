@@ -112,6 +112,7 @@ import gzip
 import logging
 import re
 from collections import defaultdict
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -239,6 +240,16 @@ def _arg_yyyymm(s: str) -> str:
     if not re.fullmatch(r"\d{4}-\d{2}", s):
         raise argparse.ArgumentTypeError(f"expected YYYY-MM, got {s!r}")
     return s
+
+def _open_input(path: str):
+    """Open `path` for reading, with `"-"` treated as stdin.
+
+    Returns a context manager so callers can write
+    `with _open_input(path) as src:` regardless of which branch they got
+    — `nullcontext` keeps stdin from being closed when the `with` exits."""
+    if path == "-":
+        return nullcontext(sys.stdin)
+    return open(path, "r", errors="replace")
 
 def check_order(date_str: str, force: bool) -> None:
     """Abort if date_str would be imported out of order."""
@@ -2258,8 +2269,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     skipped_filter = 0
     total = 0
 
-    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
-    try:
+    with _open_input(input_file) as src:
         for line in src:
             total += 1
             line = line.rstrip("\r\n")
@@ -2302,9 +2312,6 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
                 skipped_filter += 1
                 continue
             rows.append((dt, uid, user, ip, action))
-    finally:
-        if src is not sys.stdin:
-            src.close()
 
     log.info(f"[import-auth] parsed {total} line(s); "
         f"login/simulation kept = {len(rows)}; "
@@ -2483,8 +2490,7 @@ def do_identify_bots(input_file, *, dry_run=False):
     total = 0
     unrec = 0
 
-    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
-    try:
+    with _open_input(input_file) as src:
         for line in src:
             total += 1
             line = line.rstrip("\r\n")
@@ -2499,9 +2505,6 @@ def do_identify_bots(input_file, *, dry_run=False):
                 ua = m.group(_APACHE_UA_GROUP_OLD)
             if ua:
                 unique_uas.add(ua)
-    finally:
-        if src is not sys.stdin:
-            src.close()
 
     matched = [ua for ua in unique_uas if _ua_is_bot(ua)]
 
@@ -2604,8 +2607,7 @@ def do_import_webhits(input_file, *, dry_run=False):
     total = 0
     unrec = 0
 
-    src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
-    try:
+    with _open_input(input_file) as src:
         for line in src:
             total += 1
             line = line.rstrip("\r\n")
@@ -2657,9 +2659,6 @@ def do_import_webhits(input_file, *, dry_run=False):
                 continue
 
             daily_hits[datestamp] += 1
-    finally:
-        if src is not sys.stdin:
-            src.close()
 
     log.info(f"[import-webhits] parsed {total} line(s); "
         f"counted {sum(daily_hits.values())} hit(s) across {len(daily_hits)} day(s); "
@@ -3012,8 +3011,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
-            src = sys.stdin if input_file == "-" else open(input_file, "r", errors="replace")
-            try:
+            with _open_input(input_file) as src:
                 for line in src:
                     total += 1
                     line = line.rstrip("\r\n")
@@ -3122,9 +3120,6 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
                         cur.executemany(insert_sql, rows_buf)
                         inserted += cur.rowcount
                         rows_buf = []
-            finally:
-                if src is not sys.stdin:
-                    src.close()
 
             if rows_buf and not dry_run:
                 cur.executemany(insert_sql, rows_buf)
