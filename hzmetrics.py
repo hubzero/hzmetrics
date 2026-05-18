@@ -166,7 +166,7 @@ STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
 # helpers
 # ---------------------------------------------------------------------------
 
-def setup_logging():
+def setup_logging() -> None:
     """Configure the `hzmetrics` logger with a timestamped format on both
     stderr (for cron-emailed output) and the persistent pipeline log file.
 
@@ -200,7 +200,7 @@ def setup_logging():
     except OSError as e:
         log.warning("could not open %s for append: %s", log_path, e)
 
-def dated_files(directory, pattern):
+def dated_files(directory: str | Path, pattern: str) -> list[tuple[str, Path]]:
     """Return sorted list of (date_str, Path) for files matching pattern in directory."""
     results = []
     for p in Path(directory).glob(pattern):
@@ -212,26 +212,26 @@ def dated_files(directory, pattern):
                 break
     return sorted(results)
 
-def pending_days_for_month(month_str):
+def pending_days_for_month(month_str: str) -> list[str]:
     """Sorted list of date strings in daily/ for the given YYYY-MM."""
     yyyymm = month_str.replace("-", "")
     return [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*") if d.startswith(yyyymm)]
 
-def oldest_pending_month():
+def oldest_pending_month() -> str | None:
     files = dated_files(HTTPD_DAILY, f"{SITE}-access*log*")
     if not files:
         return None
     d = files[0][0]
     return f"{d[:4]}-{d[4:6]}"
 
-def last_imported_date():
+def last_imported_date() -> str | None:
     files = dated_files("/var/log/httpd/imported", f"{SITE}-access*log*")
     return files[-1][0] if files else None
 
-def is_current_month(month_str):
+def is_current_month(month_str: str) -> bool:
     return month_str == date.today().strftime("%Y-%m")
 
-def check_order(date_str, force):
+def check_order(date_str: str, force: bool) -> None:
     """Abort if date_str would be imported out of order."""
     if force:
         return
@@ -247,25 +247,25 @@ def check_order(date_str, force):
         log.info(f"       Use --force to override.")
         sys.exit(1)
 
-def previous_month(month_str):
+def previous_month(month_str: str) -> str:
     y, m = int(month_str[:4]), int(month_str[5:7])
     m -= 1
     if m == 0:
         m, y = 12, y - 1
     return f"{y:04d}-{m:02d}"
 
-def last_day_of_month(month_str):
+def last_day_of_month(month_str: str) -> str:
     """Return YYYYMMDD for the last calendar day of the given YYYY-MM."""
     y, m = int(month_str[:4]), int(month_str[5:7])
     last = (datetime(y, m, 28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
     return last.strftime("%Y%m%d")
 
-def is_month_fully_imported(month_str):
+def is_month_fully_imported(month_str: str) -> bool:
     """True if the last calendar day of month_str is present in imported/."""
     last = last_day_of_month(month_str)
     return any(d == last for d, _ in dated_files("/var/log/httpd/imported", f"{SITE}-access*log*"))
 
-def is_month_summarized(month_str):
+def is_month_summarized(month_str: str) -> bool:
     _, _, _, metrics_db = db_credentials()
     dt = month_str + "-00"
     rows = mysql_query(
@@ -274,7 +274,7 @@ def is_month_summarized(month_str):
     )
     return rows and rows[0] != "0"
 
-def acquire_lock():
+def acquire_lock() -> bool:
     """Try to write a PID lock. Returns True if acquired, False if another instance is running.
 
     /var/run/hzmetrics/ must be pre-created and owned by the service user:
@@ -295,13 +295,13 @@ def acquire_lock():
     LOCK_FILE.write_text(str(os.getpid()))
     return True
 
-def release_lock():
+def release_lock() -> None:
     try:
         LOCK_FILE.unlink()
     except FileNotFoundError:
         pass
 
-def read_state():
+def read_state() -> dict[str, str]:
     try:
         return dict(
             line.split("=", 1)
@@ -311,7 +311,7 @@ def read_state():
     except (FileNotFoundError, ValueError):
         return {}
 
-def update_state(**kwargs):
+def update_state(**kwargs: object) -> None:
     state = read_state()
     state.update({k: str(v) for k, v in kwargs.items()})
     STATE_FILE.write_text("".join(f"{k}={v}\n" for k, v in state.items()))
@@ -383,11 +383,11 @@ CREATE TABLE IF NOT EXISTS {metrics_db}.migrations (
 );
 """
 
-def ensure_migrations_table(metrics_db):
+def ensure_migrations_table(metrics_db: str) -> None:
     mysql_exec(MIGRATIONS_TABLE_SQL.format(metrics_db=metrics_db))
     _automark_applied(metrics_db)
 
-def _automark_applied(metrics_db):
+def _automark_applied(metrics_db: str) -> None:
     """Mark migrations as applied if the schema change already exists (applied outside this system)."""
     applied = applied_migration_ids(metrics_db)
     for m in MIGRATIONS:
@@ -407,7 +407,7 @@ def _automark_applied(metrics_db):
                 f"VALUES ({m.id}, '{desc}');"
             )
 
-def applied_migration_ids(metrics_db):
+def applied_migration_ids(metrics_db: str) -> set[int]:
     rows = mysql_query(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;")
     return set(int(r) for r in rows if r.isdigit())
 
@@ -1276,7 +1276,7 @@ def cmd_process(args):
 
 ACCESS_CFG = Path("/etc/hubzero-metrics/access.cfg")
 
-def db_config():
+def db_config() -> dict[str, str]:
     """Parse every $name = '…'; assignment in the access.cfg PHP file
     into a dict.  Defined variables typically include hub_dir, hub_db,
     metrics_db, db_host, db_user, db_pass, db_prefix.
@@ -1290,13 +1290,13 @@ def db_config():
     return {m.group(1): m.group(2)
             for m in re.finditer(r"\$([\w_]+)\s*=\s*'([^']*)'", text)}
 
-def db_credentials():
+def db_credentials() -> tuple[str, str, str, str]:
     """Returns (db_host, db_user, db_pass, metrics_db) for backwards compat.
     Use db_config() for the full set including hub_db, db_prefix, etc."""
     c = db_config()
     return c.get("db_host", ""), c.get("db_user", ""), c.get("db_pass", ""), c.get("metrics_db", "")
 
-def mysql_query(sql):
+def mysql_query(sql: str) -> list[str]:
     """Run a SELECT against the metrics DB, return list of result rows.
 
     Each row is rendered as a tab-joined string for backwards compatibility
@@ -1317,7 +1317,7 @@ def mysql_query(sql):
     finally:
         conn.close()
 
-def mysql_exec(sql):
+def mysql_exec(sql: str) -> int:
     """Run a DML/DDL statement against the metrics DB.  Returns 0 on
     success, 1 on failure (prints the error).  Single-statement contract.
 
@@ -5533,7 +5533,7 @@ def cmd_run(args):
 # main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Metrics pipeline manager")
     sub = parser.add_subparsers(dest="command")
 
