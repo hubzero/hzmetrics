@@ -1114,7 +1114,7 @@ def do_summarize(month_str, logfile, dry_run=False):
 # status
 # ---------------------------------------------------------------------------
 
-def cmd_status():
+def cmd_status(args):
     def summarize(directory, pattern, label):
         files = dated_files(directory, pattern)
         count = len(files)
@@ -5674,21 +5674,26 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p_tick = sub.add_parser("tick", help="Every-5-min cron entry: whoisonline always, metrics run at :30")
+    p_tick.set_defaults(func=cmd_tick)
     p_tick.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_run = sub.add_parser("run", help="Autonomous daily/catch-up metrics run (called by tick at :30)")
+    p_run.set_defaults(func=cmd_run)
     p_run.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_woo = sub.add_parser("whoisonline", help="Update real-time session geo map")
+    p_woo.set_defaults(func=cmd_whoisonline)
     p_woo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
-    sub.add_parser("status", help="Show pipeline state")
+    p_status = sub.add_parser("status", help="Show pipeline state")
+    p_status.set_defaults(func=cmd_status)
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     grp = p_process.add_mutually_exclusive_group()
     grp.add_argument("--next",  action="store_true",  help="Use the oldest pending month")
     grp.add_argument("--month", metavar="YYYY-MM",    help="Specify a month")
     grp.add_argument("--day",   metavar="YYYY-MM-DD", help="Specify a single day")
+    p_process.set_defaults(func=cmd_process)
     p_process.add_argument("--force",   action="store_true", help="Skip order and current-month checks")
     p_process.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
@@ -5697,26 +5702,32 @@ def main():
     grp2.add_argument("--next",  action="store_true",  help="Use the oldest pending month")
     grp2.add_argument("--month", metavar="YYYY-MM",    help="Specify a month")
     grp2.add_argument("--day",   metavar="YYYY-MM-DD", help="Specify a single day")
+    p_import.set_defaults(func=cmd_import)
     p_import.add_argument("--force",    action="store_true", help="Skip order and current-month checks")
     p_import.add_argument("--dry-run",  action="store_true", help="Show what would be done without doing it")
 
     p_analyze = sub.add_parser("analyze", help="Run enrichment and stats for a completed month")
+    p_analyze.set_defaults(func=cmd_analyze)
     p_analyze.add_argument("--month",   metavar="YYYY-MM", required=True)
     p_analyze.add_argument("--force",   action="store_true", help="Run even if month is not yet complete")
     p_analyze.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_summarize = sub.add_parser("summarize", help="Run rolling-window aggregation for a completed month")
+    p_summarize.set_defaults(func=cmd_summarize)
     p_summarize.add_argument("--month",   metavar="YYYY-MM", required=True)
     p_summarize.add_argument("--force",   action="store_true", help="Run even if month is not yet complete")
     p_summarize.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_setup = sub.add_parser("setup-db", help="Create metrics database and all tables (idempotent)")
+    p_setup.set_defaults(func=cmd_setup_db)
     p_setup.add_argument("--dry-run", action="store_true", help="Show statements without executing")
 
     p_migrate = sub.add_parser("migrate", help="Show or apply schema migrations")
+    p_migrate.set_defaults(func=cmd_migrate)
     p_migrate.add_argument("--apply", action="store_true", help="Apply all pending migrations")
 
     p_dnload = sub.add_parser("backfill-dnload", help="Populate web.dnload flag for historical rows")
+    p_dnload.set_defaults(func=cmd_backfill_dnload)
     p_dnload.add_argument("--start", metavar="YYYY-MM", help="Only process months >= this (default: all)")
     p_dnload.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
@@ -5724,17 +5735,20 @@ def main():
     grp_geo = p_geo.add_mutually_exclusive_group(required=True)
     grp_geo.add_argument("--month", metavar="YYYY-MM", help="Fill a specific month")
     grp_geo.add_argument("--all",   action="store_true", help="Fill all months with missing GeoIP data")
+    p_geo.set_defaults(func=cmd_fill_geo)
     p_geo.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
     p_hub = sub.add_parser("import-hub-data",
         help="Copy sessionlog and xprofiles from the hub DB into the metrics DB "
              "(ports xlogimport_tool_and_reg_user_data.php)")
+    p_hub.set_defaults(func=cmd_import_hub_data)
     p_hub.add_argument("--dry-run", action="store_true",
         help="Show statements without executing")
 
     p_iauth = sub.add_parser("import-auth",
         help="Parse a cmsauth-format file and INSERT IGNORE login/simulation rows "
              "into metrics.userlogin (ports xlogimport_authlog.php)")
+    p_iauth.set_defaults(func=cmd_import_auth)
     p_iauth.add_argument("input_file", metavar="FILE",
         help="path to staged auth log, or '-' for stdin")
     p_iauth.add_argument("--dry-run", action="store_true",
@@ -5743,18 +5757,21 @@ def main():
     p_mw = sub.add_parser("middleware-wall",
         help="Copy joblog.walltime into metrics.toolstart "
              "(direct port of xlogfix_middleware_wall.pl)")
+    p_mw.set_defaults(func=cmd_middleware_wall)
     p_mw.add_argument("--dry-run", action="store_true",
         help="Show statements without executing")
 
     p_mc = sub.add_parser("middleware-cpu",
         help="Copy joblog.cputime into metrics.toolstart "
              "(direct port of xlogfix_middleware_cpu.pl)")
+    p_mc.set_defaults(func=cmd_middleware_cpu)
     p_mc.add_argument("--dry-run", action="store_true",
         help="Show statements without executing")
 
     p_ls = sub.add_parser("logfix-session",
         help="Coalesce web rows into websessions in 4 fixed week windows "
              "of the month (direct port of logfix_session.pl)")
+    p_ls.set_defaults(func=cmd_logfix_session)
     p_ls.add_argument("month", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to process (default: current month)")
     p_ls.add_argument("--dry-run", action="store_true",
@@ -5763,6 +5780,7 @@ def main():
     p_fl = sub.add_parser("fetch-logs",
         help="Concatenate daily apache/cmsauth logs into staging files "
              "(port of __fetch_apache_and_auth_log.sh)")
+    p_fl.set_defaults(func=cmd_fetch_logs)
     p_fl.add_argument("date", nargs="?", default=None, metavar="YYYYMMDD",
         help="Only fetch files whose name contains this substring "
              "(default: every file in daily/)")
@@ -5772,6 +5790,7 @@ def main():
     p_al = sub.add_parser("archive-logs",
         help="gzip daily logs in place and move them to imported/ "
              "(port of __archive_apache_and_auth_log.sh)")
+    p_al.set_defaults(func=cmd_archive_logs)
     p_al.add_argument("date", nargs="?", default=None, metavar="YYYYMMDD",
         help="Only archive files whose name contains this substring "
              "(default: every file in daily/)")
@@ -5781,6 +5800,7 @@ def main():
     p_sm = sub.add_parser("summarize-month",
         help="Compute the per-period summary_*_vals tables for a month "
              "(port of xlogfix_summary.php)")
+    p_sm.set_defaults(func=cmd_summarize_month)
     p_sm.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to score (default: last month)")
     p_sm.add_argument("--only", default=None, metavar="LIST",
@@ -5796,6 +5816,7 @@ def main():
     p_gtl = sub.add_parser("gen-tool-toplists",
         help="Per-period ranked lists across all tools into hub.jos_stats_topvals "
              "(ports gen_tool_toplists.php)")
+    p_gtl.set_defaults(func=cmd_gen_tool_toplists)
     p_gtl.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to process (default: current month)")
     p_gtl.add_argument("--dry-run", action="store_true",
@@ -5804,6 +5825,7 @@ def main():
     p_gtt = sub.add_parser("gen-tool-tops",
         help="Top-N breakdowns (country / domain / orgtype) per tool stat row "
              "into hub.jos_resource_stats_tools_topvals (ports gen_tool_tops.php)")
+    p_gtt.set_defaults(func=cmd_gen_tool_tops)
     p_gtt.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to process (default: current month)")
     p_gtt.add_argument("--dry-run", action="store_true",
@@ -5812,6 +5834,7 @@ def main():
     p_gts = sub.add_parser("gen-tool-stats",
         help="Per-tool session/job aggregates into hub.jos_resource_stats_tools "
              "and resource_stats (ports gen_tool_stats.php)")
+    p_gts.set_defaults(func=cmd_gen_tool_stats)
     p_gts.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to score (default: current month)")
     p_gts.add_argument("--dry-run", action="store_true",
@@ -5820,6 +5843,7 @@ def main():
     p_ic = sub.add_parser("fill-ipcountry",
         help="Look up ipcountry for unresolved rows and bulk-update target table "
              "(direct port of xlogfix_ipcountry.php)")
+    p_ic.set_defaults(func=cmd_fill_ipcountry)
     p_ic.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
     p_ic.add_argument("table", choices=list(FILL_IPCOUNTRY_TABLES),
@@ -5840,6 +5864,7 @@ def main():
     p_am = sub.add_parser("andmore-usage",
         help="Per-resource distinct-user counts into hub.jos_resource_stats "
              "(ports xlogfix_andmore_usage.php)")
+    p_am.set_defaults(func=cmd_andmore_usage)
     p_am.add_argument("yearmonth", nargs="?", default=None, metavar="YYYY-MM",
         help="Month to score (default: current month)")
     p_am.add_argument("--dry-run", action="store_true",
@@ -5848,6 +5873,7 @@ def main():
     p_ia = sub.add_parser("import-apache",
         help="Parse an apache-format file and INSERT eligible rows into "
              "metrics.web (ports xlogimport_apache.php)")
+    p_ia.set_defaults(func=cmd_import_apache)
     p_ia.add_argument("input_file", metavar="FILE",
         help="path to staged apache log, or '-' for stdin")
     p_ia.add_argument("--dry-run", action="store_true",
@@ -5856,6 +5882,7 @@ def main():
     p_fd = sub.add_parser("fill-domain",
         help="Derive `domain` column from `host` and bulk-update target table "
              "(ports xlogfix_domain.php)")
+    p_fd.set_defaults(func=cmd_fill_domain)
     p_fd.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
     p_fd.add_argument("table",
@@ -5870,6 +5897,7 @@ def main():
     p_wh = sub.add_parser("import-webhits",
         help="Aggregate per-day hit counts from an apache log into metrics.webhits "
              "(ports xlogimport_webhits.php)")
+    p_wh.set_defaults(func=cmd_import_webhits)
     p_wh.add_argument("input_file", metavar="FILE",
         help="path to staged apache log, or '-' for stdin")
     p_wh.add_argument("--dry-run", action="store_true",
@@ -5878,6 +5906,7 @@ def main():
     p_bots = sub.add_parser("identify-bots",
         help="Scan an apache-format log and populate metrics.bot_useragents "
              "(ports xlogfix_identify_bots.php)")
+    p_bots.set_defaults(func=cmd_identify_bots)
     p_bots.add_argument("input_file", metavar="FILE",
         help="path to staged apache log, or '-' for stdin")
     p_bots.add_argument("--dry-run", action="store_true",
@@ -5886,6 +5915,7 @@ def main():
     p_ui = sub.add_parser("fill-user-info",
         help="Fill countrycitizen / countryresident / orgtype on toolstart / "
              "sessionlog_metrics from hub user profiles (ports xlogfix_user_info.php)")
+    p_ui.set_defaults(func=cmd_fill_user_info)
     p_ui.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
     p_ui.add_argument("table",
@@ -5899,6 +5929,7 @@ def main():
 
     p_clean = sub.add_parser("clean-bots",
         help="DELETE rows in web/websessions matching exclude_list bot patterns (ports xlogfix_clean.php)")
+    p_clean.set_defaults(func=cmd_clean_bots)
     p_clean.add_argument("table", choices=list(CLEAN_BOTS_TABLES),
         help="Target table (web | websessions)")
     p_clean.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
@@ -5922,6 +5953,7 @@ def main():
             "Each side of a range may use any granularity (YYYY / YYYY-MM / YYYY-MM-DD).\n"
             "Omit the date to default to the last 7 days; use --all for everything."),
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_dns.set_defaults(func=cmd_resolve_dns)
     p_dns.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
     p_dns.add_argument("table",
@@ -5943,73 +5975,10 @@ def main():
         help="Just count unresolved IPs; don't resolve or update")
 
     args = parser.parse_args()
-
-    if args.command == "tick":
-        cmd_tick(args)
-    elif args.command == "whoisonline":
-        cmd_whoisonline(args)
-    elif args.command == "run":
-        cmd_run(args)
-    elif args.command == "status":
-        cmd_status()
-    elif args.command == "process":
-        cmd_process(args)
-    elif args.command == "import":
-        cmd_import(args)
-    elif args.command == "analyze":
-        cmd_analyze(args)
-    elif args.command == "summarize":
-        cmd_summarize(args)
-    elif args.command == "setup-db":
-        cmd_setup_db(args)
-    elif args.command == "migrate":
-        cmd_migrate(args)
-    elif args.command == "backfill-dnload":
-        cmd_backfill_dnload(args)
-    elif args.command == "fill-geo":
-        cmd_fill_geo(args)
-    elif args.command == "import-hub-data":
-        cmd_import_hub_data(args)
-    elif args.command == "import-auth":
-        cmd_import_auth(args)
-    elif args.command == "fill-user-info":
-        cmd_fill_user_info(args)
-    elif args.command == "identify-bots":
-        cmd_identify_bots(args)
-    elif args.command == "import-webhits":
-        cmd_import_webhits(args)
-    elif args.command == "fill-domain":
-        cmd_fill_domain(args)
-    elif args.command == "import-apache":
-        cmd_import_apache(args)
-    elif args.command == "andmore-usage":
-        cmd_andmore_usage(args)
-    elif args.command == "fill-ipcountry":
-        cmd_fill_ipcountry(args)
-    elif args.command == "gen-tool-stats":
-        cmd_gen_tool_stats(args)
-    elif args.command == "gen-tool-tops":
-        cmd_gen_tool_tops(args)
-    elif args.command == "gen-tool-toplists":
-        cmd_gen_tool_toplists(args)
-    elif args.command == "middleware-wall":
-        cmd_middleware_wall(args)
-    elif args.command == "middleware-cpu":
-        cmd_middleware_cpu(args)
-    elif args.command == "logfix-session":
-        cmd_logfix_session(args)
-    elif args.command == "summarize-month":
-        cmd_summarize_month(args)
-    elif args.command == "fetch-logs":
-        cmd_fetch_logs(args)
-    elif args.command == "archive-logs":
-        cmd_archive_logs(args)
-    elif args.command == "clean-bots":
-        cmd_clean_bots(args)
-    elif args.command == "resolve-dns":
-        cmd_resolve_dns(args)
-    else:
+    if not getattr(args, "func", None):
         parser.print_help()
+        return
+    args.func(args)
 
 if __name__ == "__main__":
     main()
