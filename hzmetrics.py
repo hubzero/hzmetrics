@@ -903,6 +903,17 @@ MIGRATIONS.extend([
             "  AND index_name='ws_host';"
         ),
     ),
+    Migration(
+        id=40,
+        description=("Convert websessions to InnoDB — concurrent reads + MVCC, "
+                     "crash safety, faster random updates than 414 MB MyISAM"),
+        sql="ALTER TABLE {metrics_db}.websessions ENGINE=InnoDB;",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
+            "  AND engine='InnoDB';"
+        ),
+    ),
 ])
 
 MIGRATIONS_TABLE_SQL = """
@@ -1369,7 +1380,7 @@ METRICS_DB_DDL = [
   KEY `ws_domain` (`domain`),
   KEY `ws_jobs_country_dur` (`jobs`,`ipcountry`,`duration`),
   KEY `ws_host` (`host`(255))
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`pipeline_state` (
   `k` varchar(64) NOT NULL,
@@ -4309,11 +4320,194 @@ def _get_ip_geodata(conn, ip, *, url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
 
 FILL_IPCOUNTRY_TABLES = ("web", "websessions", "toolstart", "sessionlog_metrics")
 
+# Maximum IPs per multi-lookup request, per the upgraded ipinfo service
+# contract (?n_ips=<csv>, ≤100 entries).  Single-IP lookups via the
+# legacy ?n_ip= parameter still work and are used by whoisonline.
+_IPCOUNTRY_BATCH_SIZE = 100
+
+# Concurrency across batch requests.  Each batch is one HTTPS roundtrip;
+# parallelism hides the per-request latency.  Conservative default
+# because we're hitting a single shared hub server.
+_IPCOUNTRY_HTTPS_CONCURRENCY = 10
+
+
+def _ipgeo_https_batch(n_ips, *, url, hub_key, timeout):
+    """Look up up to _IPCOUNTRY_BATCH_SIZE (100) IPs in one HTTPS round-trip
+    via the n_ips= multi-IP endpoint.  Returns dict {n_ip: geo_dict} for
+    every IP that resolved (per-ipset <status>_SUCCESS_); IPs that failed
+    individually are absent from the dict.
+
+    Pure HTTPS read — no DB I/O — safe to call from worker threads."""
+    import urllib.request, xml.etree.ElementTree as ET
+    if not n_ips:
+        return {}
+    if len(n_ips) > _IPCOUNTRY_BATCH_SIZE:
+        raise ValueError(
+            f"n_ips batch size {len(n_ips)} exceeds API limit "
+            f"of {_IPCOUNTRY_BATCH_SIZE}")
+    endpoints = [url] + [u for u in IPCOUNTRY_FALLBACKS if u != url]
+    n_ips_csv = ",".join(str(n) for n in n_ips)
+    root = None
+    for ep in endpoints:
+        full_url = f"{ep}/?&hub_key={hub_key}&n_ips={n_ips_csv}"
+        try:
+            with urllib.request.urlopen(full_url, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+                root = ET.fromstring(text)
+            break
+        except (urllib.request.URLError, ET.ParseError, TimeoutError, OSError) as e:
+            log.warning(f"ipinfo {ep} batch failed ({e}); trying next fallback")
+            continue
+    if root is None:
+        return {}
+
+    # Aggregate top-level status — only _INVALID_KEY_… is a fatal config
+    # error we should surface.  _PARTIAL_ / _NO_IP_GEO_DATA_FOUND_ /
+    # _SUCCESS_ are all "iterate the ipsets and trust each one's own status".
+    top_status = (root.findtext('status') or '').strip()
+    if top_status == '_INVALID_KEY_OR_KEY-HUB_HOSTNAME_MISMATCH_':
+        log.warning("HUBzero.org IP-Geo location key invalid for this host. "
+                    "Check the hub registration / hub_key setting.")
+        return {}
+
+    out: dict = {}
+    for ipset in root.findall('ipset'):
+        if (ipset.findtext('status') or '').strip() != '_SUCCESS_':
+            continue
+        try:
+            n_ip = int((ipset.findtext('n_ip') or '').strip())
+        except ValueError:
+            continue
+        out[n_ip] = {
+            'n_ip':         n_ip,
+            'countrySHORT': (ipset.findtext('countryCode') or '-').strip() or '-',
+            'countryLONG':  (ipset.findtext('countryName') or '-').strip() or '-',
+            'ipREGION':     (ipset.findtext('region')      or '-').strip() or '-',
+            'ipCITY':       (ipset.findtext('city')        or '-').strip() or '-',
+            'ipLATITUDE':   (ipset.findtext('lat')         or '-').strip() or '-',
+            'ipLONGITUDE':  (ipset.findtext('long')        or '-').strip() or '-',
+        }
+    return out
+
+
+def _ipgeo_lookup_batch(conn, hub_db, db_prefix, ips, *, url, hub_key,
+                        timeout, ttl_days=90,
+                        concurrency=_IPCOUNTRY_HTTPS_CONCURRENCY,
+                        batch_size=_IPCOUNTRY_BATCH_SIZE):
+    """Resolve a list of IPs to geo data using bulk cache + batched HTTPS.
+    Returns dict {ip_str: geo_dict} for every IP that resolved successfully.
+
+    Steps:
+      1. Bulk SELECT of metrics_ipgeo_cache for all n_ips at once.
+      2. For cache misses, split into batches of up to `batch_size` (100)
+         and fire each batch as one HTTPS roundtrip — concurrent across
+         batches via ThreadPoolExecutor.
+      3. Bulk INSERT of new cache rows via ON DUPLICATE KEY UPDATE.
+
+    Per-target-table UPDATEs stay with the caller — different tables
+    need different filter clauses.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    out: dict = {}
+    if not ips:
+        return out
+
+    # Map ip-string → n_ip (int).  Skip invalid IPs entirely.
+    ip_to_n = {}
+    for ip in ips:
+        n = _ip2long(ip)
+        if n is not None:
+            ip_to_n[ip] = n
+    if not ip_to_n:
+        return out
+
+    # --- bulk cache lookup ---
+    # NB: cache table's IP column is named `ip` and stores the int32-encoded
+    # form (n_ip).  Same int values as ip_to_n.values(); only the column
+    # name differs from the local variable convention.
+    placeholders = ",".join(["%s"] * len(ip_to_n))
+    cache_args = tuple(ip_to_n.values())
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT ip, countrySHORT, countryLONG, ipREGION, ipCITY, "
+            f"ipLATITUDE, ipLONGITUDE FROM {hub_db}.{db_prefix}metrics_ipgeo_cache "
+            f"WHERE ip IN ({placeholders}) "
+            f"AND TO_DAYS(CURDATE()) - TO_DAYS(lookup_datetime) <= %s",
+            cache_args + (ttl_days,),
+        )
+        cached = {row[0]: row for row in cur.fetchall()}
+
+    # Reverse-map: n_ip back to string ip for the dict keys.
+    n_to_ip = {n: ip for ip, n in ip_to_n.items()}
+
+    for n_ip, row in cached.items():
+        ip = n_to_ip[n_ip]
+        out[ip] = {
+            'n_ip':         n_ip,
+            'countrySHORT': row[1], 'countryLONG': row[2],
+            'ipREGION':     row[3], 'ipCITY':      row[4],
+            'ipLATITUDE':   row[5], 'ipLONGITUDE': row[6],
+        }
+
+    miss_n_ips = [n for n in ip_to_n.values() if n not in cached]
+    if not miss_n_ips:
+        return out
+
+    # --- batched HTTPS for cache misses ---
+    chunks = [miss_n_ips[i:i + batch_size]
+              for i in range(0, len(miss_n_ips), batch_size)]
+    log.info(f"  ipgeo cache: {len(cached)} hit / {len(miss_n_ips)} miss → "
+             f"{len(chunks)} HTTPS batch(es) of ≤{batch_size} "
+             f"(concurrency={min(concurrency, len(chunks))})")
+
+    def fetch(chunk):
+        return _ipgeo_https_batch(chunk, url=url, hub_key=hub_key, timeout=timeout)
+
+    new_rows = []
+    workers = max(1, min(concurrency, len(chunks)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for batch_result in ex.map(fetch, chunks):
+            for n_ip, geo in batch_result.items():
+                ip = n_to_ip.get(n_ip)
+                if ip is None:
+                    continue
+                out[ip] = geo
+                new_rows.append((
+                    geo['n_ip'], geo['countrySHORT'], geo['countryLONG'],
+                    geo['ipREGION'], geo['ipCITY'],
+                    geo['ipLATITUDE'], geo['ipLONGITUDE'],
+                ))
+
+    # --- bulk cache INSERT for new HTTPS results ---
+    # Same caveat as the SELECT: the column is `ip` even though the
+    # values are int32-encoded n_ips.
+    if new_rows:
+        values_clause = ", ".join(["(%s, %s, %s, %s, %s, %s, %s)"] * len(new_rows))
+        params: list = [v for row in new_rows for v in row]
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {hub_db}.{db_prefix}metrics_ipgeo_cache "
+                f"(ip, countrySHORT, countryLONG, ipREGION, ipCITY, "
+                f"ipLATITUDE, ipLONGITUDE) VALUES {values_clause} "
+                f"ON DUPLICATE KEY UPDATE "
+                f"countrySHORT=VALUES(countrySHORT), "
+                f"countryLONG=VALUES(countryLONG), "
+                f"ipREGION=VALUES(ipREGION), ipCITY=VALUES(ipCITY), "
+                f"ipLATITUDE=VALUES(ipLATITUDE), ipLONGITUDE=VALUES(ipLONGITUDE)",
+                tuple(params),
+            )
+
+    return out
+
+
 def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
                       url=IPCOUNTRY_URL, hub_key=IPCOUNTRY_HUB_KEY,
                       timeout=IPCOUNTRY_TIMEOUT, dry_run=False):
-    """Direct port of xlogfix_ipcountry.php.  Per-IP / per-row, per-week-chunk
-    SQL semantics preserved exactly — optimization is a separate concern.
+    """Port of xlogfix_ipcountry.php with concurrent HTTPS lookups.
+
+    Per-IP / per-row, per-week-chunk SQL semantics preserved exactly.
+    The HTTPS pass batches via ThreadPoolExecutor — was the dominant cost
+    of usage-metrics on backfilled months (~30ms per IP, sequential).
     """
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")
@@ -4359,6 +4553,10 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
     log.info(f"[fill-ipcountry] {db_name}.{table} {start_d}..{end_d}: "
         f"{len(chunks)} week chunk(s); url={url}")
 
+    cfg = db_config()
+    hub_db    = cfg.get('hub_db', '')
+    db_prefix = cfg.get('db_prefix', 'jos_')
+
     conn = _open_db()
     try:
         total_select = 0
@@ -4383,8 +4581,18 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
             if dry_run:
                 continue
 
-            for ip, _hits in rows:
-                geo = _get_ip_geodata(conn, ip, url=url, hub_key=hub_key, timeout=timeout)
+            # Resolve all IPs for this chunk in one shot: bulk cache lookup
+            # + concurrent HTTPS for cache misses + bulk cache INSERT.
+            ips = [ip for ip, _hits in rows]
+            geos = _ipgeo_lookup_batch(
+                conn, hub_db, db_prefix, ips,
+                url=url, hub_key=hub_key, timeout=timeout,
+            )
+
+            for ip in ips:
+                geo = geos.get(ip)
+                if geo is None:
+                    continue
                 country = geo['countrySHORT']
                 if country and country != '-':
                     with conn.cursor() as cur:
