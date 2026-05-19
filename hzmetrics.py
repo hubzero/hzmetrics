@@ -2678,16 +2678,20 @@ def _ip_excluded(ip, filters):
 
 def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     """Parse a cmsauth-format file and INSERT IGNORE every recognized
-    auth event into metrics.userlogin.
+    auth event (with action ∈ {login, simulation}) into metrics.userlogin.
 
-    Faithful port of xlogimport_authlog.php (master branch — inserts
-    every action type unfiltered).  The source-tree variant filtered
-    insert-time to action ∈ {login, simulation}; we intentionally
-    match master instead, then narrow at migration time: migration #4
-    DELETEs every userlogin row with action NOT IN (login, simulation)
-    once, at first `migrate --apply`.  Insert-time skipping is
-    available as commented-out code in the loop below if you ever
-    want to flip back.
+    Deliberately diverges from legacy `xlogimport_authlog.php` (master
+    branch), which inserted every action type unfiltered and relied on a
+    one-off DELETE via migration #4 to purge `detect` / `invalid` / `logout`
+    rows that no analyze / summarize code path ever reads.  Without the
+    insert-time filter, the next import-auth re-accumulates ~99.99% noise
+    rows and migration #4's effect erodes immediately.  Skipping at parse
+    time keeps userlogin small and avoids the periodic cleanup work.
+
+    The change breaks byte-identical A/B parity for userlogin row counts;
+    tests/ab/port_import_auth filters both legacy and new outputs to
+    action ∈ {login, simulation} before diffing — same rows that the
+    pipeline actually queries.
 
     input_file: path to the staged auth log (typically
     /var/log/hubzero/metrics/_hub_auth.log) or '-' for stdin.
@@ -2740,16 +2744,12 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
                 action = m.group(5).strip()
             if not user:
                 user = "-"
-            # Legacy 1018cc2^ inserts every action type — no insert-time filter
-            # to (login, simulation) here.  Action narrowing happens later via
-            # migration #4 which purges non-(login,simulation) rows from
-            # userlogin.  Keep insert-time behaviour byte-identical to pre-port.
-            #
-            # To restore the post-1018cc2 in-line filter (saves disk + later
-            # purge work) re-enable the next 3 lines:
-            #     if action not in ("login", "simulation"):
-            #         skipped_action += 1
-            #         continue
+            # Skip actions the pipeline never reads (detect / invalid / logout
+            # are ~99.99% of the line volume on a typical hub).  Migration #4
+            # exists to clean up rows accumulated before this filter landed.
+            if action not in ("login", "simulation"):
+                skipped_action += 1
+                continue
             if user in ("hubstatus", "hubadmin"):
                 skipped_filter += 1
                 continue
@@ -2759,7 +2759,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
             rows.append((dt, uid, user, ip, action))
 
     log.info(f"[import-auth] parsed {total} line(s); "
-        f"kept (all actions, narrowed later by migration #4) = {len(rows)}; "
+        f"kept (action IN login/simulation) = {len(rows)}; "
         f"unrecognized = {unrec}; "
         f"filtered = {skipped_filter}; "
         f"other-action skipped = {skipped_action}")

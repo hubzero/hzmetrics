@@ -27,9 +27,20 @@ run_side() {
 run_side legacy run_legacy_php "import/xlogimport_authlog.php" "$LOGFILE"
 run_side new    run_new        import-auth                     "$LOGFILE"
 
+# New import-auth filters to action ∈ (login, simulation) at insert time;
+# legacy inserts every action type unfiltered.  The pipeline only ever
+# reads login/simulation, so the relevant invariant is "legacy and new
+# agree on the rows we actually keep" — filter both sides before diff.
+# dump_full output for userlogin is: datetime user uidNumber ip action.
+filter_keepers() {
+    awk -F'\t' '$5 == "login" || $5 == "simulation"' "$1"
+}
+filter_keepers "$OUT/legacy_userlogin.tsv" > "$OUT/legacy_userlogin_filtered.tsv"
+filter_keepers "$OUT/new_userlogin.tsv"    > "$OUT/new_userlogin_filtered.tsv"
+
 echo
-echo "=== diff: legacy vs new ==="
-if diff -u "$OUT/legacy_userlogin.tsv" "$OUT/new_userlogin.tsv"; then
+echo "=== diff: legacy vs new  (action ∈ login/simulation) ==="
+if diff -u "$OUT/legacy_userlogin_filtered.tsv" "$OUT/new_userlogin_filtered.tsv"; then
     echo "PASS"
     exit 0
 else
