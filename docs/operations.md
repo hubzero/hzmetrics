@@ -385,6 +385,46 @@ order:
 6. Re-run `analyze --month` if the underlying enriched data was lost
    (will require the original Apache logs from `/var/log/httpd/imported/`).
 
+## Periodic maintenance: ANALYZE TABLE
+
+InnoDB has `innodb_stats_auto_recalc=ON` by default — index statistics
+get refreshed when ~10% of a table's rows change.  That's fine in
+steady state, but after a big one-shot change the trigger threshold
+may not fire and stale stats can steer the query planner onto bad
+index paths.
+
+Trigger an explicit refresh after any of:
+
+- Bulk import (catchup processing several backfilled months at once).
+- A migration that DELETEs or rewrites a large fraction of a table
+  (e.g. migration #4's userlogin purge: 93 M → 4 K rows).
+- An engine conversion (`ALTER … ENGINE=InnoDB` on a large MyISAM
+  table — the conversion rebuilds but doesn't re-sample stats).
+
+```bash
+mysql -u <user> -p<pass> <hub>_metrics <<'SQL'
+ANALYZE TABLE web;
+ANALYZE TABLE websessions;
+ANALYZE TABLE userlogin;
+ANALYZE TABLE summary_user_vals;
+ANALYZE TABLE summary_misc_vals;
+ANALYZE TABLE summary_simusage_vals;
+ANALYZE TABLE summary_andmore_vals;
+ANALYZE TABLE webhits;
+SQL
+```
+
+ANALYZE TABLE on InnoDB samples 20 pages by default and runs in
+sub-second per table — safe to run while the pipeline is active.
+
+Don't run `OPTIMIZE TABLE` on these — for InnoDB it rebuilds the
+entire .ibd file (same cost as `ALTER … ENGINE=InnoDB`) and only
+helps if the table has accumulated significant deleted-but-not-
+reclaimed space.  After a recent ENGINE conversion the .ibd is
+already fresh, so OPTIMIZE is a no-op cost.  ANALYZE is the
+lightweight alternative that fixes the stats-staleness symptom
+without rewriting data.
+
 ## Monitoring and alerting
 
 The pipeline doesn't ship its own monitoring stack — observability
