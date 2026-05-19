@@ -653,6 +653,68 @@ MIGRATIONS = [
     ),
 ]
 
+
+# Engine conversions to InnoDB.  MyISAM table-level locks block summarize's
+# DELETE+INSERT-per-cell readers; converting the small / actively-rewritten
+# tables to InnoDB gets row-level locking and MVCC.  web and websessions
+# stay MyISAM (too large for ALTER in the 5 GB /var/mysqltmp tmpfs);
+# *_baseline_jul2025 frozen tables stay MyISAM (read-only, no benefit).
+# Already-InnoDB tables (exclude_list2, migrations, pipeline_state) are
+# not listed.  userlogin_lite is listed even though some live DBs already
+# have it as InnoDB — the check_sql auto-detects and skips.
+_INNODB_CONVERT_TABLES = [
+    # Tier 1: lookup / reference (small, read-mostly)
+    "bot_useragents",
+    "classes",
+    "classvals",
+    "continents",
+    "countries",
+    "country_continent",
+    "domainclass",
+    "domainclasses",
+    "exclude_list",
+    "regions",
+    "regionvals",
+    "summary_andmore",
+    "summary_misc",
+    "summary_simusage",
+    "summary_user",
+    "tops",
+    "topvals",
+    "totalvals",
+    "webhits",
+    # Tier 2: actively-written summary tables (DELETE+INSERT per cell)
+    "summary_andmore_vals",
+    "summary_misc_vals",
+    "summary_simusage_vals",
+    "summary_user_vals",
+    # Tier 3: per-analyze rebuild (DROP+CREATE each analyze run)
+    "jos_xprofiles_metrics",
+    "sessionlog_metrics",
+    "toolstart",
+    "userlogin_lite",
+    # Tier 4: userlogin — large until migration 4 + OPTIMIZE shrinks it;
+    # the ALTER ENGINE rewrites the table, so it also reclaims deleted-row
+    # space if OPTIMIZE wasn't run separately.
+    "userlogin",
+]
+
+for _i, _tbl in enumerate(_INNODB_CONVERT_TABLES):
+    MIGRATIONS.append(Migration(
+        id=8 + _i,
+        description=(
+            f"Convert {_tbl} to InnoDB — row-level locking + MVCC; "
+            f"unblocks summarize readers"
+        ),
+        sql=f"ALTER TABLE {{metrics_db}}.{_tbl} ENGINE=InnoDB;",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_schema='{{metrics_db}}' "
+            f"AND table_name='{_tbl}' AND engine='InnoDB';"
+        ),
+    ))
+del _i, _tbl
+
 MIGRATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {metrics_db}.migrations (
     id INT NOT NULL,
@@ -749,7 +811,7 @@ METRICS_DB_DDL = [
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`bot_useragents` (
   `useragent` tinytext NOT NULL DEFAULT '',
   PRIMARY KEY (`useragent`(255))
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`classes` (
   `class` tinyint(4) NOT NULL DEFAULT 0,
@@ -757,7 +819,7 @@ METRICS_DB_DDL = [
   `valfmt` tinyint(4) NOT NULL DEFAULT 0,
   `size` tinyint(4) NOT NULL DEFAULT 0,
   PRIMARY KEY (`class`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`classvals` (
   `class` tinyint(4) NOT NULL DEFAULT 0,
@@ -767,25 +829,25 @@ METRICS_DB_DDL = [
   `name` varchar(255) DEFAULT NULL,
   `value` bigint(20) NOT NULL DEFAULT 0,
   KEY `class` (`class`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`continents` (
   `continentSHORT` char(2) NOT NULL DEFAULT '',
   `continentLONG` varchar(45) NOT NULL DEFAULT '',
   UNIQUE KEY `continentSHORT` (`continentSHORT`,`continentLONG`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`countries` (
   `code` varchar(4) NOT NULL DEFAULT '',
   `name` varchar(128) NOT NULL DEFAULT '',
   PRIMARY KEY (`code`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`country_continent` (
   `country` char(2) NOT NULL DEFAULT '',
   `continent` char(2) NOT NULL DEFAULT '',
   PRIMARY KEY (`country`,`continent`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`domainclass` (
   `domain` varchar(64) NOT NULL DEFAULT '',
@@ -796,14 +858,14 @@ METRICS_DB_DDL = [
   PRIMARY KEY (`domain`),
   KEY `class` (`class`),
   KEY `domain_class` (`domain`,`class`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`domainclasses` (
   `class` tinyint(4) NOT NULL DEFAULT 0,
   `name` varchar(64) NOT NULL DEFAULT '',
   PRIMARY KEY (`class`),
   UNIQUE KEY `class_name` (`class`,`name`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`exclude_list` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
@@ -813,7 +875,7 @@ METRICS_DB_DDL = [
   `date_added` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `filter_type` (`filter`,`type`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`exclude_list2` (
   `filter` varchar(65) NOT NULL DEFAULT '',
@@ -863,7 +925,7 @@ METRICS_DB_DDL = [
   `orcid` varchar(255) NOT NULL DEFAULT '',
   PRIMARY KEY (`uidNumber`),
   KEY `idx_username` (`username`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`migrations` (
   `id` int(11) NOT NULL DEFAULT 0,
@@ -878,7 +940,7 @@ METRICS_DB_DDL = [
   `valfmt` tinyint(4) NOT NULL DEFAULT 0,
   `size` tinyint(4) NOT NULL DEFAULT 0,
   PRIMARY KEY (`region`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`regionvals` (
   `region` tinyint(4) NOT NULL DEFAULT 0,
@@ -887,7 +949,7 @@ METRICS_DB_DDL = [
   `rank` tinyint(4) NOT NULL DEFAULT 0,
   `name` varchar(255) DEFAULT NULL,
   `value` bigint(20) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`sessionlog_metrics` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -910,14 +972,14 @@ METRICS_DB_DDL = [
   KEY `countryresident` (`countryresident`),
   KEY `countrycitizen` (`countrycitizen`),
   KEY `orgtype` (`orgtype`(255))
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_andmore` (
   `id` tinyint(4) NOT NULL DEFAULT 0,
   `label` varchar(255) NOT NULL DEFAULT '',
   `plot` int(1) DEFAULT 0,
   UNIQUE KEY `label` (`label`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_andmore_vals` (
   `rowid` tinyint(4) NOT NULL DEFAULT 0,
@@ -926,14 +988,14 @@ METRICS_DB_DDL = [
   `period` tinyint(4) NOT NULL DEFAULT 1,
   `value` bigint(20) DEFAULT 0,
   `valfmt` tinyint(4) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_misc` (
   `id` tinyint(4) NOT NULL DEFAULT 0,
   `label` varchar(255) NOT NULL DEFAULT '',
   `plot` int(1) DEFAULT 0,
   UNIQUE KEY `label` (`label`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_misc_vals` (
   `rowid` tinyint(4) NOT NULL DEFAULT 0,
@@ -942,14 +1004,14 @@ METRICS_DB_DDL = [
   `period` tinyint(4) NOT NULL DEFAULT 1,
   `value` varchar(200) DEFAULT '',
   `valfmt` tinyint(4) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_simusage` (
   `id` tinyint(4) NOT NULL DEFAULT 0,
   `label` varchar(255) NOT NULL DEFAULT '',
   `plot` int(1) DEFAULT 0,
   UNIQUE KEY `label` (`label`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_simusage_vals` (
   `rowid` tinyint(4) NOT NULL DEFAULT 0,
@@ -958,14 +1020,14 @@ METRICS_DB_DDL = [
   `period` tinyint(4) NOT NULL DEFAULT 1,
   `value` bigint(20) DEFAULT 0,
   `valfmt` tinyint(4) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_user` (
   `id` tinyint(4) NOT NULL DEFAULT 0,
   `label` varchar(255) NOT NULL DEFAULT '',
   `plot` int(1) DEFAULT 0,
   UNIQUE KEY `label` (`label`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`summary_user_vals` (
   `rowid` tinyint(4) NOT NULL DEFAULT 0,
@@ -974,7 +1036,7 @@ METRICS_DB_DDL = [
   `period` tinyint(4) NOT NULL DEFAULT 1,
   `value` bigint(20) DEFAULT 0,
   `valfmt` tinyint(4) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`toolstart` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
@@ -1006,7 +1068,7 @@ METRICS_DB_DDL = [
   KEY `orgtype` (`orgtype`(255)),
   KEY `ip` (`ip`),
   KEY `user` (`user`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`tops` (
   `top` tinyint(4) NOT NULL DEFAULT 0,
@@ -1014,7 +1076,7 @@ METRICS_DB_DDL = [
   `valfmt` tinyint(4) NOT NULL DEFAULT 0,
   `size` tinyint(4) NOT NULL DEFAULT 0,
   PRIMARY KEY (`top`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`topvals` (
   `top` tinyint(4) NOT NULL DEFAULT 0,
@@ -1026,7 +1088,7 @@ METRICS_DB_DDL = [
   KEY `top` (`top`),
   KEY `top_datetime_period` (`top`,`datetime`,`period`),
   KEY `top_datetime_rank` (`top`,`datetime`,`rank`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`totalvals` (
   `hub` tinyint(4) NOT NULL DEFAULT 0,
@@ -1035,7 +1097,7 @@ METRICS_DB_DDL = [
   `period` tinyint(4) NOT NULL DEFAULT 1,
   `value` bigint(20) NOT NULL DEFAULT 0,
   KEY `hub_total_datetime` (`hub`,`total`,`datetime`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`userlogin` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
@@ -1046,7 +1108,7 @@ METRICS_DB_DDL = [
   `action` varchar(40) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   UNIQUE KEY `userlogin` (`datetime`,`user`,`uidNumber`,`ip`,`action`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`userlogin_lite` (
   `id` bigint(20) NOT NULL DEFAULT 0,
@@ -1057,7 +1119,7 @@ METRICS_DB_DDL = [
   `action` varchar(40) NOT NULL DEFAULT '',
   KEY `uidNumber` (`uidNumber`),
   KEY `datetime_user` (`datetime`,`user`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`web` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
@@ -1089,13 +1151,14 @@ METRICS_DB_DDL = [
   KEY `ipcountry` (`ipcountry`),
   KEY `ip` (`ip`),
   KEY `content` (`content`(255)),
-  KEY `dnload` (`dnload`)
+  KEY `dnload` (`dnload`),
+  KEY `web_sessionid_dnload` (`sessionid`,`dnload`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`webhits` (
   `datetime` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
   `hits` bigint(20) NOT NULL DEFAULT 0
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`websessions` (
   `id` bigint(20) NOT NULL DEFAULT 0,
@@ -1110,7 +1173,10 @@ METRICS_DB_DDL = [
   PRIMARY KEY (`id`),
   KEY `datetime` (`datetime`),
   KEY `ipcountry` (`ipcountry`),
-  KEY `ip` (`ip`)
+  KEY `ip` (`ip`),
+  KEY `ws_datetime_jobs_dur_country` (`datetime`,`jobs`,`duration`,`ipcountry`),
+  KEY `ws_domain` (`domain`),
+  KEY `ws_jobs_country_dur` (`jobs`,`ipcountry`,`duration`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`pipeline_state` (
