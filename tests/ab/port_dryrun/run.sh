@@ -10,7 +10,7 @@
 # its INSERT/UPDATE/DELETE behind the dry-run flag — silently writing
 # anyway.  This bug is invisible to A/B diffs (since dry-run is only
 # in the new port) and to idempotency (which always writes).
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"

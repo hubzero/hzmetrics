@@ -5,7 +5,7 @@
 # on any violation — even though legacy and new agree on the produced
 # values, an invariant violation means BOTH may have a bug the A/B
 # diff can't catch.
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"

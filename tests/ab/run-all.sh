@@ -10,17 +10,25 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 pass=0
 fail=0
+skip=0
 failed=()
+AB_SKIP="${AB_SKIP:-77}"
 
 for d in "$DIR"/port_*/; do
     name=$(basename "$d")
     printf "\n========================================\n"
     printf "Running %s\n" "$name"
     printf "========================================\n"
-    if "$d/run.sh" > /tmp/ab-${name}.log 2>&1; then
+    "$d/run.sh" > /tmp/ab-${name}.log 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
         tail -1 /tmp/ab-${name}.log
         echo "  ${name}: PASS"
         pass=$((pass+1))
+    elif [ "$rc" -eq "$AB_SKIP" ]; then
+        tail -5 /tmp/ab-${name}.log
+        echo "  ${name}: SKIP"
+        skip=$((skip+1))
     else
         tail -10 /tmp/ab-${name}.log
         echo "  ${name}: FAIL  (full log: /tmp/ab-${name}.log)"
@@ -30,7 +38,7 @@ for d in "$DIR"/port_*/; do
 done
 
 printf "\n========================================\n"
-printf "Summary: %d pass, %d fail\n" "$pass" "$fail"
+printf "Summary: %d pass, %d fail, %d skip\n" "$pass" "$fail" "$skip"
 if [ "$fail" -gt 0 ]; then
     printf "Failed tests:\n"
     for n in "${failed[@]}"; do printf "  %s\n" "$n"; done

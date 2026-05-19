@@ -11,7 +11,7 @@
 # Catches the bug where a port assumes ≥ 1 row exists (divide-by-zero,
 # index error on empty fetchall, etc.).  Currently untested edge case
 # because every other fixture has rows.
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"

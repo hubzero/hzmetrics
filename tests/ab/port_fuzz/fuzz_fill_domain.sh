@@ -12,7 +12,7 @@
 # On divergence: prints the seed so the case is reproducible, and dumps
 # the failing diff.  Exit code 0 = all clean.
 
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -57,7 +57,7 @@ for i in $(seq 1 "$ITERS"); do
         echo "  reproduce: $PY $DIR/gen_hostnames.py $HOSTS $seed > /tmp/fuzz.sql"
         echo
         echo "  first 20 diff lines:"
-        diff "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" | head -20
+        diff "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" | sed -n '1,20p' || true
         echo
         echo "  $passed / $i iterations passed before this failure"
         exit 1

@@ -9,7 +9,7 @@
 # every new port in sequence (analyze + summarize), so a single rerun
 # of each covers the whole system.  Per-port reruns would be ~5–10×
 # slower and mostly redundant given the 8000+ fuzz cases already run.
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 
@@ -58,7 +58,7 @@ for name in "${TARGETS[@]}"; do
         echo "  PASS  $name (deterministic across reruns)"
     else
         echo "  FAIL  $name (output differs between reruns)"
-        diff -r "$snap1" "$snap2" | head -30
+        diff -r "$snap1" "$snap2" | sed -n '1,30p' || true
         fail=1
     fi
 done

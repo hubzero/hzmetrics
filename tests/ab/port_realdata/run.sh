@@ -13,7 +13,7 @@
 #
 # Run capture.sh first to produce snapshot/*.sql.gz (one-time / on update).
 
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -27,8 +27,7 @@ MONTH="${1:-2025-03}"
 if [ ! -f "$SNAP/web.sql.gz" ]; then
     echo "SKIP  port_realdata — snapshot not present" >&2
     echo "      Run $DIR/capture.sh against a production DB to enable this test." >&2
-    echo "PASS"
-    exit 0
+    exit "${AB_SKIP:-77}"
 fi
 
 # Load every captured snapshot file into the right DB.
@@ -112,7 +111,7 @@ for t in summary_user summary_simusage summary_misc stats_tools stats tops topli
         echo "  PASS  $t"
     else
         echo "  FAIL  $t"
-        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | head -30
+        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | sed -n '1,30p' || true
         fail=1
     fi
 done

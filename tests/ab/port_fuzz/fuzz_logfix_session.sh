@@ -6,7 +6,7 @@
 # Usage: fuzz_logfix_session.sh [iter [events [seed_base]]]
 # Defaults: 30 iter × 150 events = 4500 cases per run.
 
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -62,11 +62,11 @@ for i in $(seq 1 "$ITERS"); do
         echo "  reproduce: $PY $DIR/gen_web_events.py $EVENTS $seed > /tmp/fuzz.sql"
         if [ "$ws_diff" -ne 0 ]; then
             echo "  websessions diff (first 30):"
-            diff "$OUT/seed_${seed}_legacy_ws.tsv" "$OUT/seed_${seed}_new_ws.tsv" | head -30
+            diff "$OUT/seed_${seed}_legacy_ws.tsv" "$OUT/seed_${seed}_new_ws.tsv" | sed -n '1,30p' || true
         fi
         if [ "$web_diff" -ne 0 ]; then
             echo "  web.sessionid diff (first 30):"
-            diff "$OUT/seed_${seed}_legacy_web.tsv" "$OUT/seed_${seed}_new_web.tsv" | head -30
+            diff "$OUT/seed_${seed}_legacy_web.tsv" "$OUT/seed_${seed}_new_web.tsv" | sed -n '1,30p' || true
         fi
         echo
         echo "  $passed / $i iterations passed before failure"

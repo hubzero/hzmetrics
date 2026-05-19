@@ -18,7 +18,7 @@
 # Reuses port_summarize_month/seed.sql which has data clustered in
 # 2025-07 + a few 2024-12 rows; most anchors produce mostly-zero summary
 # values, which is still a valid parity check (zeros must match zeros).
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -63,7 +63,7 @@ for t in user simusage misc; do
     else
         echo "  FAIL  summary_${t}_vals"
         # Print first divergent row + the anchor whose datetime appears in it
-        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | head -30
+        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | sed -n '1,30p' || true
         fail=1
     fi
 done
@@ -81,7 +81,7 @@ for anchor in "${ANCHORS[@]}"; do
         new_slice=$(   grep "^${anchor}-00 " "$OUT/new_${t}.tsv"    2>/dev/null || true)
         if [ "$legacy_slice" != "$new_slice" ]; then
             echo "  FAIL  anchor=$anchor table=summary_${t}_vals"
-            diff <(printf "%s\n" "$legacy_slice") <(printf "%s\n" "$new_slice") | head -10
+            diff <(printf "%s\n" "$legacy_slice") <(printf "%s\n" "$new_slice") | sed -n '1,10p' || true
             a_fail=1
             fail=1
         fi

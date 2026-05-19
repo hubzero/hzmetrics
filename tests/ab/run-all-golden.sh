@@ -20,6 +20,7 @@ pass=0
 fail=0
 skip=0
 failed=()
+AB_SKIP="${AB_SKIP:-77}"
 
 for d in "$DIR"/port_*/; do
     name=$(basename "$d")
@@ -30,10 +31,16 @@ for d in "$DIR"/port_*/; do
     printf "\n========================================\n"
     printf "Golden: %s\n" "$name"
     printf "========================================\n"
-    if "$d/run_golden.sh" > /tmp/abg-${name}.log 2>&1; then
+    "$d/run_golden.sh" > /tmp/abg-${name}.log 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
         tail -1 /tmp/abg-${name}.log
         echo "  ${name}: PASS"
         pass=$((pass+1))
+    elif [ "$rc" -eq "$AB_SKIP" ]; then
+        tail -5 /tmp/abg-${name}.log
+        echo "  ${name}: SKIP"
+        skip=$((skip+1))
     else
         tail -15 /tmp/abg-${name}.log
         echo "  ${name}: FAIL  (full log: /tmp/abg-${name}.log)"
@@ -43,7 +50,7 @@ for d in "$DIR"/port_*/; do
 done
 
 printf "\n========================================\n"
-printf "Golden summary: %d pass, %d fail, %d skip (no run_golden.sh)\n" "$pass" "$fail" "$skip"
+printf "Golden summary: %d pass, %d fail, %d skip\n" "$pass" "$fail" "$skip"
 if [ "$fail" -gt 0 ]; then
     printf "Failed:\n"
     for n in "${failed[@]}"; do printf "  %s\n" "$n"; done

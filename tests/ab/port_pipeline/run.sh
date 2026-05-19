@@ -21,7 +21,7 @@
 #
 # xlogfix_prep.php is skipped (it writes /etc/hubzero-metrics/access.cfg
 # which is a deploy-time artifact, not a per-run thing).
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -129,7 +129,7 @@ for t in sessionlog toolstart web websessions \
         echo "  PASS  $t"
     else
         echo "  FAIL  $t"
-        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | head -30
+        diff -u "$OUT/legacy_${t}.tsv" "$OUT/new_${t}.tsv" | sed -n '1,30p' || true
         fail=1
     fi
 done

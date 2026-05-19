@@ -1,5 +1,5 @@
 #!/bin/bash
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -11,8 +11,7 @@ MONTH="${1:-2025-03}"
 if [ ! -f "$SNAP/web.sql.gz" ]; then
     echo "SKIP  port_realdata — snapshot not present" >&2
     echo "      Run $DIR/capture.sh against a production DB to enable this test." >&2
-    echo "PASS"
-    exit 0
+    exit "${AB_SKIP:-77}"
 fi
 
 reset_test_dbs > /dev/null

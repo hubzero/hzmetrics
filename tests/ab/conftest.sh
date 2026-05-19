@@ -2,7 +2,9 @@
 #   . "$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)/conftest.sh"
 # from a test runner — or pass AB_DIR explicitly.
 
-set -euo pipefail
+# Intentionally do not set shell options here.  The caller owns whether it
+# wants `set -e`; several runners aggregate failures manually and need to keep
+# going after an individual command fails.
 
 AB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$AB_DIR/../.." && pwd)"
@@ -10,11 +12,18 @@ FIXTURES="$AB_DIR/fixtures"
 ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-$FIXTURES/test_access.cfg}"
 LEGACY_DIR="$REPO/tests/legacy"
 
+AB_SKIP=77
+
+cfg_value() {
+    local name="$1"
+    sed -nE "s/^[[:space:]]*\\\$$name[[:space:]]*=[[:space:]]*'([^']*)'.*/\\1/p" "$ACCESS_CFG" | tail -1
+}
+
 # DB connection vars from the test cfg.
-DB_PASS=$(grep "^\$db_pass"    "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
-DB_USER=$(grep "^\$db_user"    "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
-HUB_DB=$( grep "^\$hub_db"     "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
-METRICS_DB=$(grep "^\$metrics_db" "$ACCESS_CFG" | sed -E "s/.*'([^']+)'.*/\1/")
+DB_PASS=$(cfg_value db_pass)
+DB_USER=$(cfg_value db_user)
+HUB_DB=$(cfg_value hub_db)
+METRICS_DB=$(cfg_value metrics_db)
 
 # Python that has pymysql / aiodns / aiohttp installed.
 PY="${HZMETRICS_PY:-python3}"
@@ -129,7 +138,7 @@ golden_diff() {
             echo "  PASS   $f"
         else
             echo "  FAIL   $f (first 20 diff lines)"
-            diff -u "$gold" "$new" | head -20
+            diff -u "$gold" "$new" | sed -n '1,20p' || true
             fail=1
         fi
     done

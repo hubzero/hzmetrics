@@ -4,7 +4,7 @@
 # Usage: fuzz_import_auth.sh [iter [lines [seed_base]]]
 # Defaults: 30 iter × 200 lines = 6000 cases per run.
 
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -42,7 +42,7 @@ for i in $(seq 1 "$ITERS"); do
         echo "  reproduce: $PY $DIR/gen_auth_log.py $LINES $seed > /tmp/fuzz.log"
         echo "  log: $log_file"
         echo "  first 30 diff lines:"
-        diff "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" | head -30
+        diff "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" | sed -n '1,30p' || true
         echo
         echo "  $passed / $i iterations passed before failure"
         exit 1

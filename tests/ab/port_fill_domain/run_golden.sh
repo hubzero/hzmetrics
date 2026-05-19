@@ -2,7 +2,7 @@
 # Golden-mode A/B: run only the new fill-domain and diff against the
 # saved golden output captured when legacy was last run.  No legacy/
 # directory needed.
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"

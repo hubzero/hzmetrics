@@ -13,7 +13,7 @@
 #   - Counters/aggregates that re-aggregate already-aggregated rows
 #
 # Tables snapshotted: the same 12 covered by port_pipeline.
-set -uo pipefail
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 . "$AB/conftest.sh"
@@ -71,7 +71,7 @@ for t in sessionlog toolstart web websessions \
         echo "  PASS  $t"
     else
         echo "  FAIL  $t (re-run changed output)"
-        diff -u "$OUT/pass1_${t}.tsv" "$OUT/pass2_${t}.tsv" | head -20
+        diff -u "$OUT/pass1_${t}.tsv" "$OUT/pass2_${t}.tsv" | sed -n '1,20p' || true
         fail=1
     fi
 done
