@@ -111,8 +111,9 @@ import argparse
 import gzip
 import logging
 import re
+import time
 from collections import defaultdict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1560,18 +1561,19 @@ def do_import_staged_logs(*, dry_run=False):
 def do_import_day(date_str, dry_run=False):
     """Fetch, import, then archive logs for a single day.  date_str is
     'YYYYMMDD'."""
-    if dry_run:
-        access  = _source_files_matching("access", date_str)
-        cmsauth = _source_files_matching("auth",   date_str)
-        for f in access + cmsauth:
-            log.info(f"    [dry-run] would fetch: {f}")
-        if not access:
-            log.info(f"    [dry-run] WARNING: no access log found for {date_str} in any source dir")
-        if not cmsauth:
-            log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in any source dir")
-    do_fetch_logs(       date_str, dry_run=dry_run)
-    do_import_staged_logs(         dry_run=dry_run)
-    do_archive_logs(     date_str, dry_run=dry_run)
+    with _timed_stage(f"import-day {date_str}"):
+        if dry_run:
+            access  = _source_files_matching("access", date_str)
+            cmsauth = _source_files_matching("auth",   date_str)
+            for f in access + cmsauth:
+                log.info(f"    [dry-run] would fetch: {f}")
+            if not access:
+                log.info(f"    [dry-run] WARNING: no access log found for {date_str} in any source dir")
+            if not cmsauth:
+                log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in any source dir")
+        do_fetch_logs(       date_str, dry_run=dry_run)
+        do_import_staged_logs(         dry_run=dry_run)
+        do_archive_logs(     date_str, dry_run=dry_run)
 
 
 def cmd_fetch_logs(args):
@@ -1581,47 +1583,60 @@ def cmd_fetch_logs(args):
 def cmd_archive_logs(args):
     return do_archive_logs(args.date or None, dry_run=args.dry_run)
 
-def _stage_banner(name):
-    """Mark a pipeline stage boundary."""
+@contextmanager
+def _timed_stage(name: str):
+    """Log a stage banner, run the body, then log the elapsed wallclock.
+
+    Used at coarse pipeline boundaries (tool-metrics / usage-metrics /
+    summary, the per-tick handlers, per-day import).  Makes manual ticks
+    self-describing: an operator watching `tail -f manage.log` sees both
+    which stage is running and how long it took, without needing an
+    external profiler."""
     log.info("=== %s ===", name)
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        dt = time.monotonic() - t0
+        log.info("=== %s done in %.2fs ===", name, dt)
 
 
 def _do_tool_metrics_stage(month_str, dry_run):
     """Run the per-month tool-metrics enrichment + stats chain in-process.
     Direct port of __process_tool_metrics.sh."""
-    _stage_banner("tool-metrics")
-    do_import_hub_data(dry_run=dry_run)
-    do_resolve_dns("metrics", "sessionlog_metrics", month_str,
-                   dry_run=dry_run)
-    do_fill_domain("metrics", "sessionlog_metrics", month_str,
-                   dry_run=dry_run)
-    do_fill_user_info("metrics", "sessionlog_metrics", month_str,
-                      dry_run=dry_run)
-    do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
-                      dry_run=dry_run)
-    do_gen_tool_stats(month_str,    dry_run=dry_run)
-    do_gen_tool_tops(month_str,     dry_run=dry_run)
-    do_gen_tool_toplists(month_str, dry_run=dry_run)
+    with _timed_stage("tool-metrics"):
+        do_import_hub_data(dry_run=dry_run)
+        do_resolve_dns("metrics", "sessionlog_metrics", month_str,
+                       dry_run=dry_run)
+        do_fill_domain("metrics", "sessionlog_metrics", month_str,
+                       dry_run=dry_run)
+        do_fill_user_info("metrics", "sessionlog_metrics", month_str,
+                          dry_run=dry_run)
+        do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
+                          dry_run=dry_run)
+        do_gen_tool_stats(month_str,    dry_run=dry_run)
+        do_gen_tool_tops(month_str,     dry_run=dry_run)
+        do_gen_tool_toplists(month_str, dry_run=dry_run)
 
 
 def _do_usage_metrics_stage(month_str, dry_run):
     """Run the per-month web / toolstart / websessions enrichment chain
     in-process.  Direct port of __process_usage_metrics.sh."""
-    _stage_banner("usage-metrics")
-    do_import_hub_data(dry_run=dry_run)
-    do_middleware_wall(dry_run=dry_run)
-    do_middleware_cpu( dry_run=dry_run)
-    do_resolve_dns("metrics", "web",       month_str, dry_run=dry_run)
-    do_resolve_dns("metrics", "toolstart", month_str, dry_run=dry_run)
-    do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
-    do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
-    do_logfix_session(month_str, dry_run=dry_run)
-    do_clean_bots("web",         month_str, dry_run=dry_run)
-    do_clean_bots("websessions", month_str, dry_run=dry_run)
-    do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
-    do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
+    with _timed_stage("usage-metrics"):
+        do_import_hub_data(dry_run=dry_run)
+        do_middleware_wall(dry_run=dry_run)
+        do_middleware_cpu( dry_run=dry_run)
+        do_resolve_dns("metrics", "web",       month_str, dry_run=dry_run)
+        do_resolve_dns("metrics", "toolstart", month_str, dry_run=dry_run)
+        do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
+        do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
+        do_logfix_session(month_str, dry_run=dry_run)
+        do_clean_bots("web",         month_str, dry_run=dry_run)
+        do_clean_bots("websessions", month_str, dry_run=dry_run)
+        do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
+        do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
+        do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
+        do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
 
 
 def _do_summary_stage(month_str, dry_run, *, periods=None):
@@ -1637,12 +1652,12 @@ def _do_summary_stage(month_str, dry_run, *, periods=None):
     iterates periods 1/12/14 against the hub DB; touching 12/14 on a
     backfilled month would write wrong rolling/all-time numbers that
     we'd have to redo anyway."""
-    _stage_banner("summary")
-    do_import_hub_data(dry_run=dry_run)
-    do_summarize_month(month_str, periods=periods, dry_run=dry_run)
-    catchup_only = periods is not None and set(periods) == {1}
-    if not catchup_only:
-        do_andmore_usage(month_str, dry_run=dry_run)
+    with _timed_stage("summary"):
+        do_import_hub_data(dry_run=dry_run)
+        do_summarize_month(month_str, periods=periods, dry_run=dry_run)
+        catchup_only = periods is not None and set(periods) == {1}
+        if not catchup_only:
+            do_andmore_usage(month_str, dry_run=dry_run)
 
 
 def do_analyze(month_str, dry_run=False):
@@ -6390,24 +6405,25 @@ def cmd_run(args):
                 state["mode"] = "catchup"
                 mode = "catchup"
 
-        if mode == "catchup":
-            done = _do_catchup_tick(today_str, state, dry_run)
-            if done:
-                cursor = state.get("catchup_started", today_str)
-                log.info(f"[run] catchup complete — switching to rebuild from {cursor}")
-                if not dry_run:
-                    update_state(mode="rebuild", rebuild_cursor=cursor)
-                # Don't run rebuild this tick — give the next tick a fresh start.
-        elif mode == "rebuild":
-            done = _do_rebuild_tick(today_str, prev, state, dry_run)
-            if done:
-                log.info(f"[run] rebuild complete — switching to normal")
-                if not dry_run:
-                    update_state(mode="normal")
-                # Also run a normal tick this iteration since rebuild is cheap once done.
+        with _timed_stage(f"tick mode={mode}"):
+            if mode == "catchup":
+                done = _do_catchup_tick(today_str, state, dry_run)
+                if done:
+                    cursor = state.get("catchup_started", today_str)
+                    log.info(f"[run] catchup complete — switching to rebuild from {cursor}")
+                    if not dry_run:
+                        update_state(mode="rebuild", rebuild_cursor=cursor)
+                    # Don't run rebuild this tick — give the next tick a fresh start.
+            elif mode == "rebuild":
+                done = _do_rebuild_tick(today_str, prev, state, dry_run)
+                if done:
+                    log.info(f"[run] rebuild complete — switching to normal")
+                    if not dry_run:
+                        update_state(mode="normal")
+                    # Also run a normal tick this iteration since rebuild is cheap once done.
+                    _do_normal_tick(today_str, prev, today_date, state, dry_run)
+            else:
                 _do_normal_tick(today_str, prev, today_date, state, dry_run)
-        else:
-            _do_normal_tick(today_str, prev, today_date, state, dry_run)
 
         log.info(">>> done")
 
