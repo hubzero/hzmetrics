@@ -390,13 +390,17 @@ def is_month_fully_imported(month_str: str) -> bool:
     return any(d == last for d, _ in dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*"))
 
 def is_month_summarized(month_str: str) -> bool:
-    """True if summarize-month has already produced rows for `month_str`.
+    """True if summarize-month has produced *any* rows for `month_str` —
+    used as a cheap "did we touch this month?" check.
 
     "Summarized" specifically means at least one summary_user_vals row
     exists at `datetime = '<YYYY-MM>-00'` with `period = 1` (PERIOD_MONTH,
     see PERIOD_* constants).  The `-00` is the legacy PHP convention for
     "this whole month" — datetime '2025-07-00' means July 2025 as a unit,
-    not a real day."""
+    not a real day.
+
+    See also is_month_fully_summarized() for the strict completeness check
+    the catchup state machine wants."""
     _, _, _, metrics_db = db_credentials()
     count = mysql_scalar(
         f"SELECT COUNT(*) FROM {metrics_db}.summary_user_vals "
@@ -404,6 +408,80 @@ def is_month_summarized(month_str: str) -> bool:
         (month_str + "-00",),
     )
     return bool(count)
+
+
+# The six period codes summarize-month writes.  Defined here so the
+# completeness check below stays in sync with the canonical list — the
+# real PERIOD_* constants are 3000+ lines below in hzmetrics.py and
+# importing them at module top would mean forward references.
+_PERIOD_CODES_FOR_FULL_CHECK = (1, 0, 3, 12, 13, 14)
+
+# Summary tables that actually receive rows during a complete summarize-month.
+# summary_andmore_vals is excluded — its data lands in the hub DB
+# (jos_resource_stats), not in metrics, so it's perpetually empty here.
+_SUMMARY_VALS_TABLES = ("summary_user_vals", "summary_misc_vals", "summary_simusage_vals")
+
+
+def is_month_fully_summarized(month_str: str) -> bool:
+    """True iff every period code (1, 0, 3, 12, 13, 14) has at least one
+    row in each of summary_user_vals / summary_misc_vals /
+    summary_simusage_vals at `datetime = 'YYYY-MM-00'`.
+
+    Strict end-to-end check: distinguishes "summarize ran and finished"
+    from "summarize started, wrote some period-1 cells, then died" —
+    which we've observed in the live DB for 2025-07 (only 55 of the usual
+    462 summary_user_vals rows present)."""
+    _, _, _, metrics_db = db_credentials()
+    dt = f"{month_str}-00"
+    for table in _SUMMARY_VALS_TABLES:
+        for period in _PERIOD_CODES_FOR_FULL_CHECK:
+            count = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.{table} "
+                f"WHERE datetime = %s AND period = %s;",
+                (dt, period),
+            )
+            if not count:
+                return False
+    return True
+
+
+def month_has_source(month_str: str) -> bool:
+    """True if any pending source log file exists for the given YYYY-MM,
+    anywhere the discovery layer looks (daily/, daily/YYYY/, daily.holding/).
+
+    "Pending" means not-yet-imported — sources already moved to imported/
+    don't count.  Used by the catchup decision matrix to ask: "is there
+    fresh data to ingest for this month, or are we deciding what to do
+    with already-imported state?"  """
+    return bool(pending_days_for_month(month_str))
+
+
+# Base tables that hold per-row activity for a single month.  Used to
+# detect "this month was already imported at some point" even when the
+# source log has been archived off the host (which happened to all the
+# 2024 access logs on geodynamics: rows present in `web` / `userlogin`
+# but daily/ + imported/ + daily.holding/ are all empty for those dates).
+_BASE_DATA_TABLES = ("web", "userlogin", "webhits", "websessions")
+
+
+def month_has_data(month_str: str) -> bool:
+    """True if any base table has at least one row in the given YYYY-MM.
+
+    Cheap probe — `LIMIT 1` on each indexed datetime column.  Used by
+    the catchup decision matrix to distinguish "fresh month, just import"
+    from "rows already present in DB; need wipe-or-trust decision."""
+    _, _, _, metrics_db = db_credentials()
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    start = f"{month_str}-01"
+    end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
+    for table in _BASE_DATA_TABLES:
+        if mysql_scalar(
+            f"SELECT 1 FROM {metrics_db}.{table} "
+            f"WHERE datetime >= %s AND datetime < %s LIMIT 1;",
+            (start, end),
+        ):
+            return True
+    return False
 
 _lock_fd: int | None = None  # held open across acquire/release so flock survives
 
