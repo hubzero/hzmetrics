@@ -59,34 +59,100 @@ recent completed month.
 
 ## Catching up from a backlog
 
-The pipeline is built to drain backlogs autonomously — once `tick`
-is running it processes one month per `:30` invocation.  A 12-month
-backlog drains in ~6 hours of unattended catch-up.
-
-But you can drive it manually if you want it to go faster:
+The pipeline drains backlogs autonomously via the three-mode state
+machine in `cmd_run` (see
+[architecture.md → Catchup orchestration](architecture.md#catchup-orchestration-state-machine)
+for the design).  Each `tick` checks `pipeline_state.mode` and
+dispatches one tick's worth of work.  No operator intervention is
+needed for routine backfill — just let the cron run.
 
 ```bash
-# Process the oldest pending month, foreground:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
-
-# Repeat until status shows nothing pending.
+# Where is the orchestrator?
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
 ```
 
-`process --next` is a one-shot equivalent of one `tick` run — import,
-analyze, summarize one month.  Safe to interrupt; resumes from where
-it stopped on the next invocation.
+`status` prints the mode (`normal` / `catchup` / `rebuild`), the
+`catchup_started` anchor, and (in rebuild mode) the cursor plus
+remaining-month count.  Example mid-catchup output:
+
+```
+=== orchestrator state ===
+  mode             : catchup
+  last analyzed    : 2026-05-19
+  catchup_started  : 2022-01
+=== pending import (all source dirs) ===
+  httpd access: 924  (20220501 .. 20260518)
+  cmsauth     : 1330 (20201030 .. 20260518)
+```
+
+Each tick processes one backlog month.  Drive ticks faster by
+invoking manually:
+
+```bash
+# One tick — process oldest backlog month, foreground:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+
+# Time it to spot slow stages:
+time sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+
+# Loop until catchup completes (state.mode flips to rebuild then normal):
+while :; do
+    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run || break
+    mode=$(mysql -BN -e "SELECT v FROM <hub>_metrics.pipeline_state WHERE k='mode'")
+    [ "$mode" = "normal" ] && break
+done
+```
+
+`run` is the same code path `tick` invokes at `:30`; the orchestrator
+is idempotent and resumes from `pipeline_state` on the next call.
+
+### Driving rebuild manually
+
+Once catchup completes, `tick` automatically enters `rebuild` mode and
+re-summarizes one month per tick (all six periods).  To drive that
+range manually:
+
+```bash
+# Catchup wrote period=1 cells only.  Resummarize a range with all
+# six periods to fix long-window (0/3/12/13/14) cells:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2024-12
+
+# Or narrow to just specific periods (e.g. only the long ones):
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --periods 0,3,12,13,14
+
+# Dry-run first:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2022-03 --dry-run
+```
+
+`rebuild-summaries` does NOT modify `pipeline_state.mode` — so it's
+safe to use alongside an in-flight rebuild.  Useful for batched
+operator-driven rebuilds when "one month per tick" is too slow.
 
 ## My log files aren't where the pipeline looks
 
-Apache's own logrotate, if it's set up differently, may put logs
-straight in `/var/log/httpd/` as `access_log-YYYYMMDD.gz` instead of
-in `/var/log/httpd/daily/<hub>-access.log-YYYYMMDD`.  The pipeline
-only reads from `daily/`.
+The discovery layer scans every place a source log may live, in this
+order:
+
+  - `/var/log/httpd/daily/<hub>-access*log*` (current standard)
+  - `/var/log/httpd/daily/<YYYY>/<hub>-access*log*` (sysadmin year-subdir)
+  - `/var/log/httpd/daily.holding/<hub>-access*log*` (alternate logrotate target)
+
+Same three for cmsauth under `/var/log/hubzero/`.  If a log file lives
+anywhere else, the pipeline can't see it — move or symlink it into one
+of those.  Duplicates across locations resolve toward higher priority
+(daily/ wins over daily.holding/) with a warning.
+
+Year-subdirs and `daily.holding/` are sysadmin organizational
+conventions, not pipeline policy — the orchestrator cleans up empty
+ones after archiving the last file out.
 
 ```bash
-# Move them where the pipeline expects:
+# Apache's stock layout (access_log-YYYYMMDD.gz under /var/log/httpd/)
+# isn't a recognized source.  Move + rename:
 sudo mv /var/log/httpd/access_log-*.gz /var/log/httpd/daily/
-# Rename to the expected pattern:
 cd /var/log/httpd/daily
 for f in access_log-*.gz; do
     date=${f#access_log-}; date=${date%.gz}
@@ -95,9 +161,6 @@ done
 ```
 
 `hzmetrics.py status` will then see them on the next invocation.
-
-CMS auth logs follow the same model — they should be in
-`/var/log/hubzero/daily/cmsauth.log-YYYYMMDD`.
 
 If the underlying logrotate is wrong (not putting files in `daily/`
 at all), check `/etc/logrotate.d/httpd` and `/etc/logrotate.d/hubzero`

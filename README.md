@@ -71,18 +71,26 @@ One cron entry, every five minutes, does all the rest:
 
 `tick` refreshes the whoisonline map on every invocation; at `:30`
 past each hour it also opportunistically runs the metrics pipeline
-under a PID lock. A long-stalled host drains its log backlog one
-month per hourly tick without operator intervention — 12 months of
-backlog is ~6 hours of unattended catch-up.
+under a PID lock.
+
+The pipeline is a three-mode state machine — `normal` (steady-state),
+`catchup` (drain a backlog one month per tick, period=1 only), and
+`rebuild` (refresh long-window summary cells once catchup is done).
+Mode lives in the `pipeline_state` DB table and is recomputed each
+tick from filesystem + DB state, so the orchestrator self-corrects
+after manual intervention. A multi-year backlog drains autonomously;
+see [`docs/architecture.md`](docs/architecture.md#catchup-orchestration-state-machine).
 
 `hzmetrics.py --help` lists every subcommand. The big ones:
 
 ```
 tick                       cron entry (whoisonline + metrics at :30)
-run [--dry-run]            autonomous metrics run
-status                     pending vs imported log state
+run [--dry-run]            autonomous tick — dispatches by pipeline_state.mode
+status                     orchestrator mode + cursors + pending/imported counts
 process --next             oldest pending month, foreground
 import / analyze / summarize  individual stages, --month YYYY-MM
+rebuild-summaries --since YYYY-MM [--through ...] [--periods ...]
+                           manual range resummarize (doesn't touch state.mode)
 fill-geo / backfill-dnload    one-shot backfill utilities
 migrate [--apply]          schema migrations
 setup-db [--dry-run]       create the metrics DB schema from scratch
@@ -117,7 +125,7 @@ the daily-state-already-completed guard on `run` / `process` /
 │   └── public/                        built static site (served by Pages)
 ├── tests/legacy/                      pre-rewrite PHP/Perl/Bash pipeline,
 │                                      preserved as the A/B parity reference
-└── tests/ab/                          A/B test harness (26 ports)
+└── tests/ab/                          A/B test harness (35 ports)
     ├── run-all.sh                     A/B mode: legacy vs new, diff outputs
     ├── run-all-golden.sh              golden mode: new vs frozen snapshots
     ├── setup_test_dbs.sh              create test DBs + load reference data

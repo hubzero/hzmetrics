@@ -28,7 +28,7 @@ current codebase.  CI runs golden plus defensive mode.
 
 ## What's tested
 
-26 test directories under `tests/ab/port_*`:
+35 test directories under `tests/ab/port_*`:
 
 **Per-port A/B (16):** `port_andmore_usage`, `port_clean_bots`,
 `port_fill_domain`, `port_fill_ipcountry`, `port_fill_user_info`,
@@ -53,6 +53,26 @@ on the same DB), `port_dryrun` (every `--dry-run` writes zero rows),
 `port_empty_input` (each port no-ops cleanly on empty input),
 `port_determinism` (two fresh-DB runs are byte-identical),
 `port_cli_contracts` (invalid CLI/config paths exit non-zero).
+
+**Orchestration (5):** `port_discovery` (source-log enumeration
+across `daily/`, `daily/YYYY/`, `daily.holding/`),
+`port_state` (DB-backed `pipeline_state` read/write + file→DB
+bootstrap), `port_decisions` (the three Phase-C decision helpers +
+every row of the catchup decision matrix), `port_cmd_run`
+(three-mode state machine: mode dispatch + transitions + per-month
+routing via monkey-patched DB), `port_rebuild_summaries`
+(the manual-range CLI + extended `status` output).
+
+**Catchup correctness (3):** `port_wipe_scope` (`_wipe_month_data`
+deletes the target month from web/userlogin/webhits/websessions and
+all four summary_*_vals tables and leaves adjacent months
+untouched), `port_periods_filter` (`do_summarize(periods=(1,))`
+writes exactly the period-1 grid and zero rows in any other period;
+inverse pass with `periods=None` populates all six),
+`port_rebuild_correctness` (loads month M2 fully summarized; adds
+month M1 rows; resummarizes M2; asserts period-14 refreshed to
+include M1 while period-1 stays unchanged — the core promise of
+rebuild mode).
 
 ## Running
 

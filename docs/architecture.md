@@ -200,31 +200,125 @@ One cron entry:
 `tick` does:
 
 1. Always: refresh `whoisonline` (jos_session_geo + xml map).
-2. If the wall clock minute is in `{30..34}`: try to acquire
-   `/var/run/hzmetrics/hzmetrics.pid`.  If acquired, run the metrics
-   pipeline.  If another `tick` holds the lock, exit cleanly.
+2. If the wall clock minute is `30`: invoke `cmd_run`.
+   `cmd_run` acquires `/var/run/hzmetrics/hzmetrics.pid` via
+   `fcntl.flock`; if another `tick` holds it, exit cleanly.
 
-Inside `run`:
+The lock is the only concurrency guard.  `flock` releases automatically
+on process death, so there is no stale-lock recovery to write.
 
-1. Read `hzmetrics.state` (last-daily-run timestamp).  If a daily run
-   completed today, exit without doing anything.
-2. Find the oldest pending log day.  If none, mark daily complete and
-   exit.
-3. Process at most one full month of backlog per `run` invocation.
-4. Update `hzmetrics.state` if a full daily cycle finished.
+## Catchup orchestration (state machine)
 
-This is the catch-up mechanism: a long-stalled host gradually drains
-the log queue at one month per hour without operator intervention,
-without holding the lock for hours, and without skipping any data.
+`cmd_run` is a three-mode state machine, not the "one month per tick"
+loop the section above used to describe.  The mode lives in the
+`pipeline_state` table (see [State](#state) below) and decides what
+each tick does:
 
-`tests/ab/port_dryrun/` verifies that `--dry-run` mode on every
-mutating subcommand performs zero database writes.
-`tests/ab/port_idempotency/` verifies that re-running the pipeline on
-already-processed state produces byte-identical output.
-`tests/ab/port_determinism/` verifies that two fresh-DB runs produce
-identical output.  See [testing.md](testing.md).
+| Mode     | What a tick does                                                                                   | Transition to                  |
+|----------|----------------------------------------------------------------------------------------------------|--------------------------------|
+| `normal` | Import pending days for the current month; summarize the previous month when it's fully imported.  | → `catchup` when any month strictly before today has either a pending source log or DB rows with incomplete summary. |
+| `catchup`| Pick the oldest backlog month, apply the per-month decision matrix, summarize with `periods=(1,)`. | → `rebuild` when no backlog months remain. |
+| `rebuild`| Walk forward from `rebuild_cursor` through prev-month, re-summarize each with all six periods.     | → `normal` when cursor passes prev-month. |
 
-## State files
+Mode transitions are computed at the start of every tick from
+filesystem + DB state — not stored.  So the orchestrator self-corrects
+after manual intervention or external changes (e.g., someone drops a
+new log into `daily/2027/` mid-rebuild).
+
+### Why three modes
+
+The legacy "one month per tick" approach worked when backlog was small
+and recent.  It produces wrong long-window numbers when the backlog
+spans multiple years: a month summarized with all six periods writes
+its period-14 (all-time) cell from the rows present at that moment.
+Backfilling an earlier month later doesn't update those cells.
+
+Splitting catchup from rebuild fixes that.  Catchup ticks stay cheap
+because they only write period-1 (the month's own cells); the
+long-window cells stay deferred.  Once catchup is done, rebuild walks
+every affected month and re-summarizes with all six periods.  This
+gives correct period-14 / period-13 / period-12 numbers across the
+whole DB after a multi-year backfill.
+
+### The per-month decision matrix
+
+Catchup picks the oldest backlog month and routes it through one of
+five branches based on three Phase-C helpers (`month_has_source`,
+`month_has_data`, `is_month_fully_summarized`):
+
+| source | data | summary       | action |
+|:------:|:----:|:--------------|--------|
+|   ✓    |  ✗   | —             | fresh import + analyze + summarize-period-1 |
+|   ✓    |  ✓   | none/partial  | wipe + reimport + analyze + summarize-period-1 |
+|   ✗    |  ✓   | none/partial  | DB-only: analyze + summarize-period-1 (no import) |
+|   ✗    |  ✗   | —             | skip (true gap — no source ever existed) |
+|  any   |  ✓   | full          | skip (already done) |
+
+The `source ✗ data ✓` branch is what catches the 2024-access case
+on geodynamics (rows exist in `web` because they were imported once,
+but the archived source files are gone and can't be re-derived).
+
+### Source-log discovery
+
+`enumerate_log_sources(kind)` returns sorted `[(YYYYMMDD, Path), ...]`
+unioning every place a source log may live, in priority order:
+
+  - `daily/<site>-access*log*` (current standard)
+  - `daily/<YYYY>/<site>-access*log*` (sysadmin year-subdir layout)
+  - `daily.holding/<site>-access*log*` (alternate logrotate target)
+
+Duplicate dates resolve toward the higher-priority location (a
+warning logs the conflict).  After `do_archive_logs` moves files
+into the canonical `imported/`, any `daily/YYYY/` or `daily.holding/`
+subdir that just became empty gets `rmdir`'d.  Subdirs are sysadmin
+convention, not pipeline policy — clean up as we drain them.
+
+### Catching up manually
+
+`hzmetrics status` shows the current mode, `catchup_started` anchor,
+and (in rebuild mode) cursor + remaining-month count.
+`hzmetrics rebuild-summaries --since YYYY-MM [--through YYYY-MM]
+[--periods 0,1,3,12,13,14] [--dry-run]` is a manual range
+resummarize; it does NOT touch `pipeline_state.mode`, so the
+state machine keeps running independently.
+
+`tests/ab/port_cmd_run/` walks each row of the decision matrix and
+each mode transition; `tests/ab/port_periods_filter/` verifies that
+catchup's `periods=(1,)` actually skips long-window writes;
+`tests/ab/port_rebuild_correctness/` proves that a backfill changes
+period-14 cells for downstream months without disturbing period-1.
+
+## State
+
+Most pipeline state lives in the DB now.  `/var/run/hzmetrics/` is
+only the runtime lockfile.
+
+`pipeline_state` is a tiny key/value table in `<hub>_metrics`:
+
+| key                | meaning                                                       |
+|--------------------|---------------------------------------------------------------|
+| `analyzed`         | `YYYY-MM-DD` — date a normal-mode tick last ran analyze       |
+| `mode`             | `normal` \| `catchup` \| `rebuild`                            |
+| `catchup_started`  | earliest YYYY-MM that catchup touched (set on entry)          |
+| `rebuild_cursor`   | next YYYY-MM that rebuild will resummarize                    |
+
+Updates are single-statement `INSERT … ON DUPLICATE KEY UPDATE`, so
+multi-key writes are atomic from any concurrent reader's point of view.
+
+The flock-based lock stays on disk — kernel-managed dead-process
+release is hard to replicate cleanly in SQL.
+
+**Bootstrap:** on first read after upgrade, if `pipeline_state` is
+empty AND `/var/run/hzmetrics/hzmetrics.state` exists (the legacy
+file format), its keys are imported into the table once.  The file
+is left in place — harmless and useful for operators who grep
+`/var/run` first.
+
+`tests/ab/port_state/` covers DB read/write, multi-key atomicity,
+and the file→DB bootstrap (empty / skip-when-table-nonempty /
+malformed-lines / latch-after-first-call / unreadable-file).
+
+## Files on disk
 
 - `/etc/hubzero-metrics/access.cfg` — DB credentials, paths.  Owned
   by root:apache, mode 640.
@@ -233,8 +327,9 @@ identical output.  See [testing.md](testing.md).
   [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample).
 - `/var/run/hzmetrics/hzmetrics.pid` — PID lock, ensures one
   pipeline at a time.  Created at boot by `/etc/tmpfiles.d/hzmetrics.conf`.
-- `/var/run/hzmetrics/hzmetrics.state` — daily state (last completed
-  daily-run timestamp).
+- `/var/run/hzmetrics/hzmetrics.state` — legacy state file.  Only
+  read at first-run bootstrap into `pipeline_state`; not updated
+  by current code.  Safe to delete after the bootstrap.
 - `/var/log/hubzero/metrics/` — pipeline log directory.
 - `/var/log/httpd/daily/`, `/var/log/hubzero/daily/` — incoming log
   files.  Pipeline reads, processes, and moves them to `imported/`.
@@ -245,12 +340,14 @@ identical output.  See [testing.md](testing.md).
 
 ```
 tick                       cron entry point (whoisonline + metrics at :30)
-run [--dry-run]            autonomous metrics run (analyze/summarize)
+run [--dry-run]            autonomous metrics run — dispatches by pipeline_state.mode
 whoisonline                refresh whoisonline state
-status                     show pending vs imported log state
+status                     orchestrator mode + cursors + pending/imported counts
 process --next             process oldest pending month manually
 process --month YYYY-MM    process a specific month
 import / analyze / summarize  individual stages, --month YYYY-MM
+rebuild-summaries --since YYYY-MM [--through ...] [--periods 0,1,3,12,13,14]
+                           manual range resummarize (doesn't touch state.mode)
 fill-geo / backfill-dnload    one-shot backfill utilities
 migrate [--apply]          show or apply schema migrations
 setup-db [--dry-run]       create the metrics DB schema from scratch
@@ -271,7 +368,7 @@ daily-state-already-completed guard on `run` / `process` / `analyze` /
   `/var/run/hzmetrics/` at boot.
 - **`tests/legacy/`** — the original PHP/Perl/Bash pipeline preserved
   as the A/B parity reference.
-- **`tests/ab/`** — the A/B test harness (26 tests; see
+- **`tests/ab/`** — the A/B test harness (35 ports; see
   [testing.md](testing.md)).
 - **`README.txt`** — historical hub-installation notes (largely
   superseded by these docs).

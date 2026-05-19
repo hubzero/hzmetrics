@@ -63,7 +63,8 @@ set instead of relying on system packages being present.
 /etc/tmpfiles.d/hzmetrics.conf                 systemd-tmpfiles, creates /var/run/hzmetrics/
 /var/spool/cron/apache                         the cron entry (single line)
 /var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
-/var/run/hzmetrics/hzmetrics.state             daily state (created at runtime)
+/var/run/hzmetrics/hzmetrics.state             legacy state file — bootstrap-only
+                                               (orchestrator state lives in DB now)
 /var/log/hubzero/metrics/manage.log         pipeline log
 ```
 
@@ -230,18 +231,23 @@ restarting (it reopens on the next `tick`):
 
 ## Catch-up after a stalled host
 
-The pipeline is built to drain log backlogs on its own.  Once the
-cron entry is running:
+`cmd_run` is a three-mode state machine (see
+[architecture.md → Catchup orchestration](architecture.md#catchup-orchestration-state-machine)):
+when it detects a backlog it flips itself into `catchup` mode, drains
+one month per tick using the per-month decision matrix, then enters
+`rebuild` mode to refresh long-window summary cells.  All autonomous.
 
 ```
-# What's pending?
+# Where is the orchestrator?  status shows mode + cursors:
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
 
-# Either wait — `tick` will process one month per hourly :30 tick.
-# 12 months of backlog → about 6 hours of unattended catch-up.
+# Drive ticks manually if `tick` cadence is too slow:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
 
-# Or do it explicitly, one month at a time, in the foreground:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
+# Resummarize a range without touching state.mode
+# (useful for a one-shot rebuild after a data fix):
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2024-12
 ```
 
 See [operations.md](operations.md) for the runbook on common

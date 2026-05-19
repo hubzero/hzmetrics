@@ -144,12 +144,55 @@ concern from the daily metrics pipeline.
 ### Tick
 The cron entry point — `hzmetrics.py tick` — that runs every 5
 minutes.  Always refreshes whoisonline; at `:30` past the hour, also
-tries to run the metrics pipeline (under PID-lock guard).
+invokes `cmd_run` (which acquires the flock and dispatches by mode).
+
+### Orchestrator mode
+The string in `pipeline_state.mode` that controls what each `tick`
+does.  One of:
+
+- `normal`: steady-state.  Import today's pending logs; summarize the
+  previous month when it's fully imported.
+- `catchup`: process one backlog month per tick, applying the
+  per-month decision matrix.  Summarize with `periods=(1,)` only.
+- `rebuild`: walk `rebuild_cursor` through prev-month, re-summarizing
+  each with all six periods to fix long-window cells that catchup
+  left stale.
+
+Transitions are computed at the start of every tick from filesystem
++ DB state, not stored across ticks.  See
+[architecture.md → Catchup orchestration](architecture.md#catchup-orchestration-state-machine).
+
+### Backlog month
+A month strictly before the current calendar month that either has a
+pending source log or has DB rows with an incomplete summary.  The
+orchestrator picks the oldest backlog month at each catchup tick.
+
+### Decision matrix (catchup)
+Three-helper test used to route a backlog month into one of five
+branches: `month_has_source(m)`, `month_has_data(m)`,
+`is_month_fully_summarized(m)`.  The table is documented in
+[architecture.md → The per-month decision matrix](architecture.md#the-per-month-decision-matrix).
+The unusual cell — `source ✗ data ✓` — is what handles months whose
+DB rows survived an old import but whose source files are gone.
+
+### `pipeline_state`
+Key/value table in the metrics DB that stores orchestrator state:
+`analyzed`, `mode`, `catchup_started`, `rebuild_cursor`.  Replaces
+the legacy `/var/run/hzmetrics/hzmetrics.state` file (which was on
+tmpfs and lost on reboot).  Multi-key writes are atomic via single
+`INSERT … ON DUPLICATE KEY UPDATE`.  The file→DB bootstrap on first
+read of an upgraded install imports the legacy file once.
 
 ### Migration (schema)
 A row in `<hub>_metrics.migrations` recording an applied schema
 delta.  `hzmetrics.py migrate --apply` walks the unapplied migrations
 in order and runs them.  Standard schema-migration pattern.
+
+Each migration carries a `check_sql` against `information_schema` (or
+data state) that lets it auto-detect "already applied" — important
+because the DDL in `setup-db` now bakes in the post-migration state,
+so a fresh install marks every migration applied without re-running
+them.
 
 ### `access.cfg`
 `/etc/hubzero-metrics/access.cfg`.  Bare `$var = 'value';` PHP-style

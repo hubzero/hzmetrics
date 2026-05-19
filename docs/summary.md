@@ -50,14 +50,20 @@ One cron entry, every 5 minutes:
 
 `tick` updates the whoisonline map on every invocation.  At `:30` past
 each hour it also opportunistically runs the metrics pipeline (one
-PID-lock-guarded process at a time).  A daily-state file gates the
-metrics work to once per calendar day.
+PID-lock-guarded process at a time).  Orchestrator state lives in the
+`pipeline_state` DB table — one row per key, including the current
+mode (`normal` / `catchup` / `rebuild`).
 
 If the host has been down for a while, log files just accumulate in
-`/var/log/httpd/daily/` and `/var/log/hubzero/daily/`.  Once `tick`
-resumes it works through the backlog one month per invocation — no
-manual intervention required.  For 12 months of backlog that's about 6
-hours of fully unattended catch-up.
+`/var/log/httpd/daily/`, `/var/log/httpd/daily.holding/`, or
+`/var/log/hubzero/daily/`.  Once `tick` resumes, the orchestrator
+detects the backlog, flips itself into `catchup` mode, and drains
+months oldest-first — one per invocation — using a per-month decision
+matrix that picks between fresh import, wipe+reimport, or DB-only
+resummarize.  After catchup, a `rebuild` phase walks every affected
+month with all six period codes to fix long-window cells.  No manual
+intervention required for routine backfill; see
+[architecture.md → Catchup orchestration](architecture.md#catchup-orchestration-state-machine).
 
 ## Pipeline at a glance
 
