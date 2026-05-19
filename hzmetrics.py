@@ -478,33 +478,105 @@ def release_lock() -> None:
         except FileNotFoundError:
             pass
 
-def read_state() -> dict[str, str]:
-    """Parse STATE_FILE into a {key: value} dict.  File format is one
-    `key=value\\n` per line; missing file or unparseable content returns
-    an empty dict (the next update_state will recreate it from scratch).
+# State lives in `<metrics_db>.pipeline_state` (a simple key/value table).
+# Previously it was a one-line-per-key file at /var/run/hzmetrics/hzmetrics.state.
+# The DB location survives reboots (tmpfs wipes /var/run on most distros),
+# enables atomic multi-key updates, and shows up in standard mysqldumps so
+# operators don't lose orchestrator state when restoring backups.
+#
+# The flock-based lock at LOCK_FILE stays on disk — kernel-managed
+# dead-process release is hard to replicate cleanly in SQL.
+#
+# Tracked keys today:
+#   analyzed=YYYY-MM-DD     — last day cmd_run invoked do_analyze (daily guard)
+#   mode=normal|catchup|rebuild  (added in Phase C)
+#   catchup_started=YYYY-MM
+#   rebuild_cursor=YYYY-MM
 
-    Tracked keys today: `analyzed=YYYY-MM-DD` — the date on which the
-    most recent `cmd_run` last invoked do_analyze, used by the daily-
-    state guard so analyze runs at most once per calendar day."""
+_state_bootstrapped: bool = False  # one-shot file → DB migration latch
+
+def _state_table(metrics_db: str) -> str:
+    return f"{metrics_db}.pipeline_state"
+
+def _ensure_state_table(metrics_db: str) -> None:
+    """Create pipeline_state if missing — covers the upgrade window
+    before `hzmetrics migrate --apply` has been run.  Idempotent; cheap
+    enough to call on every read/write."""
+    mysql_exec(
+        f"CREATE TABLE IF NOT EXISTS {_state_table(metrics_db)} ("
+        "  k VARCHAR(64) NOT NULL,"
+        "  v VARCHAR(255) NOT NULL,"
+        "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
+        "    ON UPDATE CURRENT_TIMESTAMP,"
+        "  PRIMARY KEY (k)"
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;"
+    )
+
+def _bootstrap_state_from_file(metrics_db: str) -> None:
+    """One-shot file → DB migration.  If pipeline_state is empty AND the
+    legacy STATE_FILE has content, import each k=v line into the table.
+    The file is left in place (don't delete — operators may still grep
+    /var/run for it).  Cached after the first attempt so the cost is paid
+    once per process."""
+    global _state_bootstrapped
+    if _state_bootstrapped:
+        return
+    _state_bootstrapped = True  # latch even on failure — don't retry on every read
+
+    count = mysql_scalar(f"SELECT COUNT(*) FROM {_state_table(metrics_db)};")
+    if count is None or count > 0:
+        return
+    if not STATE_FILE.exists():
+        return
     try:
-        return dict(
-            line.split("=", 1)
-            for line in STATE_FILE.read_text().splitlines()
-            if "=" in line
-        )
-    except (FileNotFoundError, ValueError):
-        return {}
+        body = STATE_FILE.read_text()
+    except (PermissionError, OSError) as e:
+        log.debug(f"[state] bootstrap: could not read {STATE_FILE}: {e}")
+        return
+    pairs = [(k.strip(), v.strip())
+             for line in body.splitlines() if "=" in line
+             for k, v in [line.split("=", 1)]
+             if k.strip()]
+    if not pairs:
+        return
+    values = ", ".join(["(%s, %s)"] * len(pairs))
+    params: list = [x for pair in pairs for x in pair]
+    rc = mysql_exec(
+        f"INSERT INTO {_state_table(metrics_db)} (k, v) VALUES {values} "
+        f"ON DUPLICATE KEY UPDATE v=VALUES(v);",
+        tuple(params),
+    )
+    if rc == 0:
+        log.info(f"[state] bootstrapped {len(pairs)} key(s) from {STATE_FILE}")
+
+def read_state() -> dict[str, str]:
+    """Return the {key: value} dict from pipeline_state.
+
+    On first call after an upgrade, if the table is empty and the legacy
+    /var/run/hzmetrics/hzmetrics.state file exists, its keys are imported
+    into the table; the file is left in place."""
+    _, _, _, metrics_db = db_credentials()
+    _ensure_state_table(metrics_db)
+    _bootstrap_state_from_file(metrics_db)
+    return {k: v for k, v in mysql_query(
+        f"SELECT k, v FROM {_state_table(metrics_db)};"
+    )}
 
 def update_state(**kwargs: object) -> None:
-    state = read_state()
-    state.update({k: str(v) for k, v in kwargs.items()})
-    body = "".join(f"{k}={v}\n" for k, v in state.items())
-    # Atomic write: a partial state file would mis-gate the next tick.
-    # Write to a sibling temp file then os.replace into place — POSIX
-    # guarantees the rename is atomic on the same filesystem.
-    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
-    tmp.write_text(body)
-    os.replace(tmp, STATE_FILE)
+    """Upsert key=value pairs.  Single SQL statement so an in-flight
+    `cmd_run` either sees all the new values or none (ON DUPLICATE KEY
+    UPDATE is row-atomic; one statement = one transaction)."""
+    if not kwargs:
+        return
+    _, _, _, metrics_db = db_credentials()
+    _ensure_state_table(metrics_db)
+    values = ", ".join(["(%s, %s)"] * len(kwargs))
+    params: list = [x for k, v in kwargs.items() for x in (k, str(v))]
+    mysql_exec(
+        f"INSERT INTO {_state_table(metrics_db)} (k, v) VALUES {values} "
+        f"ON DUPLICATE KEY UPDATE v=VALUES(v);",
+        tuple(params),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +633,23 @@ MIGRATIONS = [
         description="Index websessions(jobs, ipcountry, duration) — period-14 all-time download_users filter",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_jobs_country_dur (jobs, ipcountry, duration);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_jobs_country_dur';",
+    ),
+    Migration(
+        id=7,
+        description="Create pipeline_state — orchestrator state moves from /var/run file to DB",
+        sql=(
+            "CREATE TABLE IF NOT EXISTS {metrics_db}.pipeline_state ("
+            "  k VARCHAR(64) NOT NULL,"
+            "  v VARCHAR(255) NOT NULL,"
+            "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
+            "    ON UPDATE CURRENT_TIMESTAMP,"
+            "  PRIMARY KEY (k)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;"
+        ),
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='{metrics_db}' AND table_name='pipeline_state';"
+        ),
     ),
 ]
 
@@ -1023,6 +1112,13 @@ METRICS_DB_DDL = [
   KEY `ipcountry` (`ipcountry`),
   KEY `ip` (`ip`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+
+    """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`pipeline_state` (
+  `k` varchar(64) NOT NULL,
+  `v` varchar(255) NOT NULL,
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`k`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 ]
 
 

@@ -16,6 +16,7 @@ tests=(
     port_idempotency
     port_invariants
     port_determinism
+    port_state
 )
 
 pass=0
