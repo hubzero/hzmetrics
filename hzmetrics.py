@@ -483,6 +483,44 @@ def month_has_data(month_str: str) -> bool:
             return True
     return False
 
+
+def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
+    """DELETE all rows for `month_str` from the base time-series tables
+    and the summary_*_vals tables.  Used by the catchup decision matrix
+    when both source ✓ and data ✓: prior import / summarize state for
+    this month is suspect (partial), so we wipe it and reimport from the
+    archived source files for a clean slate.
+
+    Never call this on a month whose source logs are gone — that data is
+    irreplaceable.  Callers must check month_has_source() first."""
+    _, _, _, metrics_db = db_credentials()
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    start = f"{month_str}-01"
+    end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
+    dt_summary = f"{month_str}-00"  # '-00' = whole-month marker
+
+    log.info(f"[wipe] {month_str}: clearing base + summary rows")
+    if dry_run:
+        for table in _BASE_DATA_TABLES:
+            log.info(f"  [dry-run] DELETE FROM {table} "
+                     f"WHERE datetime >= '{start}' AND datetime < '{end}';")
+        for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
+            log.info(f"  [dry-run] DELETE FROM {table} "
+                     f"WHERE datetime = '{dt_summary}';")
+        return
+
+    for table in _BASE_DATA_TABLES:
+        mysql_exec(
+            f"DELETE FROM {metrics_db}.{table} "
+            f"WHERE datetime >= %s AND datetime < %s;",
+            (start, end),
+        )
+    for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
+        mysql_exec(
+            f"DELETE FROM {metrics_db}.{table} WHERE datetime = %s;",
+            (dt_summary,),
+        )
+
 _lock_fd: int | None = None  # held open across acquire/release so flock survives
 
 def acquire_lock() -> bool:
@@ -1565,13 +1603,25 @@ def _do_usage_metrics_stage(month_str, dry_run):
     do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
 
 
-def _do_summary_stage(month_str, dry_run):
+def _do_summary_stage(month_str, dry_run, *, periods=None):
     """Run the per-month rolling-window summary stage in-process.
-    Direct port of __process_usage_metrics_summary.sh."""
+    Direct port of __process_usage_metrics_summary.sh.
+
+    periods: iterable of period codes; None means all six (the legacy
+    default).  Catchup-mode ticks pass (1,) so they only write this-month
+    cells; the long-window periods (0/3/12/13/14) for backfilled months
+    get a correctness rebuild later via the rebuild-mode sweep.
+
+    andmore_usage is suppressed when periods restricts to (1,) — andmore
+    iterates periods 1/12/14 against the hub DB; touching 12/14 on a
+    backfilled month would write wrong rolling/all-time numbers that
+    we'd have to redo anyway."""
     _stage_banner("summary")
     do_import_hub_data(dry_run=dry_run)
-    do_summarize_month(month_str, dry_run=dry_run)
-    do_andmore_usage( month_str, dry_run=dry_run)
+    do_summarize_month(month_str, periods=periods, dry_run=dry_run)
+    catchup_only = periods is not None and set(periods) == {1}
+    if not catchup_only:
+        do_andmore_usage(month_str, dry_run=dry_run)
 
 
 def do_analyze(month_str, dry_run=False):
@@ -1584,11 +1634,15 @@ def do_analyze(month_str, dry_run=False):
     _do_usage_metrics_stage(month_str, dry_run)
 
 
-def do_summarize(month_str, dry_run=False):
+def do_summarize(month_str, dry_run=False, *, periods=None):
     """Run the per-month rolling-window summary stage.  Wraps
     __process_usage_metrics_summary.sh — called by cmd_summarize and by
-    the catch-up loop in cmd_run after do_analyze completes."""
-    _do_summary_stage(month_str or None, dry_run)
+    the catch-up loop in cmd_run after do_analyze completes.
+
+    periods: iterable subset of period codes (default: all six).  Catchup
+    passes (1,) so it stays cheap and skips long-window periods whose
+    correctness depends on months that haven't been backfilled yet."""
+    _do_summary_stage(month_str or None, dry_run, periods=periods)
 
 
 # ---------------------------------------------------------------------------
@@ -6007,6 +6061,218 @@ def cmd_resolve_dns(args):
 # run  (autonomous daily / catch-up mode)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# cmd_run: three-mode orchestrator (normal | catchup | rebuild)
+#
+# State, transitions, and per-month routing
+# -----------------------------------------
+# Each tick reads `pipeline_state` to get the current mode and dispatches
+# to the matching handler.  Mode transitions are computed at the start of
+# every tick from filesystem + DB state, not stored across ticks — so
+# the orchestrator self-corrects after manual intervention or external
+# changes (e.g. someone drops a new log into daily/2027/ mid-rebuild).
+#
+#   normal:  default.  Today's pending logs get imported, prev month gets
+#            summarized when its last day arrives.
+#            Transition → catchup when any month strictly before today_str
+#            has either a pending source log or DB rows + incomplete summary.
+#
+#   catchup: process one backlog month per tick.  Applies the decision
+#            matrix from Phase C (month_has_source / month_has_data /
+#            is_month_fully_summarized) to pick import / wipe+reimport /
+#            resummarize-only / skip.  Summarize uses periods=(1,) so the
+#            expensive long-window (0/3/12/13/14) work is deferred to
+#            rebuild.  Records earliest backfilled month in
+#            state["catchup_started"].
+#            Transition → rebuild when no more backlog months need touching.
+#
+#   rebuild: walk forward from state["rebuild_cursor"] (initially set to
+#            state["catchup_started"]) through prev_month(today_str),
+#            re-summarizing one month per tick with all six periods.  This
+#            corrects the period 12/13/14 cells in every month at-or-after
+#            the earliest backfill — those cells were computed when 2022 /
+#            2023 weren't yet in `web`, so their windows are now stale.
+#            Transition → normal when cursor passes prev_month.
+# ---------------------------------------------------------------------------
+
+_CATCHUP_PERIODS: tuple = (1,)  # period=1 only: this-month cells, self-contained
+
+
+def _import_month(month_str: str, dry_run: bool) -> None:
+    """Import every pending day in `month_str` via do_import_day.  Days
+    that aren't pending (because they're already in imported/ or simply
+    don't exist) are silently skipped — do_import_day itself is a no-op
+    when its source files aren't found."""
+    days = pending_days_for_month(month_str)
+    log.info(f"[import] {month_str}: {len(days)} day(s) pending")
+    for date_str in days:
+        log.info(f"--- {date_str} ---")
+        do_import_day(date_str, dry_run)
+
+
+def _do_normal_tick(today_str: str, prev: str, today_date: str,
+                    state: dict, dry_run: bool) -> None:
+    """Steady-state behaviour: import any pending logs for today's month,
+    analyze the current month once per day, summarize the previous month
+    when its last day has arrived (or when we're >5 days into the new
+    month and the last day still hasn't shown up — a tolerant fallback
+    that catches logrotate drops)."""
+    current_pending = pending_days_for_month(today_str)
+    if current_pending:
+        log.info(f"[normal] importing {len(current_pending)} pending day(s) for {today_str}")
+        for date_str in current_pending:
+            log.info(f"--- {date_str} ---")
+            do_import_day(date_str, dry_run)
+
+    analyzed_today = state.get("analyzed") == today_date
+    if not analyzed_today:
+        log.info(f"[normal] analyzing current month {today_str}")
+        do_analyze(today_str, dry_run)
+        if not dry_run:
+            update_state(analyzed=today_date)
+
+    prev_needs_work = (
+        not is_month_summarized(prev) and is_month_fully_imported(prev)
+    )
+    if prev_needs_work:
+        log.info(f"[normal] {prev} complete — analyzing and summarizing")
+        do_analyze(prev, dry_run)
+        do_summarize(prev, dry_run)
+    elif not is_month_summarized(prev):
+        last    = last_day_of_month(prev)
+        days_in = date.today().day
+        if days_in > 5:
+            log.warning(f"[normal] {prev} last day ({last}) never arrived "
+                        f"({days_in}d into {today_str}) — summarizing without it")
+            do_analyze(prev, dry_run)
+            do_summarize(prev, dry_run)
+        else:
+            log.info(f"[normal] {prev} last day ({last}) not yet imported — deferring")
+
+
+def _backlog_months(today_str: str) -> list[str]:
+    """Months strictly before today_str that need orchestrator attention:
+    either still have pending source logs, OR have base-table data but
+    aren't fully summarized.  Sorted oldest-first."""
+    months = set()
+    for d, _ in enumerate_log_sources("access"):
+        m = f"{d[:4]}-{d[4:6]}"
+        if m < today_str:
+            months.add(m)
+    # Also include months whose data is in the DB but summary is incomplete —
+    # the 2024 access months + 2025-07 fit this shape.
+    _, _, _, metrics_db = db_credentials()
+    rows = mysql_query(
+        f"SELECT DISTINCT DATE_FORMAT(datetime, '%%Y-%%m') AS ym "
+        f"FROM {metrics_db}.web WHERE datetime < %s "
+        f"  AND DATE_FORMAT(datetime, '%%Y-%%m') NOT IN "
+        f"      (SELECT DATE_FORMAT(datetime, '%%Y-%%m') FROM {metrics_db}.summary_user_vals "
+        f"       WHERE period = 1)",
+        (today_str + "-01",),
+    )
+    for (ym,) in rows:
+        if ym and ym < today_str:
+            months.add(ym)
+    # Filter out months that turn out to be fully summarized after all
+    # (cheap re-check; covers the case where row-existence by month isn't
+    # enough to call partial — e.g. 2025-06 has web rows + no summary).
+    return sorted(m for m in months if not is_month_fully_summarized(m))
+
+
+def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
+    """Process one backlog month per tick, applying the Phase C decision
+    matrix.  Returns True if we transitioned out of catchup (caller should
+    update state["mode"]).
+
+    Decision matrix (source / data / summary state → action):
+      ✓ ✗ –        : import + analyze + summarize-period-1
+      ✓ ✓ none/partial : wipe + reimport + analyze + summarize-period-1
+      ✗ ✓ none/partial : (re)summarize-period-1 only — data is in DB,
+                          source is gone (2024 access months / 2025-07)
+      ✗ ✗ –        : skip (true gap)
+      any ✓ full   : skip (already done)
+    """
+    backlog = _backlog_months(today_str)
+    if not backlog:
+        log.info(f"[catchup] no backlog months remaining — transition to rebuild")
+        return True
+
+    target = backlog[0]
+    remaining = len(backlog)
+    log.info(f"[catchup] {remaining} backlog month(s) — processing {target}")
+
+    # Record the earliest backfill date so rebuild knows where to start.
+    if "catchup_started" not in state:
+        if not dry_run:
+            update_state(catchup_started=target)
+        state["catchup_started"] = target  # local reflect for this tick
+
+    has_source  = month_has_source(target)
+    has_data    = month_has_data(target)
+    fully_summ  = is_month_fully_summarized(target) if (has_source or has_data) else False
+
+    if fully_summ:
+        log.info(f"[catchup] {target} already fully summarized — skipping")
+        return False  # let next tick advance past it
+
+    if has_source and has_data:
+        log.info(f"[catchup] {target}: source ✓ data ✓ — wiping stale rows + reimport")
+        _wipe_month_data(target, dry_run=dry_run)
+        _import_month(target, dry_run)
+        do_analyze(target, dry_run)
+        do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+    elif has_source:
+        log.info(f"[catchup] {target}: source ✓ data ✗ — fresh import")
+        _import_month(target, dry_run)
+        do_analyze(target, dry_run)
+        do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+    elif has_data:
+        log.info(f"[catchup] {target}: source ✗ data ✓ — DB-only, resummarize")
+        do_analyze(target, dry_run)
+        do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+    else:
+        log.warning(f"[catchup] {target}: source ✗ data ✗ — true gap, skipping")
+        # Skip — but the backlog probe will keep returning this month
+        # if it's a placeholder.  Currently the probe excludes such
+        # months (no source / no data → not detected), so we won't loop.
+
+    return False  # still in catchup after this tick
+
+
+def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> bool:
+    """Walk forward from rebuild_cursor through prev_month, re-summarizing
+    one month per tick with all six periods.  This fixes the long-window
+    (12 / 13 / 14) cells in every month at-or-after the earliest backfill
+    — those cells were computed when 2022 / 2023 weren't yet in `web`,
+    so their windows are now stale.
+
+    Returns True when the cursor has passed prev_month (caller transitions
+    back to normal)."""
+    cursor = state.get("rebuild_cursor") or state.get("catchup_started")
+    if not cursor:
+        log.warning("[rebuild] no rebuild_cursor or catchup_started in state — "
+                    "transitioning to normal (nothing to do)")
+        return True
+    if cursor > prev:
+        log.info(f"[rebuild] cursor {cursor} > prev_month {prev} — done")
+        return True
+
+    log.info(f"[rebuild] resummarizing {cursor} (all 6 periods)")
+    do_analyze(cursor, dry_run)
+    do_summarize(cursor, dry_run)  # default = all periods
+
+    # Advance cursor to next month.
+    y, m = int(cursor[:4]), int(cursor[5:7])
+    m += 1
+    if m == 13:
+        m, y = 1, y + 1
+    next_cursor = f"{y:04d}-{m:02d}"
+    if not dry_run:
+        update_state(rebuild_cursor=next_cursor)
+    log.info(f"[rebuild] cursor advanced: {cursor} → {next_cursor}")
+    return False
+
+
 def cmd_run(args):
     dry_run = args.dry_run
 
@@ -6020,75 +6286,39 @@ def cmd_run(args):
         today_date = date.today().isoformat()
         prev       = previous_month(today_str)
 
-        state          = read_state()
-        analyzed_today = state.get("analyzed") == today_date
-
-        all_pending_months = sorted(set(
-            f"{d[:4]}-{d[4:6]}"
-            for d, _ in enumerate_log_sources("access")
-        ))
-        backlog_months  = [m for m in all_pending_months if m < today_str]
-        current_pending = pending_days_for_month(today_str)
-        has_pending     = bool(current_pending or backlog_months)
-
-        # Check whether the previous month is complete but not yet summarized.
-        prev_needs_work = (
-            not is_month_summarized(prev) and is_month_fully_imported(prev)
-        )
-
-        # Fast exit: nothing in daily/, already analyzed today, nothing left to summarize.
-        if not has_pending and analyzed_today and not prev_needs_work:
-            log.info(f"[run] nothing to do")
-            return
+        state = read_state()
+        mode  = state.get("mode", "normal")
 
         if not dry_run:
-            log.debug(f"=== hzmetrics.py run @ {datetime.now()} ===")
+            log.debug(f"=== hzmetrics.py run @ {datetime.now()} mode={mode} ===")
 
-        # Always import pending days for the current month first.
-        if current_pending:
-            log.info(f"[run] importing {len(current_pending)} pending day(s) for {today_str}")
-            for date_str in current_pending:
-                log.info(f"--- {date_str} ---")
-                do_import_day(date_str, dry_run)
-
-        if backlog_months:
-            # Catch-up mode: one backlog month per tick.
-            target    = backlog_months[0]
-            remaining = len(backlog_months)
-            log.info(f"[run] catch-up: {remaining} backlog month(s) — processing {target}")
-            if not dry_run:
-                log.debug(f"catch-up: {target} ({remaining} remaining)")
-            days = pending_days_for_month(target)
-            for date_str in days:
-                log.info(f"--- {date_str} ---")
-                do_import_day(date_str, dry_run)
-            log.info(f">>> analyzing {target}")
-            do_analyze(target, dry_run)
-            log.info(f">>> summarizing {target}")
-            do_summarize(target, dry_run)
-
-        else:
-            # Normal mode: analyze current month once per day, then check previous month.
-            if not analyzed_today:
-                log.info(f"[run] analyzing current month {today_str}")
-                do_analyze(today_str, dry_run)
+        if mode == "normal":
+            # Enter catchup if any month before today needs work.
+            if _backlog_months(today_str):
+                log.info(f"[run] backlog detected — switching mode normal → catchup")
                 if not dry_run:
-                    update_state(analyzed=today_date)
+                    update_state(mode="catchup")
+                state["mode"] = "catchup"
+                mode = "catchup"
 
-            if prev_needs_work:
-                log.info(f"[run] {prev} complete — analyzing and summarizing")
-                do_analyze(prev, dry_run)
-                do_summarize(prev, dry_run)
-            elif not is_month_summarized(prev):
-                last    = last_day_of_month(prev)
-                days_in = date.today().day
-                if days_in > 5:
-                    log.warning(f"[run] {prev} last day ({last}) never arrived "
-                                f"({days_in}d into {today_str}) — summarizing without it")
-                    do_analyze(prev, dry_run)
-                    do_summarize(prev, dry_run)
-                else:
-                    log.info(f"[run] {prev} last day ({last}) not yet imported — deferring")
+        if mode == "catchup":
+            done = _do_catchup_tick(today_str, state, dry_run)
+            if done:
+                cursor = state.get("catchup_started", today_str)
+                log.info(f"[run] catchup complete — switching to rebuild from {cursor}")
+                if not dry_run:
+                    update_state(mode="rebuild", rebuild_cursor=cursor)
+                # Don't run rebuild this tick — give the next tick a fresh start.
+        elif mode == "rebuild":
+            done = _do_rebuild_tick(today_str, prev, state, dry_run)
+            if done:
+                log.info(f"[run] rebuild complete — switching to normal")
+                if not dry_run:
+                    update_state(mode="normal")
+                # Also run a normal tick this iteration since rebuild is cheap once done.
+                _do_normal_tick(today_str, prev, today_date, state, dry_run)
+        else:
+            _do_normal_tick(today_str, prev, today_date, state, dry_run)
 
         log.info(">>> done")
 
