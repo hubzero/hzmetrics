@@ -1483,6 +1483,48 @@ def _source_files_matching(kind: str, date_filter: str | None) -> list[Path]:
     ]
 
 
+# Heuristics for the staging disk-space pre-flight.  Apache access logs
+# compress to roughly 8–12× on gzip; 15× is a conservative ceiling that
+# catches the pathological "logrotate broke and one daily file has a
+# year of traffic" case before we hit a disk-full error mid-stream.
+_STAGING_COMPRESS_RATIO = 15
+_STAGING_HEADROOM_MB    = 500   # keep at least this much free on /var
+
+
+def _check_staging_space(files, staging_dir):
+    """Pre-flight: estimate worst-case uncompressed size of `files` and
+    refuse the fetch if that plus a fixed headroom would exceed free
+    space on `staging_dir`'s filesystem.
+
+    Catches logrotate-failure scenarios (a single "daily" file actually
+    containing weeks/months of traffic) cleanly — operator sees a clear
+    error instead of disk-full debris mid-import.
+
+    Files contributed by `.gz` extensions get `_STAGING_COMPRESS_RATIO`
+    applied; plain-text files are counted at their on-disk size."""
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(staging_dir).free
+    estimate = 0
+    for f in files:
+        try:
+            sz = f.stat().st_size
+        except (FileNotFoundError, PermissionError):
+            continue
+        estimate += sz * _STAGING_COMPRESS_RATIO if f.suffix == ".gz" else sz
+    needed = estimate + _STAGING_HEADROOM_MB * 1024 * 1024
+    if needed > free:
+        log.error(
+            f"[fetch-logs] insufficient staging space on "
+            f"{staging_dir.parent if str(staging_dir).endswith('/') else staging_dir}: "
+            f"need ~{needed // (1024 * 1024)} MB "
+            f"(compressed input × {_STAGING_COMPRESS_RATIO}× + "
+            f"{_STAGING_HEADROOM_MB} MB headroom), "
+            f"free {free // (1024 * 1024)} MB.  "
+            f"Free space, split the file, or process the day manually."
+        )
+        raise SystemExit(1)
+
+
 def do_fetch_logs(date_filter=None, *, dry_run=False):
     """Concatenate dated daily logs into the metrics staging files.
 
@@ -1493,6 +1535,11 @@ def do_fetch_logs(date_filter=None, *, dry_run=False):
 
     With date_filter=None we take all pending; with date_filter='YYYYMMDD'
     we keep only that single day.
+
+    Pre-flight check: refuses to stage if the cumulative uncompressed
+    size estimate would overflow /var/log/hubzero/metrics/.  Catches the
+    "logrotate broke and one file has months of data" case before the
+    streaming would otherwise fill the disk.
     """
     apache_files  = _source_files_matching("access", date_filter)
     cmsauth_files = _source_files_matching("auth",   date_filter)
@@ -1507,6 +1554,7 @@ def do_fetch_logs(date_filter=None, *, dry_run=False):
         return 0
 
     HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
+    _check_staging_space(apache_files + cmsauth_files, HZ_METRICS_STAGING)
 
     if apache_files:
         with open(STAGED_APACHE, "wb") as out:
@@ -3048,6 +3096,9 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     skipped_action = 0
     skipped_filter = 0
     total = 0
+    # Track YYYY-MM seen in this file; >2 distinct months suggests
+    # a logrotate failure (see import-apache's spillover check).
+    months_seen: set = set()
 
     with _open_input(input_file) as src:
         for line in src:
@@ -3073,6 +3124,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
                 user = m.group(3).strip()
                 ip = m.group(4).strip()
                 action = m.group(5).strip()
+            months_seen.add(dt[:7])
             if not user:
                 user = "-"
             # Skip actions the pipeline never reads (detect / invalid / logout
@@ -3113,6 +3165,19 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
 
     log.info(f"[import-auth] inserted {inserted} new row(s) into userlogin "
         f"(others were duplicates rejected by INSERT IGNORE)")
+
+    # Spillover detection — mirrors do_import_apache.
+    if len(months_seen) > 2:
+        log.warning(
+            f"[import-auth] spillover: rows from {len(months_seen)} distinct "
+            f"months in one staged file: {sorted(months_seen)}. "
+            f"Looks like a logrotate failure — original daily files may have "
+            f"merged.  The catchup decision matrix will pick up the additional "
+            f"months on subsequent ticks."
+        )
+    elif len(months_seen) == 2:
+        log.info(f"[import-auth] rows span {sorted(months_seen)} "
+                 f"(normal midnight/TZ-bleed)")
     return 0
 
 def cmd_import_auth(args):
@@ -3799,6 +3864,11 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     skipped_url = 0
     # dnload_set retained for parity with the post-1018cc2 commented INSERT.
     dnload_set = 0
+    # Track distinct YYYY-MM seen in this file.  One staged file should
+    # normally contain a single day's logs (so 1 month, or 2 across a
+    # midnight TZ boundary).  >2 months in one file is almost always a
+    # logrotate failure — log a warning so the operator can investigate.
+    months_seen: set = set()
 
     conn = _open_db(metrics_db)
     try:
@@ -3852,6 +3922,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
                         actn_name = ''
                         item_name = ''
                     parsed += 1
+                    months_seen.add(datestamp[:7])
 
                     # Normalize uidNumber: '' / '-' → 0, else int (fallback 0)
                     if not uidNumber or uidNumber == '-':
@@ -3923,6 +3994,23 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
         f"eligible={len(rows_buf) if dry_run else inserted}; "
         f"skipped: status={skipped_status} filter={skipped_filter} "
         f"bot={skipped_bot} url={skipped_url}; dnload-flagged={dnload_set}")
+
+    # Spillover detection: a staged daily file containing rows from >2
+    # distinct YYYY-MM is almost always a logrotate failure (1 month is
+    # the norm, 2 is the TZ-bleed-across-midnight case).  The catchup
+    # decision matrix will route the affected months correctly on the
+    # next tick, but operators should know the file was mis-sized.
+    if len(months_seen) > 2:
+        log.warning(
+            f"[import-apache] spillover: rows from {len(months_seen)} distinct "
+            f"months in one staged file: {sorted(months_seen)}. "
+            f"Looks like a logrotate failure — original daily files may have "
+            f"merged.  The catchup decision matrix will pick up the additional "
+            f"months on subsequent ticks."
+        )
+    elif len(months_seen) == 2:
+        log.info(f"[import-apache] rows span {sorted(months_seen)} "
+                 f"(normal midnight/TZ-bleed)")
     return 0
 
 def cmd_import_apache(args):
