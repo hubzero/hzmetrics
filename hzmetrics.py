@@ -853,6 +853,58 @@ for _i, _tbl in enumerate(_INNODB_CONVERT_TABLES):
     ))
 del _i, _tbl
 
+
+# Performance — fill-domain bottleneck.  fill-domain's JOIN-UPDATE was
+# blocked on LOWER(t.host) preventing any index use; observed at 170s
+# for 56k rows on a 2022-01 backfill (~3 ms/row).  Two-step fix:
+#   1. normalise existing host values to lowercase (do_resolve_dns now
+#      writes lowercase too, so future inserts stay clean)
+#   2. add an index on host so the now-LOWER-less JOIN can lookup.
+MIGRATIONS.extend([
+    Migration(
+        id=36,
+        description="Backfill web.host to lowercase (fill-domain JOIN normalisation)",
+        sql=("UPDATE {metrics_db}.web SET host = LOWER(host) "
+             "WHERE host IS NOT NULL AND host <> '' "
+             "  AND BINARY host <> BINARY LOWER(host);"),
+        check_sql=("SELECT COUNT(*) FROM {metrics_db}.web "
+                   "WHERE host IS NOT NULL AND host <> '' "
+                   "  AND BINARY host <> BINARY LOWER(host);"),
+        check_expect=0,
+    ),
+    Migration(
+        id=37,
+        description="Index web(host) — fill-domain JOIN, after migration 36 normalisation",
+        sql="ALTER TABLE {metrics_db}.web ADD INDEX web_host (host(255));",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema='{metrics_db}' AND table_name='web' "
+            "  AND index_name='web_host';"
+        ),
+    ),
+    Migration(
+        id=38,
+        description="Backfill websessions.host to lowercase (fill-domain JOIN normalisation)",
+        sql=("UPDATE {metrics_db}.websessions SET host = LOWER(host) "
+             "WHERE host IS NOT NULL AND host <> '' "
+             "  AND BINARY host <> BINARY LOWER(host);"),
+        check_sql=("SELECT COUNT(*) FROM {metrics_db}.websessions "
+                   "WHERE host IS NOT NULL AND host <> '' "
+                   "  AND BINARY host <> BINARY LOWER(host);"),
+        check_expect=0,
+    ),
+    Migration(
+        id=39,
+        description="Index websessions(host) — fill-domain JOIN, after migration 38 normalisation",
+        sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_host (host(255));",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
+            "  AND index_name='ws_host';"
+        ),
+    ),
+])
+
 MIGRATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {metrics_db}.migrations (
     id INT NOT NULL,
@@ -1290,7 +1342,8 @@ METRICS_DB_DDL = [
   KEY `ip` (`ip`),
   KEY `content` (`content`(255)),
   KEY `dnload` (`dnload`),
-  KEY `web_sessionid_dnload` (`sessionid`,`dnload`)
+  KEY `web_sessionid_dnload` (`sessionid`,`dnload`),
+  KEY `web_host` (`host`(255))
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`webhits` (
@@ -1314,7 +1367,8 @@ METRICS_DB_DDL = [
   KEY `ip` (`ip`),
   KEY `ws_datetime_jobs_dur_country` (`datetime`,`jobs`,`duration`,`ipcountry`),
   KEY `ws_domain` (`domain`),
-  KEY `ws_jobs_country_dur` (`jobs`,`ipcountry`,`duration`)
+  KEY `ws_jobs_country_dur` (`jobs`,`ipcountry`,`duration`),
+  KEY `ws_host` (`host`(255))
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`pipeline_state` (
@@ -2498,13 +2552,33 @@ def hub_db_name():
 
 def _open_db(database=None):
     """Open a pymysql connection from access.cfg.  Lazy import so other
-    hzmetrics.py commands don't pay the dep if they don't need it."""
+    hzmetrics.py commands don't pay the dep if they don't need it.
+
+    Sets long server-side session timeouts on every connection:
+
+      - wait_timeout / interactive_timeout: how long the server keeps an
+        idle connection before killing it (default usually 300s).  Lifted
+        to 24h so an ALTER TABLE that takes 30 min can run without the
+        server killing the connection on us.
+      - net_read_timeout / net_write_timeout: per-packet IO waits
+        (defaults 30s and 60s).  Lifted to 24h for the same reason —
+        observed "Lost connection during query" on a multi-minute MyISAM
+        ALTER, which the longer wait fixes.
+
+    Cost: 3 extra fast statements per connect.  Negligible vs. the
+    failure mode of pymysql dropping mid-ALTER and leaving the migration
+    half-applied."""
     import pymysql
     host, user, password, _ = db_credentials()
-    return pymysql.connect(
+    conn = pymysql.connect(
         host=host, user=user, password=password,
         database=database, autocommit=True, charset="utf8mb4",
     )
+    with conn.cursor() as cur:
+        cur.execute("SET SESSION wait_timeout = 86400")
+        cur.execute("SET SESSION net_read_timeout = 86400")
+        cur.execute("SET SESSION net_write_timeout = 86400")
+    return conn
 
 async def _resolve_ips_async(ips, nameserver, concurrency, timeout):
     """Resolve IPs to (ip, host) pairs.  Returns '?' for any failure / no-PTR.
@@ -2701,9 +2775,14 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
             cur.executemany(
                 "INSERT INTO _dns_tmp (ip, host) VALUES (%s, %s)", pairs)
             update_date_pred = _build_pred("t.")
+            # LOWER(d.host) normalises PTR records on write so downstream
+            # fill-domain can JOIN on t.host = d.host (indexed) instead of
+            # LOWER(t.host) = d.host (function defeats the index).  DNS PTR
+            # is case-insensitive per RFC so lowercasing is semantically
+            # safe.
             cur.execute(
                 f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
-                f"SET t.host = d.host "
+                f"SET t.host = LOWER(d.host) "
                 f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred}")
             updated = cur.rowcount
             log.info(f"[resolve-dns] applied: {updated} rows updated in {table}")
@@ -3558,9 +3637,15 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
                 "INSERT INTO _domain_tmp (host, domain) VALUES (%s, %s)",
                 pairs,
             )
+            # t.host = d.host (no LOWER): do_resolve_dns now writes host
+            # values lowercase, and migration 36 backfilled existing rows
+            # to lowercase, so this equality matches without case folding.
+            # The function call removal lets the planner use the
+            # web_host index (added by migration 37) — turning a per-host
+            # full scan into an indexed lookup.
             update_sql = (
                 f"UPDATE {table} t "
-                f"INNER JOIN _domain_tmp d ON LOWER(t.host) = d.host "
+                f"INNER JOIN _domain_tmp d ON t.host = d.host "
                 f"SET t.domain = d.domain "
                 f"WHERE (t.domain = '' OR t.domain = '?' OR t.domain IS NULL) "
                 f"AND t.host <> '' AND t.host IS NOT NULL"
