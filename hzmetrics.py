@@ -914,7 +914,27 @@ MIGRATIONS.extend([
             "  AND engine='InnoDB';"
         ),
     ),
+    Migration(
+        id=41,
+        description=("Convert web to InnoDB — concurrent reads via MVCC, "
+                     "faster random updates for fill-domain / fill-ipcountry "
+                     "than 10 GB MyISAM (web is the largest table, ~16 M rows)"),
+        sql="ALTER TABLE {metrics_db}.web ENGINE=InnoDB;",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='{metrics_db}' AND table_name='web' "
+            "  AND engine='InnoDB';"
+        ),
+    ),
 ])
+
+# NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
+# size free, the direct ALTER TABLE in migration #41 can overflow the
+# datadir transient (old MyISAM + new InnoDB live side-by-side during
+# the copy).  Operators with tight disk should drop secondary indexes
+# first, then ALTER, then re-add — see tests/legacy comments in the
+# migration source for the staged form.  Migration #41 is the
+# happy-path single-statement variant.
 
 MIGRATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {metrics_db}.migrations (
@@ -1355,7 +1375,7 @@ METRICS_DB_DDL = [
   KEY `dnload` (`dnload`),
   KEY `web_sessionid_dnload` (`sessionid`,`dnload`),
   KEY `web_host` (`host`(255))
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3""",
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`webhits` (
   `datetime` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
