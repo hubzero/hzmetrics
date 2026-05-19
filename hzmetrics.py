@@ -152,7 +152,9 @@ SITE               = _PIPELINE_PATHS["site"]
 APACHE_LOG_DIR     = _PIPELINE_PATHS["apache_log_dir"]
 CMS_LOG_DIR        = _PIPELINE_PATHS["cms_log_dir"]
 HTTPD_DAILY        = APACHE_LOG_DIR / "daily"
+HTTPD_HOLDING      = APACHE_LOG_DIR / "daily.holding"
 HZ_DAILY           = CMS_LOG_DIR / "daily"
+HZ_HOLDING         = CMS_LOG_DIR / "daily.holding"
 HTTPD_IMPORTED     = APACHE_LOG_DIR / "imported"
 HZ_IMPORTED        = CMS_LOG_DIR / "imported"
 HZ_METRICS_STAGING = _PIPELINE_PATHS["metrics_log_dir"]
@@ -205,10 +207,16 @@ def setup_logging() -> None:
     except OSError as e:
         log.warning("could not open %s for append: %s", log_path, e)
 
-def dated_files(directory: str | Path, pattern: str) -> list[tuple[str, Path]]:
-    """Return sorted list of (date_str, Path) for files matching pattern in directory."""
+def dated_files(directory: str | Path, pattern: str,
+                *, recursive: bool = False) -> list[tuple[str, Path]]:
+    """Return sorted list of (date_str, Path) for files matching pattern in directory.
+
+    With recursive=True, descends into subdirectories — used to pick up logs
+    that a sysadmin tucked into year-subdirs like daily/YYYY/ as informal
+    organization."""
     results = []
-    for p in Path(directory).glob(pattern):
+    glob_fn = Path(directory).rglob if recursive else Path(directory).glob
+    for p in glob_fn(pattern):
         if p.is_dir():
             continue
         for part in p.name.replace("-", ".").replace("_", ".").split("."):
@@ -217,15 +225,72 @@ def dated_files(directory: str | Path, pattern: str) -> list[tuple[str, Path]]:
                 break
     return sorted(results)
 
+def _source_dirs(kind: str) -> list[tuple[Path, bool]]:
+    """Return [(dir, recursive), ...] of all places we look for pending
+    source logs of the given kind ("access" or "auth"), in priority order.
+
+    Priority matters when the same YYYYMMDD shows up in more than one place:
+    the first hit wins (so daily/ beats daily.holding/), the duplicate is
+    logged and skipped.  All listed dirs may be missing on disk; absent dirs
+    are silently skipped.
+    """
+    if kind == "access":
+        return [
+            (HTTPD_DAILY,    True),   # daily/  and  daily/YYYY/
+            (HTTPD_HOLDING,  False),  # daily.holding/  (flat)
+        ]
+    if kind == "auth":
+        return [
+            (HZ_DAILY,       True),
+            (HZ_HOLDING,     False),
+        ]
+    raise ValueError(f"unknown kind: {kind!r}")
+
+def _source_pattern(kind: str) -> str:
+    if kind == "access":
+        return f"{SITE}-access*log*"
+    if kind == "auth":
+        return "cmsauth*log*"
+    raise ValueError(f"unknown kind: {kind!r}")
+
+def enumerate_log_sources(kind: str) -> list[tuple[str, Path]]:
+    """Return sorted [(YYYYMMDD, Path), ...] for every pending source log
+    of the given kind, across all locations it may live in:
+
+      - daily/<pattern>                  (current standard)
+      - daily/<YYYY>/<pattern>           (informal sysadmin year-subdir layout)
+      - daily.holding/<pattern>          (alternate staging from logrotate)
+
+    If the same YYYYMMDD appears in more than one place, the higher-priority
+    location wins (see _source_dirs); duplicates are logged at WARNING and
+    skipped.  Used by the orchestrator to find work regardless of how files
+    got placed on disk."""
+    pattern = _source_pattern(kind)
+    seen: dict[str, Path] = {}
+    for src_dir, recurse in _source_dirs(kind):
+        if not src_dir.exists():
+            continue
+        for date_str, path in dated_files(src_dir, pattern, recursive=recurse):
+            if date_str in seen:
+                if seen[date_str] != path:
+                    log.warning(
+                        f"duplicate {kind} log for {date_str}: "
+                        f"keeping {seen[date_str]}, ignoring {path}"
+                    )
+                continue
+            seen[date_str] = path
+    return sorted(seen.items())
+
 def pending_days_for_month(month_str: str) -> list[str]:
-    """Sorted list of date strings in daily/ for the given YYYY-MM."""
+    """Sorted list of date strings (across all source dirs) for the given YYYY-MM."""
     yyyymm = month_str.replace("-", "")
-    return [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*") if d.startswith(yyyymm)]
+    return [d for d, _ in enumerate_log_sources("access") if d.startswith(yyyymm)]
 
 def oldest_pending_month() -> str | None:
-    """YYYY-MM of the earliest day still sitting in daily/, or None if
-    nothing is pending — drives `process --next` and the catch-up loop."""
-    files = dated_files(HTTPD_DAILY, f"{SITE}-access*log*")
+    """YYYY-MM of the earliest pending source log anywhere, or None — drives
+    `process --next` and the catch-up loop.  Searches daily/, daily/YYYY/,
+    and daily.holding/."""
+    files = enumerate_log_sources("access")
     if not files:
         return None
     d = files[0][0]
@@ -292,9 +357,9 @@ def check_order(date_str: str, force: bool) -> None:
     """Abort if date_str would be imported out of order."""
     if force:
         return
-    pending = [d for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*")]
+    pending = [d for d, _ in enumerate_log_sources("access")]
     if pending and date_str > pending[0]:
-        log.error(f"{date_str} is not the oldest pending day in daily/.")
+        log.error(f"{date_str} is not the oldest pending day.")
         log.error(f"  Oldest pending: {pending[0]}")
         log.error(f"  Use --force to override.")
         raise SystemExit(1)
@@ -1043,25 +1108,33 @@ def _numbered_backup_dst(dst):
         n += 1
 
 
+def _source_files_matching(kind: str, date_filter: str | None) -> list[Path]:
+    """Paths of source logs of the given kind across all source dirs.
+    With date_filter=None, returns everything pending; with a YYYYMMDD
+    string, restricts to that single day."""
+    return [
+        p for d, p in enumerate_log_sources(kind)
+        if not date_filter or d == date_filter
+    ]
+
+
 def do_fetch_logs(date_filter=None, *, dry_run=False):
     """Concatenate dated daily logs into the metrics staging files.
 
-    Port of import/__fetch_apache_and_auth_log.sh.  With date_filter=None
-    we glob all files in daily/; with date_filter='YYYYMMDD' we keep
-    only files whose name contains that substring (catch-up mode).
+    Port of import/__fetch_apache_and_auth_log.sh.  Pulls source files
+    from every known location (daily/, daily/YYYY/, daily.holding/) so
+    the orchestrator can process backlog regardless of how a sysadmin
+    organised the files.
+
+    With date_filter=None we take all pending; with date_filter='YYYYMMDD'
+    we keep only that single day.
     """
-    if date_filter:
-        apache_pat  = f"{SITE}-access*log*{date_filter}*"
-        cmsauth_pat = f"cmsauth*log*{date_filter}*"
-    else:
-        apache_pat  = f"{SITE}-access*log*"
-        cmsauth_pat = "cmsauth*log*"
+    apache_files  = _source_files_matching("access", date_filter)
+    cmsauth_files = _source_files_matching("auth",   date_filter)
 
-    apache_files  = sorted(HTTPD_DAILY.glob(apache_pat))
-    cmsauth_files = sorted(HZ_DAILY.glob(cmsauth_pat))
-
-    log.info(f"[fetch-logs] {HTTPD_DAILY}/{apache_pat}: {len(apache_files)} file(s)")
-    log.info(f"[fetch-logs] {HZ_DAILY}/{cmsauth_pat}: {len(cmsauth_files)} file(s)")
+    suffix = f"{date_filter}" if date_filter else "all"
+    log.info(f"[fetch-logs] access {suffix}: {len(apache_files)} file(s)")
+    log.info(f"[fetch-logs] auth   {suffix}: {len(cmsauth_files)} file(s)")
 
     if dry_run:
         for f in apache_files + cmsauth_files:
@@ -1083,36 +1156,73 @@ def do_fetch_logs(date_filter=None, *, dry_run=False):
     return 0
 
 
+def _rmdir_if_empty(d: Path) -> None:
+    """rmdir d only if it exists, is a directory, and is empty.  Used
+    after archive to clean up daily/YYYY/ and daily.holding/ subdirs that
+    the catchup loop just drained — keeps the filesystem tidy without
+    risking removal of dirs that still hold files."""
+    try:
+        if d.is_dir():
+            d.rmdir()
+            log.info(f"  removed empty source dir: {d}")
+    except OSError:
+        # Not empty, or perm denied, or it disappeared — fine, leave it.
+        pass
+
+
 def do_archive_logs(date_filter=None, *, dry_run=False):
     """gzip each daily log in place and move it to imported/.
 
-    Port of import/__archive_apache_and_auth_log.sh.  Handles four globs:
-    {site}-access*, new-{site}-access*, cmsauth*, cmsdebug*.
+    Port of import/__archive_apache_and_auth_log.sh.  Handles the two
+    primary metrics streams (access + auth) by walking every known source
+    location (daily/, daily/YYYY/, daily.holding/) via enumerate_log_sources,
+    plus the two ancillary streams (new-{site}-access*, cmsdebug*) which
+    only ever live flat in daily/.  After a successful move, rmdir any
+    daily/YYYY/ or daily.holding/ subdir that just became empty.
     """
-    def pat(base):
-        return f"{base}{date_filter}*" if date_filter else base
+    # Snapshot now so we can rmdir empties after the move; only dirs that
+    # actually contained one of the files we're moving are candidates.
+    candidate_parents: set[Path] = set()
 
-    groups = [
-        (HTTPD_DAILY, HTTPD_IMPORTED, pat(f"{SITE}-access*log*")),
-        (HTTPD_DAILY, HTTPD_IMPORTED, pat(f"new-{SITE}-access*log*")),
-        (HZ_DAILY,    HZ_IMPORTED,    pat("cmsauth*log*")),
-        (HZ_DAILY,    HZ_IMPORTED,    pat("cmsdebug*log*")),
-    ]
-    for src_dir, dst_dir, p in groups:
-        files = sorted(src_dir.glob(p))
+    def archive(files: list[Path], dst_dir: Path, label: str) -> None:
         if not files:
-            continue
-        log.info(f"[archive-logs] {src_dir}/{p}: {len(files)} file(s)")
+            return
+        log.info(f"[archive-logs] {label}: {len(files)} file(s)")
         if dry_run:
             for f in files:
                 log.info(f"  [dry-run] would gzip+move: {f} -> {dst_dir}/")
-            continue
+            return
         dst_dir.mkdir(parents=True, exist_ok=True)
         for f in files:
+            candidate_parents.add(f.parent)
             gz = f if f.suffix == ".gz" else _gzip_in_place(f)
             dst = _numbered_backup_dst(dst_dir / gz.name)
             shutil.move(str(gz), str(dst))
             log.info(f"  archived: {f.name} -> {dst}")
+
+    # Primary streams: walked across all source dirs.
+    archive(_source_files_matching("access", date_filter), HTTPD_IMPORTED, "access")
+    archive(_source_files_matching("auth",   date_filter), HZ_IMPORTED,   "auth")
+
+    # Ancillary streams: only ever live flat in daily/.  Kept on the old
+    # direct-glob path because they have no year-subdir / holding variant.
+    def pat(base: str) -> str:
+        return f"{base}{date_filter}*" if date_filter else base
+
+    def archive_flat(src_dir: Path, dst_dir: Path, glob: str, label: str) -> None:
+        files = sorted(src_dir.glob(glob))
+        archive(files, dst_dir, label)
+
+    archive_flat(HTTPD_DAILY, HTTPD_IMPORTED, pat(f"new-{SITE}-access*log*"), "new-access")
+    archive_flat(HZ_DAILY,    HZ_IMPORTED,    pat("cmsdebug*log*"),           "cmsdebug")
+
+    # Cleanup: rmdir daily/YYYY/ and daily.holding/ subdirs we just drained.
+    # Never touch HTTPD_DAILY / HZ_DAILY themselves — those are standard.
+    for d in candidate_parents:
+        if d == HTTPD_DAILY or d == HZ_DAILY:
+            continue
+        _rmdir_if_empty(d)
+
     return 0
 
 
@@ -1152,14 +1262,14 @@ def do_import_day(date_str, dry_run=False):
     """Fetch, import, then archive logs for a single day.  date_str is
     'YYYYMMDD'."""
     if dry_run:
-        access  = sorted(HTTPD_DAILY.glob(f"{SITE}-access*log*{date_str}*"))
-        cmsauth = sorted(HZ_DAILY.glob(   f"cmsauth*log*{date_str}*"))
+        access  = _source_files_matching("access", date_str)
+        cmsauth = _source_files_matching("auth",   date_str)
         for f in access + cmsauth:
             log.info(f"    [dry-run] would fetch: {f}")
         if not access:
-            log.info(f"    [dry-run] WARNING: no access log found for {date_str} in {HTTPD_DAILY}")
+            log.info(f"    [dry-run] WARNING: no access log found for {date_str} in any source dir")
         if not cmsauth:
-            log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in {HZ_DAILY}")
+            log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in any source dir")
     do_fetch_logs(       date_str, dry_run=dry_run)
     do_import_staged_logs(         dry_run=dry_run)
     do_archive_logs(     date_str, dry_run=dry_run)
@@ -1246,12 +1356,11 @@ def do_summarize(month_str, dry_run=False):
 # ---------------------------------------------------------------------------
 
 def cmd_status(args):
-    """Print pipeline state: counts and date spans of files in daily/
-    (pending import) and imported/ (already processed), plus the current
-    resolve-dns settings.  Read-only — logs to stderr + the configured
-    HZMETRICS_LOG file, no DB writes, no exit code."""
-    def summarize(directory, pattern, label):
-        files = dated_files(directory, pattern)
+    """Print pipeline state: counts and date spans of files awaiting import
+    (across daily/, daily/YYYY/, daily.holding/) and already-imported logs,
+    plus the current resolve-dns settings.  Read-only — logs to stderr +
+    the configured HZMETRICS_LOG file, no DB writes, no exit code."""
+    def summarize_files(files, label):
         count = len(files)
         if count == 0:
             log.info(f"  {label}: 0")
@@ -1260,13 +1369,16 @@ def cmd_status(args):
         span = f"({oldest})" if oldest == newest else f"({oldest} .. {newest})"
         log.info(f"  {label}: {count}  {span}")
 
-    log.info("=== daily/ (pending import) ===")
-    summarize(HTTPD_DAILY, f"{SITE}-access*log*", "httpd access")
-    summarize(HZ_DAILY,    "cmsauth*log*",         "cmsauth      ")
+    def summarize_dir(directory, pattern, label):
+        summarize_files(dated_files(directory, pattern), label)
+
+    log.info("=== pending import (all source dirs) ===")
+    summarize_files(enumerate_log_sources("access"), "httpd access")
+    summarize_files(enumerate_log_sources("auth"),   "cmsauth     ")
 
     log.info("=== imported/ (already processed) ===")
-    summarize(HTTPD_IMPORTED,              f"{SITE}-access*log*", "httpd  ")
-    summarize("/var/log/hubzero/imported", "cmsauth*log*",         "hubzero")
+    summarize_dir(HTTPD_IMPORTED, f"{SITE}-access*log*", "httpd  ")
+    summarize_dir(HZ_IMPORTED,    "cmsauth*log*",        "hubzero")
 
     log.info("=== resolve-dns settings ===")
     try:
@@ -5673,7 +5785,7 @@ def cmd_run(args):
 
         all_pending_months = sorted(set(
             f"{d[:4]}-{d[4:6]}"
-            for d, _ in dated_files(HTTPD_DAILY, f"{SITE}-access*log*")
+            for d, _ in enumerate_log_sources("access")
         ))
         backlog_months  = [m for m in all_pending_months if m < today_str]
         current_pending = pending_days_for_month(today_str)

@@ -9,6 +9,7 @@ AB_SKIP="${AB_SKIP:-77}"
 
 tests=(
     port_cli_contracts
+    port_discovery
     port_dryrun
     port_empty_input
     port_fuzz
