@@ -18,8 +18,11 @@ tests=(
     port_idempotency
     port_invariants
     port_determinism
+    port_periods_filter
+    port_rebuild_correctness
     port_rebuild_summaries
     port_state
+    port_wipe_scope
 )
 
 pass=0
