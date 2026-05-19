@@ -78,11 +78,20 @@ jobs:
       - name: Run golden suite
         run: tests/ab/run-all-golden.sh
 
+      - name: Run defensive new-only suite
+        run: tests/ab/run-defensive.sh
+
       - name: Upload per-port logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: abg-logs
-          path: /tmp/abg-*.log
+          name: test-logs
+          path: |
+            /tmp/ab*.log
+            /tmp/ab-reset.log
+            /tmp/setup-db.log
+            /tmp/migrate.log
+            /tmp/hzmetrics-ab.log
+            tests/ab/port_*/_out/**
           if-no-files-found: ignore
           retention-days: 7

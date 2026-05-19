@@ -5,7 +5,7 @@ intentionally not duplicated from individual port test READMEs — read
 `tests/ab/run-all.sh` and the per-port `run.sh` files for the source
 of truth.
 
-## Two test modes
+## Test modes
 
 The harness can run in two modes:
 
@@ -18,9 +18,13 @@ The harness can run in two modes:
    parity time (`tests/ab/port_*/golden/*.tsv`).  Does not require
    `tests/legacy/`.  Simulates the world where the legacy reference
    has been removed.
+3. **Defensive mode** (`tests/ab/run-defensive.sh`) — runs the
+   new-code-only tests that do not need legacy or golden snapshots:
+   fuzz, idempotency, dry-run safety, empty input, determinism,
+   cross-table invariants, and CLI error contracts.
 
-Both modes produce the same pass/fail outcome on a current codebase.
-Both modes pass in the current tree.
+The A/B and golden modes produce the same pass/fail outcome on a
+current codebase.  CI runs golden plus defensive mode.
 
 ## What's tested
 
@@ -43,11 +47,12 @@ combinations exercising period boundary arithmetic),
 `port_invariants` (cross-table rules like
 `summary_user_vals[rowid=1] = SUM([6,7,8])`).
 
-**Defensive tests (5):** `port_fuzz` (4 fuzz harnesses with 2000+
+**Defensive tests (6):** `port_fuzz` (4 fuzz harnesses with 2000+
 randomized cases each), `port_idempotency` (re-runs analyze+summarize
 on the same DB), `port_dryrun` (every `--dry-run` writes zero rows),
 `port_empty_input` (each port no-ops cleanly on empty input),
-`port_determinism` (two fresh-DB runs are byte-identical).
+`port_determinism` (two fresh-DB runs are byte-identical),
+`port_cli_contracts` (invalid CLI/config paths exit non-zero).
 
 ## Running
 
@@ -65,6 +70,10 @@ on the same DB), `port_dryrun` (every `--dry-run` writes zero rows),
   `port_whoisonline`) fail with fake mismatches where legacy reports
   `?` / `(unknown)` while the new Python's aiodns resolves cleanly.
 - Python runtime deps from `pyproject.toml` (`pymysql`, `aiodns`).
+- `tests/ab/fixtures/test_access.cfg` must name a real local DB user.
+  The committed sample leaves `$db_user = ''`; either patch a temporary
+  cfg and point `HZMETRICS_ACCESS_CFG` at it, or patch the fixture in a
+  disposable checkout the way CI does.
 
 ### Commands
 
@@ -78,20 +87,28 @@ tests/ab/run-all.sh
 # Or the golden-mode round (no legacy needed)
 tests/ab/run-all-golden.sh
 
+# New-code-only defensive checks (also no legacy needed)
+tests/ab/run-defensive.sh
+
 # Run a single port
 tests/ab/port_fill_domain/run.sh
 tests/ab/port_fill_domain/run_golden.sh
 ```
 
 `setup_test_dbs.sh --reset` truncates everything and reloads
-reference data — used between tests.
+reference data — used between tests.  Top-level drivers report
+`pass/fail/skip`; a per-port runner can exit `77` to mark a real skip
+(currently used when the optional production snapshot is absent).
 
 ### Running against a non-default cfg
 
 Both `setup_test_dbs.sh` and `conftest.sh` honor
-`HZMETRICS_ACCESS_CFG=<path>` (env override) — useful if your local
-MariaDB account doesn't match the cfg's `$db_user`.  Same env
-applies to per-port `run.sh` invocations.
+`HZMETRICS_ACCESS_CFG=<path>` (env override).  The bootstrap reads
+`hub_db`, `metrics_db`, `db_host`, `db_user`, and `db_pass` from that
+cfg, creates the named test DBs, creates the DB user if needed, and
+grants it access.  `TEST_USER` is accepted only as a consistency
+override; it must match the cfg's `$db_user` so `mysql` and
+`hzmetrics.py` connect as the same account.
 
 ## When the harness catches things
 
