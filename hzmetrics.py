@@ -378,6 +378,27 @@ def previous_month(month_str: str) -> str:
         m, y = 12, y - 1
     return f"{y:04d}-{m:02d}"
 
+def next_month(month_str: str) -> str:
+    """Return the YYYY-MM that immediately follows `month_str`, rolling
+    over from December to the next January."""
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    m += 1
+    if m == 13:
+        m, y = 1, y + 1
+    return f"{y:04d}-{m:02d}"
+
+def months_in_range(start: str, end: str) -> list[str]:
+    """Return YYYY-MM strings from `start` through `end` inclusive, in
+    chronological order.  Returns an empty list if start > end."""
+    if start > end:
+        return []
+    out = []
+    cur = start
+    while cur <= end:
+        out.append(cur)
+        cur = next_month(cur)
+    return out
+
 def last_day_of_month(month_str: str) -> str:
     """Return YYYYMMDD for the last calendar day of the given YYYY-MM."""
     y, m = int(month_str[:4]), int(month_str[5:7])
@@ -1650,10 +1671,11 @@ def do_summarize(month_str, dry_run=False, *, periods=None):
 # ---------------------------------------------------------------------------
 
 def cmd_status(args):
-    """Print pipeline state: counts and date spans of files awaiting import
-    (across daily/, daily/YYYY/, daily.holding/) and already-imported logs,
-    plus the current resolve-dns settings.  Read-only — logs to stderr +
-    the configured HZMETRICS_LOG file, no DB writes, no exit code."""
+    """Print pipeline state: orchestrator mode + transition cursors from
+    pipeline_state, counts and date spans of files awaiting import (across
+    daily/, daily/YYYY/, daily.holding/), already-imported logs, and the
+    current resolve-dns settings.  Read-only — logs to stderr + the
+    configured HZMETRICS_LOG file, no DB writes, no exit code."""
     def summarize_files(files, label):
         count = len(files)
         if count == 0:
@@ -1665,6 +1687,31 @@ def cmd_status(args):
 
     def summarize_dir(directory, pattern, label):
         summarize_files(dated_files(directory, pattern), label)
+
+    log.info("=== orchestrator state ===")
+    try:
+        state = read_state()
+    except Exception as e:
+        log.info(f"  (could not read pipeline_state: {e})")
+        state = {}
+    mode = state.get("mode", "normal")
+    log.info(f"  mode             : {mode}")
+    log.info(f"  last analyzed    : {state.get('analyzed', '(never)')}")
+    if "catchup_started" in state:
+        log.info(f"  catchup_started  : {state['catchup_started']}")
+    if mode == "rebuild":
+        cursor = state.get("rebuild_cursor", "(unset)")
+        try:
+            target = previous_month(date.today().strftime("%Y-%m"))
+            if cursor != "(unset)" and cursor <= target:
+                remaining = len(months_in_range(cursor, target))
+                log.info(f"  rebuild_cursor   : {cursor}  ({remaining} month(s) "
+                         f"remaining through {target})")
+            else:
+                log.info(f"  rebuild_cursor   : {cursor}  (past prev_month — "
+                         f"next tick will transition to normal)")
+        except Exception:
+            log.info(f"  rebuild_cursor   : {cursor}")
 
     log.info("=== pending import (all source dirs) ===")
     summarize_files(enumerate_log_sources("access"), "httpd access")
@@ -1748,6 +1795,53 @@ def cmd_summarize(args):
     dry_run = args.dry_run
     _require_complete_month(args.month, args.force)
     do_summarize(args.month, dry_run)
+    log.info(">>> done")
+
+
+# ---------------------------------------------------------------------------
+# rebuild-summaries  (manual range resummarize — doesn't touch state["mode"])
+# ---------------------------------------------------------------------------
+
+def cmd_rebuild_summaries(args):
+    """Resummarize an explicit range of months.  Useful for the
+    post-catchup rebuild sweep when an operator wants to drive it
+    manually (instead of letting cmd_run's rebuild mode do it tick by
+    tick), and for one-offs after a data fix.
+
+    Does NOT modify pipeline_state.mode — the catchup state machine in
+    cmd_run keeps running independently.  An operator can therefore use
+    this alongside an in-flight catchup, or after deliberately bypassing
+    the state machine entirely."""
+    dry_run = args.dry_run
+    since   = args.since
+    through = args.through or previous_month(date.today().strftime("%Y-%m"))
+
+    if since > through:
+        log.error(f"--since {since} is after --through {through}; nothing to do.")
+        raise SystemExit(1)
+
+    periods = None
+    if args.periods:
+        try:
+            periods = tuple(int(p.strip()) for p in args.periods.split(","))
+        except ValueError:
+            log.error(f"--periods: expected comma-separated integers, got {args.periods!r}")
+            raise SystemExit(1)
+        bad = [p for p in periods if p not in SUMMARY_PERIODS_DEFAULT]
+        if bad:
+            log.error(f"--periods: each value must be one of "
+                      f"{sorted(SUMMARY_PERIODS_DEFAULT)}, got {bad}")
+            raise SystemExit(1)
+
+    months = months_in_range(since, through)
+    plabel = "all" if periods is None else ",".join(str(p) for p in periods)
+    log.info(f"[rebuild-summaries] {len(months)} month(s) {since}..{through} "
+             f"periods={plabel}{' [dry-run]' if dry_run else ''}")
+
+    for m in months:
+        log.info(f"=== {m} ===")
+        do_summarize(m, dry_run, periods=periods)
+
     log.info(">>> done")
 
 
@@ -6261,12 +6355,7 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
     do_analyze(cursor, dry_run)
     do_summarize(cursor, dry_run)  # default = all periods
 
-    # Advance cursor to next month.
-    y, m = int(cursor[:4]), int(cursor[5:7])
-    m += 1
-    if m == 13:
-        m, y = 1, y + 1
-    next_cursor = f"{y:04d}-{m:02d}"
+    next_cursor = next_month(cursor)
     if not dry_run:
         update_state(rebuild_cursor=next_cursor)
     log.info(f"[rebuild] cursor advanced: {cursor} → {next_cursor}")
@@ -6379,6 +6468,18 @@ def main() -> None:
     p_summarize.add_argument("--month",   metavar="YYYY-MM", required=True)
     p_summarize.add_argument("--force",   action="store_true", help="Run even if month is not yet complete")
     p_summarize.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
+
+    p_rebuild = sub.add_parser("rebuild-summaries",
+        help="Resummarize a range of months (manual override; doesn't touch orchestrator mode)")
+    p_rebuild.set_defaults(func=cmd_rebuild_summaries)
+    p_rebuild.add_argument("--since",   metavar="YYYY-MM", type=_arg_yyyymm, required=True,
+        help="Earliest month to resummarize (inclusive)")
+    p_rebuild.add_argument("--through", metavar="YYYY-MM", type=_arg_yyyymm,
+        help="Latest month (inclusive); defaults to previous calendar month")
+    p_rebuild.add_argument("--periods", metavar="CSV",
+        help="Comma-separated period codes (subset of 0,1,3,12,13,14); default: all")
+    p_rebuild.add_argument("--dry-run", action="store_true",
+        help="Show what would be done without doing it")
 
     p_setup = sub.add_parser("setup-db", help="Create metrics database and all tables (idempotent)")
     p_setup.set_defaults(func=cmd_setup_db)
