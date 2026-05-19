@@ -41,17 +41,15 @@ Install on a fresh HUBzero host (see [docs/deployment.md](docs/deployment.md)
 for the full procedure):
 
 ```sh
-# 1. Drop the pipeline on PATH (Makefile in source/ if present, else by hand).
-sudo install -o apache -m 755 hzmetrics.py /opt/hubzero/bin/hzmetrics.py
-sudo install -m 644 conf/hzmetrics.tmpfiles.conf /etc/tmpfiles.d/hzmetrics.conf
-sudo install -m 644 conf/hubzero-metrics.cron.d /etc/cron.d/hubzero-metrics
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
+# 1. Install the pipeline + cron + tmpfiles + logrotate hook.
+sudo make install                              # or: sudo make install CRON_STYLE=spool
 
 # 2. Drop the DB credentials in place.
 sudo install -d -o root -g apache -m 750 /etc/hubzero-metrics
 sudo install -o root -g apache -m 640 access.cfg /etc/hubzero-metrics/access.cfg
 
-# 3. First-time DB bootstrap + migrations.
+# 3. systemd-tmpfiles, first-time DB bootstrap + migrations.
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
 
@@ -59,6 +57,11 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
 sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
 ```
+
+`make install` (default `CRON_STYLE=dropin`) drops the cron entry at
+`/etc/cron.d/hubzero-metrics`; `CRON_STYLE=spool` uses the
+`/var/spool/cron/apache` user-crontab form instead.  `make help` lists
+all targets.
 
 One cron entry, every five minutes, does all the rest:
 

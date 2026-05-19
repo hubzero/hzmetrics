@@ -68,7 +68,7 @@
 <nav class="toc" aria-label="On this page">
   <p class="toc__heading">On this page</p>
   <ul class="toc__list">
-<li class="toc__item toc__item--level-2"><a href="#two-test-modes">Two test modes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#test-modes">Test modes</a></li>
 <li class="toc__item toc__item--level-2"><a href="#what-s-tested">What&#x27;s tested</a></li>
 <li class="toc__item toc__item--level-2"><a href="#running">Running</a></li>
 <li class="toc__item toc__item--level-3"><a href="#prerequisites">Prerequisites</a></li>
@@ -83,7 +83,7 @@
 intentionally not duplicated from individual port test READMEs — read
 <code>tests/ab/run-all.sh</code> and the per-port <code>run.sh</code> files for the source
 of truth.</p>
-<h2 id="two-test-modes">Two test modes</h2>
+<h2 id="test-modes">Test modes</h2>
 <p>The harness can run in two modes:</p>
 <ol>
 <li><strong>A/B mode</strong> (<code>tests/ab/run-all.sh</code>) — runs each port's legacy
@@ -95,9 +95,13 @@ code, diffs against a frozen snapshot of legacy output captured at
 parity time (<code>tests/ab/port_*/golden/*.tsv</code>).  Does not require
 <code>tests/legacy/</code>.  Simulates the world where the legacy reference
 has been removed.</li>
+<li><strong>Defensive mode</strong> (<code>tests/ab/run-defensive.sh</code>) — runs the
+new-code-only tests that do not need legacy or golden snapshots:
+fuzz, idempotency, dry-run safety, empty input, determinism,
+cross-table invariants, and CLI error contracts.</li>
 </ol>
-<p>Both modes produce the same pass/fail outcome on a current codebase.
-Both modes pass in the current tree.</p>
+<p>The A/B and golden modes produce the same pass/fail outcome on a
+current codebase.  CI runs golden plus defensive mode.</p>
 <h2 id="what-s-tested">What's tested</h2>
 <p>26 test directories under <code>tests/ab/port_*</code>:</p>
 <p><strong>Per-port A/B (16):</strong> <code>port_andmore_usage</code>, <code>port_clean_bots</code>,
@@ -114,11 +118,12 @@ metric-dense single port), <code>port_period_sweep</code> (24 anchor-port
 combinations exercising period boundary arithmetic),
 <code>port_invariants</code> (cross-table rules like
 <code>summary_user_vals[rowid=1] = SUM([6,7,8])</code>).</p>
-<p><strong>Defensive tests (5):</strong> <code>port_fuzz</code> (4 fuzz harnesses with 2000+
+<p><strong>Defensive tests (6):</strong> <code>port_fuzz</code> (4 fuzz harnesses with 2000+
 randomized cases each), <code>port_idempotency</code> (re-runs analyze+summarize
 on the same DB), <code>port_dryrun</code> (every <code>--dry-run</code> writes zero rows),
 <code>port_empty_input</code> (each port no-ops cleanly on empty input),
-<code>port_determinism</code> (two fresh-DB runs are byte-identical).</p>
+<code>port_determinism</code> (two fresh-DB runs are byte-identical),
+<code>port_cli_contracts</code> (invalid CLI/config paths exit non-zero).</p>
 <h2 id="running">Running</h2>
 <h3 id="prerequisites">Prerequisites</h3>
 <ul>
@@ -136,6 +141,10 @@ DNS-dependent tests (<code>port_pipeline</code>, <code>port_determinism</code>,
 </ul>
 </li>
 <li>Python runtime deps from <code>pyproject.toml</code> (<code>pymysql</code>, <code>aiodns</code>).</li>
+<li><code>tests/ab/fixtures/test_access.cfg</code> must name a real local DB user.
+The committed sample leaves <code>$db_user = ''</code>; either patch a temporary
+cfg and point <code>HZMETRICS_ACCESS_CFG</code> at it, or patch the fixture in a
+disposable checkout the way CI does.</li>
 </ul>
 <h3 id="commands">Commands</h3>
 <pre><code class="language-bash"># Bootstrap once per host (creates test DBs, loads reference data)
@@ -147,17 +156,25 @@ tests/ab/run-all.sh
 # Or the golden-mode round (no legacy needed)
 tests/ab/run-all-golden.sh
 
+# New-code-only defensive checks (also no legacy needed)
+tests/ab/run-defensive.sh
+
 # Run a single port
 tests/ab/port_fill_domain/run.sh
 tests/ab/port_fill_domain/run_golden.sh
 </code></pre>
 <p><code>setup_test_dbs.sh --reset</code> truncates everything and reloads
-reference data — used between tests.</p>
+reference data — used between tests.  Top-level drivers report
+<code>pass/fail/skip</code>; a per-port runner can exit <code>77</code> to mark a real skip
+(currently used when the optional production snapshot is absent).</p>
 <h3 id="running-against-a-non-default-cfg">Running against a non-default cfg</h3>
 <p>Both <code>setup_test_dbs.sh</code> and <code>conftest.sh</code> honor
-<code>HZMETRICS_ACCESS_CFG=&lt;path&gt;</code> (env override) — useful if your local
-MariaDB account doesn't match the cfg's <code>$db_user</code>.  Same env
-applies to per-port <code>run.sh</code> invocations.</p>
+<code>HZMETRICS_ACCESS_CFG=&lt;path&gt;</code> (env override).  The bootstrap reads
+<code>hub_db</code>, <code>metrics_db</code>, <code>db_host</code>, <code>db_user</code>, and <code>db_pass</code> from that
+cfg, creates the named test DBs, creates the DB user if needed, and
+grants it access.  <code>TEST_USER</code> is accepted only as a consistency
+override; it must match the cfg's <code>$db_user</code> so <code>mysql</code> and
+<code>hzmetrics.py</code> connect as the same account.</p>
 <h2 id="when-the-harness-catches-things">When the harness catches things</h2>
 <p>Real bugs surfaced during the port, with their commit messages
 preserved in the log for reference:</p>

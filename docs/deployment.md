@@ -76,19 +76,30 @@ A/B-test parity reference.
 From a checkout of this repo:
 
 ```
-sudo make -C source install
+sudo make install                    # uses /etc/cron.d/ form (default)
+sudo make install CRON_STYLE=spool   # uses /var/spool/cron/apache form instead
+sudo make uninstall                  # removes everything `install` put on the host
+make help                            # list all targets (lint, test, test-ab, ...)
 ```
 
-The Makefile copies:
+What `install` copies:
 
 - `hzmetrics.py` → `/opt/hubzero/bin/hzmetrics.py` (mode 755, owner apache)
 - `conf/hzmetrics-logrotate-postrotate.sh` → `/opt/hubzero/bin/hzmetrics-postrotate.sh`
 - `conf/hzmetrics.tmpfiles.conf` → `/etc/tmpfiles.d/hzmetrics.conf`
-- `conf/hubzero-metrics.cron.apache` → `/var/spool/cron/apache`
-- `conf/hubzero-metrics.cron.d` → `/etc/cron.d/hubzero-metrics`  *(use one or the other)*
+- Exactly ONE of:
+  - `conf/hubzero-metrics.cron.d` → `/etc/cron.d/hubzero-metrics`  *(default; `CRON_STYLE=dropin`)*
+  - `conf/hubzero-metrics.cron.apache` → `/var/spool/cron/apache`  *(`CRON_STYLE=spool`)*
 
-(`source/Makefile` lives in this repo; it's the only thing left in
-`source/` from the original packaging layout.)
+`install` deliberately does NOT touch `/etc/hubzero-metrics/access.cfg`
+— that's an operator-supplied secret.  After `make install`, the
+Makefile prints the remaining manual steps (the tmpfiles `--create`,
+the access.cfg drop, `setup-db`, `migrate --apply`).
+
+Overrides: `PREFIX`, `SYSCONFDIR`, `TMPFILESDIR`, `CRONDDIR`,
+`SPOOLCRONDIR`, `INSTALL_OWNER`, and the standard `DESTDIR` for
+staged installs (`make install DESTDIR=/tmp/stage INSTALL_OWNER=root`
+for a package-build scratch dir).
 
 The cron entry is a single line, every five minutes:
 

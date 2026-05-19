@@ -142,18 +142,31 @@ installed on a production host.  They live in this repo only as the
 A/B-test parity reference.</p>
 <h2 id="install-via-makefile">Install via Makefile</h2>
 <p>From a checkout of this repo:</p>
-<pre><code>sudo make -C source install
+<pre><code>sudo make install                    # uses /etc/cron.d/ form (default)
+sudo make install CRON_STYLE=spool   # uses /var/spool/cron/apache form instead
+sudo make uninstall                  # removes everything `install` put on the host
+make help                            # list all targets (lint, test, test-ab, ...)
 </code></pre>
-<p>The Makefile copies:</p>
+<p>What <code>install</code> copies:</p>
 <ul>
 <li><code>hzmetrics.py</code> → <code>/opt/hubzero/bin/hzmetrics.py</code> (mode 755, owner apache)</li>
 <li><code>conf/hzmetrics-logrotate-postrotate.sh</code> → <code>/opt/hubzero/bin/hzmetrics-postrotate.sh</code></li>
 <li><code>conf/hzmetrics.tmpfiles.conf</code> → <code>/etc/tmpfiles.d/hzmetrics.conf</code></li>
-<li><code>conf/hubzero-metrics.cron.apache</code> → <code>/var/spool/cron/apache</code></li>
-<li><code>conf/hubzero-metrics.cron.d</code> → <code>/etc/cron.d/hubzero-metrics</code>  <em>(use one or the other)</em></li>
+<li>Exactly ONE of:
+<ul>
+<li><code>conf/hubzero-metrics.cron.d</code> → <code>/etc/cron.d/hubzero-metrics</code>  <em>(default; <code>CRON_STYLE=dropin</code>)</em></li>
+<li><code>conf/hubzero-metrics.cron.apache</code> → <code>/var/spool/cron/apache</code>  <em>(<code>CRON_STYLE=spool</code>)</em></li>
 </ul>
-<p>(<code>source/Makefile</code> lives in this repo; it's the only thing left in
-<code>source/</code> from the original packaging layout.)</p>
+</li>
+</ul>
+<p><code>install</code> deliberately does NOT touch <code>/etc/hubzero-metrics/access.cfg</code>
+— that's an operator-supplied secret.  After <code>make install</code>, the
+Makefile prints the remaining manual steps (the tmpfiles <code>--create</code>,
+the access.cfg drop, <code>setup-db</code>, <code>migrate --apply</code>).</p>
+<p>Overrides: <code>PREFIX</code>, <code>SYSCONFDIR</code>, <code>TMPFILESDIR</code>, <code>CRONDDIR</code>,
+<code>SPOOLCRONDIR</code>, <code>INSTALL_OWNER</code>, and the standard <code>DESTDIR</code> for
+staged installs (<code>make install DESTDIR=/tmp/stage INSTALL_OWNER=root</code>
+for a package-build scratch dir).</p>
 <p>The cron entry is a single line, every five minutes:</p>
 <pre><code>*/5 * * * * apache  python3 /opt/hubzero/bin/hzmetrics.py tick
 </code></pre>
