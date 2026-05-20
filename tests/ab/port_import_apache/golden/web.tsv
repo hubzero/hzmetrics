@@ -4,7 +4,6 @@ NULL	NULL	2025-06-30 23:59:59	NULL	/events/boundary-june	-	Mozilla/5.0	100.4.1.1
 NULL	NULL	2025-07-10 08:00:01	NULL	/resources/1234/index.html	-	Mozilla/5.0 (X11; Linux x86_64) Chrome/120	100.1.1.1	NULL	NULL	0	3000001	-	-	-	-	-	-	-	-	NULL
 NULL	NULL	2025-07-10 08:00:02	NULL	/resources/1234/download/file.zip	-	Mozilla/5.0 (X11; Linux x86_64) Chrome/120	100.1.1.1	NULL	NULL	0	3000002	-	-	-	-	-	-	-	-	NULL
 NULL	NULL	2025-07-10 08:00:03	NULL	/resources/foo.pdf	-	Mozilla/5.0 (Macintosh) Safari/16	100.1.1.2	NULL	NULL	0	3000003	-	-	-	-	-	-	-	-	NULL
-NULL	NULL	2025-07-12 09:30:02	NULL	/cron/tick	-	wget/1.20	127.0.0.1	NULL	NULL	0	3000006	-	-	-	-	-	-	-	-	NULL
 NULL	NULL	2025-07-18 14:00:00	NULL	/events/2025/9/15/conference	https:///	Mozilla/5.0 (Windows NT 10) Edge/120	100.1.1.7	NULL	NULL	0	3000010	-	-	-	-	-	-	-	-	NULL
 NULL	NULL	2025-07-18 14:00:01	NULL	/resources/9876/download/data.nc	-	Mozilla/5.0 (Windows NT 10) Edge/120	100.1.1.7	NULL	NULL	0	3000011	-	-	-	-	-	-	-	-	NULL
 NULL	NULL	2025-07-23 08:00:08	NULL	/events/posted	-	Mozilla/5.0	100.2.1.9	NULL	NULL	0	3000028	-	-	-	-	-	-	-	-	NULL

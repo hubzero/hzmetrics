@@ -1736,40 +1736,73 @@ def _timed_stage(name: str):
 
 def _do_tool_metrics_stage(month_str, dry_run):
     """Run the per-month tool-metrics enrichment + stats chain in-process.
-    Direct port of __process_tool_metrics.sh."""
+    Direct port of __process_tool_metrics.sh.
+
+    Per-sub-stage timing wraps each heavy worker so the tick log lines
+    up "stage X took Ys" — useful for spotting which step is dominating
+    on big months.  sessionlog_metrics is normally tiny so most of
+    these will be sub-second."""
     with _timed_stage("tool-metrics"):
-        do_import_hub_data(dry_run=dry_run)
-        do_resolve_dns("metrics", "sessionlog_metrics", month_str,
-                       dry_run=dry_run)
-        do_fill_domain("metrics", "sessionlog_metrics", month_str,
-                       dry_run=dry_run)
-        do_fill_user_info("metrics", "sessionlog_metrics", month_str,
-                          dry_run=dry_run)
-        do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
-                          dry_run=dry_run)
-        do_gen_tool_stats(month_str,    dry_run=dry_run)
-        do_gen_tool_tops(month_str,     dry_run=dry_run)
-        do_gen_tool_toplists(month_str, dry_run=dry_run)
+        with _timed_stage("  import-hub-data"):
+            do_import_hub_data(dry_run=dry_run)
+        with _timed_stage("  resolve-dns sessionlog_metrics"):
+            do_resolve_dns("metrics", "sessionlog_metrics", month_str,
+                           dry_run=dry_run)
+        with _timed_stage("  fill-domain sessionlog_metrics"):
+            do_fill_domain("metrics", "sessionlog_metrics", month_str,
+                           dry_run=dry_run)
+        with _timed_stage("  fill-user-info sessionlog_metrics"):
+            do_fill_user_info("metrics", "sessionlog_metrics", month_str,
+                              dry_run=dry_run)
+        with _timed_stage("  fill-ipcountry sessionlog_metrics"):
+            do_fill_ipcountry("metrics", "sessionlog_metrics", month_str,
+                              dry_run=dry_run)
+        with _timed_stage("  gen-tool-stats"):
+            do_gen_tool_stats(month_str,    dry_run=dry_run)
+        with _timed_stage("  gen-tool-tops"):
+            do_gen_tool_tops(month_str,     dry_run=dry_run)
+        with _timed_stage("  gen-tool-toplists"):
+            do_gen_tool_toplists(month_str, dry_run=dry_run)
 
 
 def _do_usage_metrics_stage(month_str, dry_run):
     """Run the per-month web / toolstart / websessions enrichment chain
-    in-process.  Direct port of __process_usage_metrics.sh."""
+    in-process.  Direct port of __process_usage_metrics.sh.
+
+    Per-sub-stage timing wraps each heavy worker (resolve-dns,
+    fill-domain, fill-ipcountry, logfix-session, clean-bots) so the
+    tick log shows exactly where the wallclock went — particularly
+    important for big months (millions of rows) where one of these
+    steps can dominate."""
     with _timed_stage("usage-metrics"):
-        do_import_hub_data(dry_run=dry_run)
-        do_middleware_wall(dry_run=dry_run)
-        do_middleware_cpu( dry_run=dry_run)
-        do_resolve_dns("metrics", "web",       month_str, dry_run=dry_run)
-        do_resolve_dns("metrics", "toolstart", month_str, dry_run=dry_run)
-        do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
-        do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
-        do_logfix_session(month_str, dry_run=dry_run)
-        do_clean_bots("web",         month_str, dry_run=dry_run)
-        do_clean_bots("websessions", month_str, dry_run=dry_run)
-        do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
-        do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
-        do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
-        do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
+        with _timed_stage("  import-hub-data"):
+            do_import_hub_data(dry_run=dry_run)
+        with _timed_stage("  middleware-wall"):
+            do_middleware_wall(dry_run=dry_run)
+        with _timed_stage("  middleware-cpu"):
+            do_middleware_cpu( dry_run=dry_run)
+        with _timed_stage("  resolve-dns web"):
+            do_resolve_dns("metrics", "web",       month_str, dry_run=dry_run)
+        with _timed_stage("  resolve-dns toolstart"):
+            do_resolve_dns("metrics", "toolstart", month_str, dry_run=dry_run)
+        with _timed_stage("  fill-domain web"):
+            do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
+        with _timed_stage("  fill-domain toolstart"):
+            do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
+        with _timed_stage("  logfix-session"):
+            do_logfix_session(month_str, dry_run=dry_run)
+        with _timed_stage("  clean-bots web"):
+            do_clean_bots("web",         month_str, dry_run=dry_run)
+        with _timed_stage("  clean-bots websessions"):
+            do_clean_bots("websessions", month_str, dry_run=dry_run)
+        with _timed_stage("  fill-user-info toolstart"):
+            do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
+        with _timed_stage("  fill-ipcountry web"):
+            do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
+        with _timed_stage("  fill-ipcountry websessions"):
+            do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
+        with _timed_stage("  fill-ipcountry toolstart"):
+            do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
 
 
 def _do_summary_stage(month_str, dry_run, *, periods=None):
@@ -2830,24 +2863,33 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
     conn = _open_db(db_name)
     try:
         with conn.cursor() as cur:
+            # Phase 1: scan target table for unresolved-IP working set.
+            # On a big month (millions of rows) this is the table scan
+            # that can dominate when the buffer pool is undersized — log
+            # its cost separately so we can tell at a glance whether the
+            # slowness is in the DB scan, the DNS lookups, or the UPDATE.
+            t_scan = time.monotonic()
             cur.execute(sel_sql)
             ips = [r[0] for r in cur.fetchall()]
-
+            scan_dt = time.monotonic() - t_scan
             log.info(f"[resolve-dns] {db_name}.{table} {scope_label}: "
-                f"{len(ips)} unresolved IPs (ns={nameserver}, c={concurrency})")
+                f"{len(ips)} unresolved IPs (ns={nameserver}, c={concurrency})  "
+                f"scan={scan_dt:.1f}s")
             if not ips or dry_run:
                 return 0
 
-            import time
-            t0 = time.monotonic()
+            # Phase 2: async aiodns lookups.
+            t_dns = time.monotonic()
             pairs = asyncio.run(_resolve_ips_async(ips, nameserver, concurrency, timeout))
-            wall = time.monotonic() - t0
+            wall = time.monotonic() - t_dns
             resolved_count = sum(1 for _, h in pairs if h != "?")
             no_ptr   = len(pairs) - resolved_count
             rate     = len(pairs) / wall if wall > 0 else 0
             log.info(f"[resolve-dns] resolved={resolved_count} no_ptr={no_ptr} "
                 f"wall={wall:.1f}s rate={rate:.0f} IPs/s")
 
+            # Phase 3: write resolved hosts back via temp-table JOIN-UPDATE.
+            t_apply = time.monotonic()
             cur.execute(
                 "CREATE TEMPORARY TABLE _dns_tmp ("
                 "ip VARCHAR(45) NOT NULL PRIMARY KEY, host VARCHAR(255)) ENGINE=Memory")
@@ -2864,7 +2906,9 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                 f"SET t.host = LOWER(d.host) "
                 f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred}")
             updated = cur.rowcount
-            log.info(f"[resolve-dns] applied: {updated} rows updated in {table}")
+            apply_dt = time.monotonic() - t_apply
+            log.info(f"[resolve-dns] applied: {updated} rows updated in {table}  "
+                f"apply={apply_dt:.1f}s")
             return 0
     finally:
         conn.close()
@@ -3326,6 +3370,11 @@ BOT_UA_FILTERS = [
     "feedfetcher", "msnbot", "gsa-crawler", "googlebot", "yandex",
     "spider", "bot", "search", "crawl", "archive", "harvest", "slurp",
     "feed", "nutch", "robot", "fetch", "findlinks",
+    # Added after 2025-06 analysis showed these dominating the table:
+    "scrapy",      # Scrapy/2.11.2 — 43% of 2025-06 web rows on its own
+    "prtg",        # PRTG Network Monitor probes (per-minute health checks)
+    "pycurl",      # PycURL/* — typical health-check / curl-based monitor
+    "yeti",        # Naver Yeti search-engine bot (+https://naver.me/spd)
 ]
 # Whitelist overrides — remove these false positives after flagging.
 BOT_UA_WHITELIST_LIKE = ["%searchtool%", "% feed/%"]
@@ -3780,8 +3829,15 @@ _TEMPLATES_RE = re.compile(r'^(/app)*/templates/', re.IGNORECASE)
 _ADMIN_RE     = re.compile(r'^/administrator/',    re.IGNORECASE)
 _WEBDAV_RE    = re.compile(r'^/webdav/',           re.IGNORECASE)
 _API_RE       = re.compile(r'^/api/',              re.IGNORECASE)
-_CRON_RE      = re.compile(r'^/cron/tick/',        re.IGNORECASE)
+# /cron/tick (no trailing slash) was slipping the original /cron/tick/
+# filter — added (?:/|$) to catch both forms.  Observed at 32 k hits/mo
+# in the 2025-06 analysis.
+_CRON_RE      = re.compile(r'^/cron/tick(?:[/?]|$)', re.IGNORECASE)
 _SVN_RE       = re.compile(r'/projects/.+?/svn/\!svn/', re.IGNORECASE)
+# Mailman archives — observed at ~33 % of 2025-06 web rows, ~97 % from
+# Scrapy.  Mailing-list archive pages are a separate service that just
+# happens to share the domain; they contribute no hub-usage signal.
+_PIPERMAIL_RE = re.compile(r'^/pipermail/',        re.IGNORECASE)
 _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
 
 # dnload flag triggers (matches the new-code addition to set web.dnload=1)
@@ -3807,6 +3863,7 @@ def _is_excluded_url(url):
     if _API_RE.match(url):             return True
     if _CRON_RE.match(url):            return True
     if _SVN_RE.search(url):            return True
+    if _PIPERMAIL_RE.match(url):       return True
     return False
 
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
