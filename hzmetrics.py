@@ -2857,54 +2857,90 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
         f"AND (host IS NULL OR host = '')"
     )
 
-    # Use one pymysql connection for the whole flow: select, async resolve
-    # (network-bound, releases the connection), then temp-table insert +
-    # update join.  Temp table is per-connection so it has to be one conn.
+    # Use one pymysql connection for the whole flow.  Temporary tables
+    # are per-connection so they have to share this conn.
+    #
+    # Memory shape: a big month can produce >1 M distinct unresolved IPs.
+    # Loading the full list into Python (the old fetchall pattern) costs
+    # ~100 MB of object overhead and combined with InnoDB buffer pool
+    # working set tripped the OOM killer on a tight host.  The streaming
+    # variant below keeps Python's footprint bounded by `DNS_BATCH_SIZE`
+    # — the working set sits on disk in `_dns_tmp` (InnoDB temp table)
+    # and we fetch + resolve + write back one batch at a time.
+    DNS_BATCH_SIZE = 10000
     conn = _open_db(db_name)
     try:
         with conn.cursor() as cur:
-            # Phase 1: scan target table for unresolved-IP working set.
-            # On a big month (millions of rows) this is the table scan
-            # that can dominate when the buffer pool is undersized — log
-            # its cost separately so we can tell at a glance whether the
-            # slowness is in the DB scan, the DNS lookups, or the UPDATE.
+            # Phase 1: materialise the unresolved-IP working set into
+            # _dns_tmp on disk via INSERT … SELECT — no Python list ever
+            # holds the full IP set.  `host` column reserved for phase 2's
+            # write-back; index lets us fetch "still null" batches fast.
             t_scan = time.monotonic()
-            cur.execute(sel_sql)
-            ips = [r[0] for r in cur.fetchall()]
-            scan_dt = time.monotonic() - t_scan
-            log.info(f"[resolve-dns] {db_name}.{table} {scope_label}: "
-                f"{len(ips)} unresolved IPs (ns={nameserver}, c={concurrency})  "
-                f"scan={scan_dt:.1f}s")
-            if not ips or dry_run:
-                return 0
-
-            # Phase 2: async aiodns lookups.
-            t_dns = time.monotonic()
-            pairs = asyncio.run(_resolve_ips_async(ips, nameserver, concurrency, timeout))
-            wall = time.monotonic() - t_dns
-            resolved_count = sum(1 for _, h in pairs if h != "?")
-            no_ptr   = len(pairs) - resolved_count
-            rate     = len(pairs) / wall if wall > 0 else 0
-            log.info(f"[resolve-dns] resolved={resolved_count} no_ptr={no_ptr} "
-                f"wall={wall:.1f}s rate={rate:.0f} IPs/s")
-
-            # Phase 3: write resolved hosts back via temp-table JOIN-UPDATE.
-            t_apply = time.monotonic()
             cur.execute(
                 "CREATE TEMPORARY TABLE _dns_tmp ("
-                "ip VARCHAR(45) NOT NULL PRIMARY KEY, host VARCHAR(255)) ENGINE=Memory")
-            cur.executemany(
-                "INSERT INTO _dns_tmp (ip, host) VALUES (%s, %s)", pairs)
+                "ip VARCHAR(45) NOT NULL PRIMARY KEY, "
+                "host VARCHAR(255) NULL, "
+                "KEY host_idx (host)) ENGINE=InnoDB")
+            # The original SELECT becomes the SUBQUERY of INSERT IGNORE
+            # SELECT — DISTINCT already de-duplicates, the PRIMARY KEY
+            # de-duplicates again as belt-and-suspenders.
+            cur.execute(f"INSERT IGNORE INTO _dns_tmp (ip) {sel_sql}")
+            n_total = cur.rowcount
+            scan_dt = time.monotonic() - t_scan
+            log.info(f"[resolve-dns] {db_name}.{table} {scope_label}: "
+                f"{n_total} unresolved IPs (ns={nameserver}, c={concurrency})  "
+                f"scan={scan_dt:.1f}s")
+            if n_total == 0 or dry_run:
+                return 0
+
+            # Phase 2: stream-resolve in batches.  Each iteration loads
+            # at most DNS_BATCH_SIZE IPs into Python, runs aiodns, writes
+            # results back into _dns_tmp.host.  Loop exits when there are
+            # no more IPs with host IS NULL (everything resolved or
+            # marked "?" for no-PTR).
+            t_dns = time.monotonic()
+            done = 0
+            resolved_total = 0
+            while True:
+                cur.execute(
+                    "SELECT ip FROM _dns_tmp WHERE host IS NULL LIMIT %s",
+                    (DNS_BATCH_SIZE,),
+                )
+                batch = [r[0] for r in cur.fetchall()]
+                if not batch:
+                    break
+                pairs = asyncio.run(_resolve_ips_async(
+                    batch, nameserver, concurrency, timeout))
+                # Persist results — "?" placeholder distinguishes "tried,
+                # no PTR" from "not yet attempted" (NULL) so the loop
+                # terminates correctly.
+                cur.executemany(
+                    "UPDATE _dns_tmp SET host = %s WHERE ip = %s",
+                    [(h, ip) for ip, h in pairs],
+                )
+                done += len(batch)
+                resolved_total += sum(1 for _, h in pairs if h != "?")
+                log.info(f"  resolved {done}/{n_total} so far "
+                         f"(this batch: {sum(1 for _, h in pairs if h != '?')}"
+                         f"/{len(batch)} got PTRs)")
+            dns_dt = time.monotonic() - t_dns
+            rate = done / dns_dt if dns_dt > 0 else 0
+            log.info(f"[resolve-dns] resolved={resolved_total} no_ptr={done - resolved_total} "
+                f"wall={dns_dt:.1f}s rate={rate:.0f} IPs/s")
+
+            # Phase 3: write resolved hosts back to the target table via
+            # JOIN-UPDATE.  Skip the "?" placeholder rows (no PTR
+            # available).  LOWER(d.host) normalises PTR records on write
+            # so downstream fill-domain can JOIN on t.host = d.host
+            # (indexed) instead of LOWER(t.host) = d.host (function
+            # defeats the index).
+            t_apply = time.monotonic()
             update_date_pred = _build_pred("t.")
-            # LOWER(d.host) normalises PTR records on write so downstream
-            # fill-domain can JOIN on t.host = d.host (indexed) instead of
-            # LOWER(t.host) = d.host (function defeats the index).  DNS PTR
-            # is case-insensitive per RFC so lowercasing is semantically
-            # safe.
             cur.execute(
                 f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
                 f"SET t.host = LOWER(d.host) "
-                f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred}")
+                f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred} "
+                f"  AND d.host IS NOT NULL AND d.host <> '?'")
             updated = cur.rowcount
             apply_dt = time.monotonic() - t_apply
             log.info(f"[resolve-dns] applied: {updated} rows updated in {table}  "
