@@ -40,6 +40,7 @@ class FakeDB:
         self.summary_period_rows: dict = {}  # (month_str, table, period) -> bool
         self.summary_user_period1_months: set = set()  # quick is_month_summarized check
         self.web_months: list = []           # ordered list of months in `web` for _backlog_months
+        self.orphaned_stamp_months: set = set()  # months where month_has_orphaned_stamps → True
 
     _BASE_RE = re.compile(
         r"SELECT 1 FROM \S+\.(\w+)\s+WHERE datetime >=", re.IGNORECASE,
@@ -52,6 +53,10 @@ class FakeDB:
         r"SELECT DISTINCT DATE_FORMAT\(datetime, '%%Y-%%m'\) AS ym\s+FROM \S+\.web",
         re.IGNORECASE,
     )
+    _ORPHAN_RE = re.compile(
+        r"SELECT 1 FROM \S+\.web w\s+WHERE w\.datetime >=.*NOT EXISTS",
+        re.IGNORECASE | re.DOTALL,
+    )
 
     def scalar(self, sql: str, params=None):
         m = self._SUM_PER_RE.search(sql)
@@ -60,6 +65,9 @@ class FakeDB:
             dt = params[0]
             period = params[1] if len(params) > 1 else int(m.group(2))
             return 1 if self.summary_period_rows.get((dt[:7], table, period)) else 0
+        if self._ORPHAN_RE.search(sql):
+            start = params[0]
+            return 1 if start[:7] in self.orphaned_stamp_months else None
         m = self._BASE_RE.search(sql)
         if m:
             table = m.group(1)
@@ -133,6 +141,7 @@ class CmdRunTestBase(unittest.TestCase):
         self.hz.do_analyze     = record("do_analyze")
         self.hz.do_summarize   = record("do_summarize")
         self.hz._wipe_month_data = record("_wipe_month_data")
+        self.hz._reset_month_for_resummarize = record("_reset_month_for_resummarize")
 
         # Today: fix it so date.today() is deterministic.
         # cmd_run uses date.today().strftime / .isoformat / .day.
@@ -213,6 +222,57 @@ class NormalModeTests(CmdRunTestBase):
         # periods kwarg should be default (None) — full summarize
         self.assertNotIn("periods", sum_calls[0][2])
 
+    def test_normal_current_month_analyze_skips_sessions(self):
+        # Current-month daily analyze must pass sessions=False — otherwise
+        # logfix-session runs daily and slices sessions at every tick
+        # boundary.  Regression guard for the fix.
+        self.hz.cmd_run(self._args())
+        ana_calls = self._called("do_analyze")
+        # First do_analyze call is for current month
+        current_calls = [c for c in ana_calls if c[1][0] == "2026-05"]
+        self.assertGreaterEqual(len(current_calls), 1,
+                                "expected at least one do_analyze for current month")
+        self.assertEqual(current_calls[0][2].get("sessions"), False,
+                         "current-month analyze must pass sessions=False")
+
+    def test_normal_prev_month_close_analyze_includes_sessions(self):
+        # Month-close analyze on prev must NOT pass sessions=False — this
+        # is the one run of logfix-session each month gets.
+        last = self.hz.last_day_of_month("2026-04")
+        p = self.root / "httpd/imported" / f"testsite-access.log-{last}.gz"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"")
+        self.state.update(analyzed="2026-05-19")
+        self.hz.cmd_run(self._args())
+        ana_calls = self._called("do_analyze")
+        prev_calls = [c for c in ana_calls if c[1][0] == "2026-04"]
+        self.assertGreaterEqual(len(prev_calls), 1,
+                                "expected at least one do_analyze for prev month")
+        # default sessions=True for month-close; assert no override to False
+        self.assertNotEqual(prev_calls[0][2].get("sessions"), False,
+                            "month-close analyze must not skip sessions")
+
+    def test_prev_month_complete_via_next_month_data(self):
+        # Last-day log file is NOT in imported/, but `web` has rows in
+        # the next month (today_str = 2026-05).  is_month_complete must
+        # return True via the data-driven signal and the prev-month
+        # summarize must fire.
+        self.fakedb.base_table_rows[("2026-05", "web")] = True
+        self.state.update(analyzed="2026-05-19")
+        self.hz.cmd_run(self._args())
+        sum_calls = self._called("do_summarize")
+        self.assertEqual(len(sum_calls), 1)
+        self.assertEqual(sum_calls[0][1][0], "2026-04")
+
+    def test_prev_month_defers_when_no_signal(self):
+        # Neither the last-day file nor next-month data exists →
+        # is_month_complete is False → summarize must not fire.
+        # (Don't add anything to base_table_rows for 2026-05; don't
+        # touch the imported/ file.)
+        self.state.update(analyzed="2026-05-19")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(len(self._called("do_summarize")), 0)
+
 
 # ---------------------------------------------------------------------------
 # Normal → catchup transition
@@ -275,12 +335,56 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.hz.cmd_run(self._args())
         self.assertEqual(len(self._called("do_import_day")), 0)  # no imports
         self.assertEqual(len(self._called("_wipe_month_data")), 0)
+        self.assertEqual(len(self._called("_reset_month_for_resummarize")), 0)
         # Did analyze + resummarize (period=1 only)
         ana = self._called("do_analyze")
         sum_ = self._called("do_summarize")
         self.assertEqual(ana[0][1][0], "2024-07")
         self.assertEqual(sum_[0][1][0], "2024-07")
         self.assertEqual(sum_[0][2].get("periods"), self.hz._CATCHUP_PERIODS)
+
+    def test_catchup_analyze_runs_sessions(self):
+        # Catchup processes complete historical months; logfix-session
+        # must run (sessions defaults to True, no override to False).
+        self.fakedb.base_table_rows[("2024-07", "web")] = True
+        self.fakedb.web_months = ["2024-07"]
+        self.hz.cmd_run(self._args())
+        ana = self._called("do_analyze")
+        self.assertEqual(ana[0][1][0], "2024-07")
+        self.assertNotEqual(ana[0][2].get("sessions"), False,
+                            "catchup must not pass sessions=False — complete-month "
+                            "logfix-session is required for correct websessions")
+
+    def test_dirty_marker_triggers_reset_then_resummarize(self):
+        # Month is fully summarized but operator marked it dirty after
+        # bulk DELETE on web — orchestrator must reset derived tables
+        # and resummarize, ignoring the fully-summ signal.
+        self.fakedb.base_table_rows[("2025-05", "web")] = True
+        self.state.update(dirty_months="2025-05")
+        # Mark it fully summarized so the "fully_summ → skip" path would
+        # normally win — the dirty marker must override.
+        for table in self.hz._SUMMARY_VALS_TABLES:
+            for period in self.hz._PERIOD_CODES_FOR_FULL_CHECK:
+                self.fakedb.summary_period_rows[("2025-05", table, period)] = True
+        self.fakedb.summary_user_period1_months.add("2025-05")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(len(self._called("_reset_month_for_resummarize")), 1)
+        self.assertEqual(self._called("_reset_month_for_resummarize")[0][1][0], "2025-05")
+        # Reset path runs analyze + summarize after the wipe
+        self.assertEqual(self._called("do_analyze")[0][1][0], "2025-05")
+        self.assertEqual(self._called("do_summarize")[0][1][0], "2025-05")
+        # Dirty marker is auto-cleared after a successful pass
+        self.assertEqual(self.state.values.get("dirty_months", ""), "")
+
+    def test_orphaned_stamps_triggers_reset(self):
+        # No dirty marker, but the consistency check finds web.sessionid
+        # values pointing at deleted websessions rows — same reset path.
+        self.fakedb.base_table_rows[("2025-06", "web")] = True
+        self.fakedb.web_months = ["2025-06"]
+        self.fakedb.orphaned_stamp_months.add("2025-06")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(len(self._called("_reset_month_for_resummarize")), 1)
+        self.assertEqual(self._called("_reset_month_for_resummarize")[0][1][0], "2025-06")
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +418,17 @@ class RebuildModeTests(CmdRunTestBase):
         self.assertNotIn("periods", sum_calls[0][2])
         # cursor advanced
         self.assertEqual(self.state.values["rebuild_cursor"], "2022-07")
+
+    def test_rebuild_analyze_runs_sessions(self):
+        # Rebuild walks historical complete months; logfix-session must
+        # be part of analyze (sessions defaults to True).
+        self.state.update(mode="rebuild", rebuild_cursor="2022-06")
+        self.hz.cmd_run(self._args())
+        ana = self._called("do_analyze")
+        self.assertEqual(ana[0][1][0], "2022-06")
+        self.assertNotEqual(ana[0][2].get("sessions"), False,
+                            "rebuild must not pass sessions=False — historical "
+                            "months are complete and need logfix-session run")
 
     def test_rebuild_advances_through_year_boundary(self):
         self.state.update(mode="rebuild", rebuild_cursor="2022-12")

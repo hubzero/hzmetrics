@@ -12,16 +12,20 @@ tests=(
     port_cmd_run
     port_decisions
     port_discovery
+    port_dnload_classify
     port_dryrun
     port_empty_input
     port_fuzz
     port_idempotency
     port_invariants
     port_determinism
+    port_month_complete
     port_periods_filter
     port_rebuild_correctness
     port_rebuild_summaries
+    port_session_split
     port_state
+    port_window_boundaries
     port_wipe_scope
 )
 

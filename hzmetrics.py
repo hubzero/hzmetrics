@@ -411,6 +411,25 @@ def is_month_fully_imported(month_str: str) -> bool:
     last = last_day_of_month(month_str)
     return any(d == last for d, _ in dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*"))
 
+
+def is_month_complete(month_str: str) -> bool:
+    """True if month_str's input data has structurally arrived: either
+    the last calendar day's log file is in imported/, OR `web` has at
+    least one row in the *next* month (which demonstrates that import
+    time has crossed the month boundary).
+
+    The second signal is the safety net.  Without it, a logrotate skip
+    on the very last day of a month would leave the month flagged
+    "not complete" forever — the legacy fallback was "if calendar day
+    of the current month > 5, summarize anyway," but calendar-based
+    fallbacks are flaky (operator running manual ticks, tz drift, etc).
+    Checking for next-month data instead is data-driven: if the
+    pipeline has already imported anything dated after this month, the
+    month is definitively past, regardless of any one specific file."""
+    if is_month_fully_imported(month_str):
+        return True
+    return month_has_data(next_month(month_str))
+
 def is_month_summarized(month_str: str) -> bool:
     """True if summarize-month has produced *any* rows for `month_str` —
     used as a cheap "did we touch this month?" check.
@@ -506,6 +525,34 @@ def month_has_data(month_str: str) -> bool:
     return False
 
 
+def month_has_orphaned_stamps(month_str: str) -> bool:
+    """True iff any `web` row in this month carries a `sessionid` stamp
+    that doesn't reference an extant `websessions.id`.  Surfaces the
+    cleanup landmine: wiping websessions without resetting web.sessionid
+    leaves ghost stamps that the next logfix-session subsequently skips
+    (its predicate is `WHERE sessionid IS NULL OR sessionid = '0'`),
+    so months end up with vastly fewer sessions than the data warrants.
+
+    Cheap LIMIT 1 probe — uses the sessionid index on web.  Called by
+    the catchup decision matrix to force a reset-and-resummarize on
+    any month whose derived tables have drifted from `web`."""
+    _, _, _, metrics_db = db_credentials()
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    start = f"{month_str}-01"
+    end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
+    return bool(mysql_scalar(
+        f"SELECT 1 FROM {metrics_db}.web w "
+        f"WHERE w.datetime >= %s AND w.datetime < %s "
+        f"  AND w.sessionid IS NOT NULL AND w.sessionid <> '0' "
+        f"  AND NOT EXISTS ("
+        f"    SELECT 1 FROM {metrics_db}.websessions ws "
+        f"    WHERE ws.id = w.sessionid"
+        f"  ) "
+        f"LIMIT 1;",
+        (start, end),
+    ))
+
+
 def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
     """DELETE all rows for `month_str` from the base time-series tables
     and the summary_*_vals tables.  Used by the catchup decision matrix
@@ -542,6 +589,70 @@ def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
             f"DELETE FROM {metrics_db}.{table} WHERE datetime = %s;",
             (dt_summary,),
         )
+
+
+def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
+    """Clear derived state (`web.sessionid` + `websessions` + summary
+    cells) for one month, leaving the `web` rows themselves intact.
+    Used by the catchup decision matrix when a month is flagged as
+    needing rework — either because the operator added it to
+    `pipeline_state.dirty_months` after a bulk DELETE/UPDATE, or
+    because `month_has_orphaned_stamps()` detected drift.
+
+    Differs from `_wipe_month_data` (which deletes web/userlogin/...
+    rows too) by preserving the base data — the use case here is
+    "web is correct now, derived tables are not" rather than "this
+    month's import is suspect."""
+    _, _, _, metrics_db = db_credentials()
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    start = f"{month_str}-01"
+    end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
+    dt_summary = f"{month_str}-00"
+
+    log.info(f"[reset] {month_str}: resetting web.sessionid + wiping derived tables")
+    if dry_run:
+        log.info(f"  [dry-run] UPDATE web SET sessionid=NULL WHERE datetime in [{start},{end})")
+        log.info(f"  [dry-run] DELETE FROM websessions WHERE datetime in [{start},{end})")
+        for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
+            log.info(f"  [dry-run] DELETE FROM {table} WHERE datetime = '{dt_summary}'")
+        return
+
+    # web.sessionid reset is chunked — a 1.4 M-row update on the
+    # geodynamics hub took ~3 min at 100 k/chunk; doing it in one
+    # statement risks the undo log + replication lag.
+    conn = _open_db()
+    try:
+        chunk = 100_000
+        total = 0
+        with conn.cursor() as cur:
+            while True:
+                cur.execute(
+                    f"UPDATE {metrics_db}.web SET sessionid = NULL "
+                    f"WHERE datetime >= %s AND datetime < %s "
+                    f"  AND sessionid IS NOT NULL AND sessionid <> '0' "
+                    f"LIMIT {chunk};",
+                    (start, end),
+                )
+                n = cur.rowcount
+                if not n:
+                    break
+                total += n
+        log.info(f"[reset] {month_str}: cleared sessionid on {total} web row(s)")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {metrics_db}.websessions "
+                f"WHERE datetime >= %s AND datetime < %s;",
+                (start, end),
+            )
+            for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
+                cur.execute(
+                    f"DELETE FROM {metrics_db}.{table} WHERE datetime = %s;",
+                    (dt_summary,),
+                )
+    finally:
+        conn.close()
+
 
 _lock_fd: int | None = None  # held open across acquire/release so flock survives
 
@@ -715,6 +826,31 @@ def update_state(**kwargs: object) -> None:
         f"ON DUPLICATE KEY UPDATE v=VALUES(v);",
         tuple(params),
     )
+
+
+# `pipeline_state.dirty_months` is a comma-separated YYYY-MM list.  Set
+# by `mark-dirty` (operator-driven, after bulk DELETE/UPDATE on web),
+# read by the catchup decision matrix; each entry is cleared once that
+# month finishes a successful reset+resummarize pass.
+def get_dirty_months() -> set[str]:
+    s = read_state().get("dirty_months", "") or ""
+    return {m for m in s.split(",") if m}
+
+
+def add_dirty_months(months) -> None:
+    cur = get_dirty_months()
+    new = cur | {m for m in months if m}
+    if new == cur:
+        return
+    update_state(dirty_months=",".join(sorted(new)))
+
+
+def clear_dirty_month(month: str) -> None:
+    cur = get_dirty_months()
+    if month not in cur:
+        return
+    cur.discard(month)
+    update_state(dirty_months=",".join(sorted(cur)))
 
 
 # ---------------------------------------------------------------------------
@@ -1765,7 +1901,7 @@ def _do_tool_metrics_stage(month_str, dry_run):
             do_gen_tool_toplists(month_str, dry_run=dry_run)
 
 
-def _do_usage_metrics_stage(month_str, dry_run):
+def _do_usage_metrics_stage(month_str, dry_run, *, sessions=True):
     """Run the per-month web / toolstart / websessions enrichment chain
     in-process.  Direct port of __process_usage_metrics.sh.
 
@@ -1773,8 +1909,23 @@ def _do_usage_metrics_stage(month_str, dry_run):
     fill-domain, fill-ipcountry, logfix-session, clean-bots) so the
     tick log shows exactly where the wallclock went — particularly
     important for big months (millions of rows) where one of these
-    steps can dominate."""
+    steps can dominate.
+
+    `sessions` controls whether the session-bound sub-stages run.
+    Pass `sessions=False` when called for the still-incomplete current
+    month: logfix-session run mid-month creates a fresh-session boundary
+    at every tick (rows already stamped with sessionid are skipped on
+    the next pass, so a session that genuinely spans the tick boundary
+    gets split).  Holding it back until month-close, when rebuild and
+    catchup ticks run with `sessions=True`, eliminates that per-tick
+    slicing — the only remaining boundary is the month-to-month one
+    that the legacy methodology has always had.  Row-level enrichment
+    (DNS, domain, country, clean-bots on web) is correct to run daily
+    and still does — those steps don't depend on sessionid."""
     with _timed_stage("usage-metrics"):
+        # Row-level enrichment — correct to run daily during the
+        # current month; idempotent (only touches rows that haven't
+        # been enriched yet via the various NULL-or-empty predicates).
         with _timed_stage("  import-hub-data"):
             do_import_hub_data(dry_run=dry_run)
         with _timed_stage("  middleware-wall"):
@@ -1789,20 +1940,26 @@ def _do_usage_metrics_stage(month_str, dry_run):
             do_fill_domain("metrics", "web",       month_str, dry_run=dry_run)
         with _timed_stage("  fill-domain toolstart"):
             do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
-        with _timed_stage("  logfix-session"):
-            do_logfix_session(month_str, dry_run=dry_run)
         with _timed_stage("  clean-bots web"):
             do_clean_bots("web",         month_str, dry_run=dry_run)
-        with _timed_stage("  clean-bots websessions"):
-            do_clean_bots("websessions", month_str, dry_run=dry_run)
         with _timed_stage("  fill-user-info toolstart"):
             do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
         with _timed_stage("  fill-ipcountry web"):
             do_fill_ipcountry("metrics", "web",         month_str, dry_run=dry_run)
-        with _timed_stage("  fill-ipcountry websessions"):
-            do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
         with _timed_stage("  fill-ipcountry toolstart"):
             do_fill_ipcountry("metrics", "toolstart",   month_str, dry_run=dry_run)
+
+        # Session-level work — only sound to run when the month's
+        # input set is stable.  Skipped during current-month daily
+        # ticks (sessions=False); included in catchup, rebuild, and
+        # month-close normal ticks where the month is complete.
+        if sessions:
+            with _timed_stage("  logfix-session"):
+                do_logfix_session(month_str, dry_run=dry_run)
+            with _timed_stage("  clean-bots websessions"):
+                do_clean_bots("websessions", month_str, dry_run=dry_run)
+            with _timed_stage("  fill-ipcountry websessions"):
+                do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
 
 
 def _do_summary_stage(month_str, dry_run, *, periods=None):
@@ -1826,14 +1983,20 @@ def _do_summary_stage(month_str, dry_run, *, periods=None):
             do_andmore_usage(month_str, dry_run=dry_run)
 
 
-def do_analyze(month_str, dry_run=False):
+def do_analyze(month_str, dry_run=False, *, sessions=True):
     """Run the two enrichment stages — tool-metrics and usage-metrics — in
     sequence.  Wraps __process_tool_metrics.sh + __process_usage_metrics.sh
     from the legacy pipeline; called by cmd_analyze and by the catch-up
-    loop in cmd_run."""
+    loop in cmd_run.
+
+    `sessions=False` skips the session-bound sub-stages (logfix-session
+    and websessions-bound clean-bots / fill-ipcountry) — used by
+    normal-mode for the still-incomplete current month, where running
+    logfix-session daily slices sessions at the tick boundary.  See
+    `_do_usage_metrics_stage` for details."""
     month_str = month_str or None
     _do_tool_metrics_stage(month_str, dry_run)
-    _do_usage_metrics_stage(month_str, dry_run)
+    _do_usage_metrics_stage(month_str, dry_run, sessions=sessions)
 
 
 def do_summarize(month_str, dry_run=False, *, periods=None):
@@ -1880,6 +2043,12 @@ def cmd_status(args):
     log.info(f"  last analyzed    : {state.get('analyzed', '(never)')}")
     if "catchup_started" in state:
         log.info(f"  catchup_started  : {state['catchup_started']}")
+    try:
+        dirty = sorted(get_dirty_months())
+    except Exception:
+        dirty = []
+    if dirty:
+        log.info(f"  dirty months     : {', '.join(dirty)}")
     if mode == "rebuild":
         cursor = state.get("rebuild_cursor", "(unset)")
         try:
@@ -3876,6 +4045,19 @@ _SVN_RE       = re.compile(r'/projects/.+?/svn/\!svn/', re.IGNORECASE)
 _PIPERMAIL_RE = re.compile(r'^/pipermail/',        re.IGNORECASE)
 _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
 
+# Crawler hits identifiable by URL pattern + empty Referer.  The 2025-05
+# survey found 2.1 M rows in web for that month, of which:
+#   /login?return=<base64>      773 k  (99.9 % empty Referer)
+#   /resources/browse?<query>  1.20 M  (96-97 % empty Referer)
+# Together ~93 % of the month.  Legitimate users hit /login?return= via
+# a server redirect (so Referer is set) and reach /resources/browse via
+# a search engine, internal nav, or another tag page (Referer set).
+# Crawlers using browser-style User-Agents leave Referer empty.  These
+# two regexes intentionally stay narrow — they only fire on the two
+# patterns we measured, not on every empty-Referer hit.
+_LOGIN_RETURN_RE = re.compile(r'^/login\?return=',     re.IGNORECASE)
+_BROWSE_QUERY_RE = re.compile(r'^/resources/browse\?', re.IGNORECASE)
+
 # dnload flag triggers (matches the new-code addition to set web.dnload=1)
 _DOWNLOAD_PATH_RE = re.compile(r'^/resources/.*/download/', re.IGNORECASE)
 _DOWNLOAD_EXTS = (
@@ -3901,6 +4083,15 @@ def _is_excluded_url(url):
     if _SVN_RE.search(url):            return True
     if _PIPERMAIL_RE.match(url):       return True
     return False
+
+
+def _is_referer_spam(url, referrer):
+    """True iff the row is a crawler hit identifiable by URL pattern +
+    empty Referer.  See _LOGIN_RETURN_RE / _BROWSE_QUERY_RE for the two
+    patterns and the 2025-05 measurement that justified them."""
+    if referrer and referrer != '-':
+        return False
+    return bool(_LOGIN_RETURN_RE.match(url) or _BROWSE_QUERY_RE.match(url))
 
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     """Parse an apache staged log file and INSERT eligible rows into
@@ -3947,23 +4138,19 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
         f"ip={len(ip_filters)} ua={len(ua_filters)} url={len(url_filters)} "
         f"bot_useragents={len(bot_uas)}")
 
-    # Legacy 1018cc2^ does NOT set dnload at import time (the column itself
-    # didn't exist yet — was added by the 1018cc2 refactor).  Insert without
-    # the dnload column to preserve byte-for-byte parity; backfill-dnload
-    # populates it in a separate pass.
-    #
-    # To restore the post-1018cc2 in-line dnload set (saves a backfill pass),
-    # swap to the commented INSERT below and re-enable the `dnload` field +
-    # `_is_download_url(url)` evaluation in the row append:
-    #     INSERT INTO web (..., item_name, dnload) VALUES (... ,%s, %s)
-    #     dnload = 1 if _is_download_url(url) else 0
-    #     rows_buf.append((..., item_name, dnload))
+    # Set web.dnload at insert time (post-1018cc2 form).  The earlier
+    # pre-1018cc2 port left dnload NULL and required a separate
+    # backfill-dnload pass — but production legacy never ran that pass
+    # either, so dnload stayed NULL on every hub we've audited and the
+    # downloaders / download-sessions cells in summary_misc_vals were
+    # silently zero.  Setting at insert avoids the second pass and makes
+    # the bug structurally impossible to reproduce.
     insert_sql = (
         "INSERT INTO web "
         "(datetime, content, ip, uidNumber, apache_pid, referrer, useragent, "
         "joomla_sessionid, site_cookie, auth_type, component_name, view_name, "
-        "task_name, action_name, item_name) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        "task_name, action_name, item_name, dnload) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     )
 
     rows_buf = []
@@ -3975,8 +4162,8 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     skipped_status = 0
     skipped_filter = 0
     skipped_url = 0
-    # dnload_set retained for parity with the post-1018cc2 commented INSERT.
-    dnload_set = 0
+    skipped_ref = 0
+    dnload_set = 0  # counter for the dnload flag set per row
     # Track distinct YYYY-MM seen in this file.  One staged file should
     # normally contain a single day's logs (so 1 month, or 2 across a
     # midnight TZ boundary).  >2 months in one file is almost always a
@@ -4082,14 +4269,22 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
                     if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
                         skipped_url += 1
                         continue
+                    # Crawl-spam: /login?return=<x> or /resources/browse?<q>
+                    # with empty Referer (deliberate divergence from legacy
+                    # — legacy doesn't see Referer and so couldn't filter).
+                    if _is_referer_spam(url, referrer):
+                        skipped_ref += 1
+                        continue
 
-                    # Legacy 1018cc2^ omits dnload at insert time — see the
-                    # insert_sql comment block above for the post-1018cc2 form.
+                    dnload = 1 if _is_download_url(url) else 0
+                    if dnload:
+                        dnload_set += 1
                     rows_buf.append((
                         f"{datestamp} {timestamp}",
                         url, ip, uid, pid, referrer, useragent,
                         joomla_id, st_cookie, auth_type,
                         comp_name, view_name, task_name, actn_name, item_name,
+                        dnload,
                     ))
 
                     if len(rows_buf) >= batch_size and not dry_run:
@@ -4106,7 +4301,8 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     log.info(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
         f"eligible={len(rows_buf) if dry_run else inserted}; "
         f"skipped: status={skipped_status} filter={skipped_filter} "
-        f"bot={skipped_bot} url={skipped_url}; dnload-flagged={dnload_set}")
+        f"bot={skipped_bot} url={skipped_url} ref={skipped_ref}; "
+        f"dnload-flagged={dnload_set}")
 
     # Spillover detection: a staged daily file containing rows from >2
     # distinct YYYY-MM is almost always a logrotate failure (1 month is
@@ -4682,21 +4878,27 @@ def _ipgeo_lookup_batch(conn, hub_db, db_prefix, ips, *, url, hub_key,
     # --- bulk cache INSERT for new HTTPS results ---
     # Same caveat as the SELECT: the column is `ip` even though the
     # values are int32-encoded n_ips.
+    # Chunked so a giant month (212k new IPs on websessions in 2025-05)
+    # doesn't blow past max_allowed_packet — 1000 rows × 7 cols × ~100B
+    # ≈ 700 KB SQL, well under any reasonable limit.
     if new_rows:
-        values_clause = ", ".join(["(%s, %s, %s, %s, %s, %s, %s)"] * len(new_rows))
-        params: list = [v for row in new_rows for v in row]
+        insert_chunk = 1000
         with conn.cursor() as cur:
-            cur.execute(
-                f"INSERT INTO {hub_db}.{db_prefix}metrics_ipgeo_cache "
-                f"(ip, countrySHORT, countryLONG, ipREGION, ipCITY, "
-                f"ipLATITUDE, ipLONGITUDE) VALUES {values_clause} "
-                f"ON DUPLICATE KEY UPDATE "
-                f"countrySHORT=VALUES(countrySHORT), "
-                f"countryLONG=VALUES(countryLONG), "
-                f"ipREGION=VALUES(ipREGION), ipCITY=VALUES(ipCITY), "
-                f"ipLATITUDE=VALUES(ipLATITUDE), ipLONGITUDE=VALUES(ipLONGITUDE)",
-                tuple(params),
-            )
+            for i in range(0, len(new_rows), insert_chunk):
+                batch = new_rows[i:i + insert_chunk]
+                values_clause = ", ".join(["(%s, %s, %s, %s, %s, %s, %s)"] * len(batch))
+                params: list = [v for row in batch for v in row]
+                cur.execute(
+                    f"INSERT INTO {hub_db}.{db_prefix}metrics_ipgeo_cache "
+                    f"(ip, countrySHORT, countryLONG, ipREGION, ipCITY, "
+                    f"ipLATITUDE, ipLONGITUDE) VALUES {values_clause} "
+                    f"ON DUPLICATE KEY UPDATE "
+                    f"countrySHORT=VALUES(countrySHORT), "
+                    f"countryLONG=VALUES(countryLONG), "
+                    f"ipREGION=VALUES(ipREGION), ipCITY=VALUES(ipCITY), "
+                    f"ipLATITUDE=VALUES(ipLATITUDE), ipLONGITUDE=VALUES(ipLONGITUDE)",
+                    tuple(params),
+                )
 
     return out
 
@@ -6729,34 +6931,41 @@ def _do_normal_tick(today_str: str, prev: str, today_date: str,
 
     analyzed_today = state.get("analyzed") == today_date
     if not analyzed_today:
-        log.info(f"[normal] analyzing current month {today_str}")
-        do_analyze(today_str, dry_run)
+        log.info(f"[normal] analyzing current month {today_str} (sessions deferred to month-close)")
+        # sessions=False: skip logfix-session + websessions-bound steps
+        # for the in-progress current month.  Daily logfix-session would
+        # stamp sessionid on rows imported so far; the next tick's
+        # logfix-session would then start fresh on the new rows, slicing
+        # any session that genuinely spanned the tick boundary.  The
+        # month-close branch below runs do_analyze (sessions=True) on
+        # prev once the month is fully imported, which is the only run
+        # of logfix-session that month sees.
+        do_analyze(today_str, dry_run, sessions=False)
         if not dry_run:
             update_state(analyzed=today_date)
 
-    prev_needs_work = (
-        not is_month_summarized(prev) and is_month_fully_imported(prev)
-    )
-    if prev_needs_work:
-        log.info(f"[normal] {prev} complete — analyzing and summarizing")
-        do_analyze(prev, dry_run)
-        do_summarize(prev, dry_run)
-    elif not is_month_summarized(prev):
-        last    = last_day_of_month(prev)
-        days_in = date.today().day
-        if days_in > 5:
-            log.warning(f"[normal] {prev} last day ({last}) never arrived "
-                        f"({days_in}d into {today_str}) — summarizing without it")
+    if not is_month_summarized(prev):
+        if is_month_complete(prev):
+            log.info(f"[normal] {prev} complete — analyzing and summarizing")
             do_analyze(prev, dry_run)
             do_summarize(prev, dry_run)
         else:
-            log.info(f"[normal] {prev} last day ({last}) not yet imported — deferring")
+            log.info(f"[normal] {prev} not yet complete (no next-month data, "
+                     f"last-day file not in imported/) — deferring")
 
 
 def _backlog_months(today_str: str) -> list[str]:
     """Months strictly before today_str that need orchestrator attention:
     either still have pending source logs, OR have base-table data but
-    aren't fully summarized.  Sorted oldest-first."""
+    aren't fully summarized, OR are marked dirty by the operator, OR
+    have orphaned sessionid stamps pointing at deleted websessions
+    rows.  Sorted oldest-first.
+
+    The dirty + orphaned-stamps checks let the orchestrator self-heal
+    after bulk web mutations (cleanup scripts, manual DELETEs) that
+    invalidate derived tables — the operator marks the affected
+    months with `mark-dirty` (or the consistency check finds the
+    drift on its own) and the next ticks redrive them."""
     months = set()
     for d, _ in enumerate_log_sources("access"):
         m = f"{d[:4]}-{d[4:6]}"
@@ -6776,10 +6985,18 @@ def _backlog_months(today_str: str) -> list[str]:
     for (ym,) in rows:
         if ym and ym < today_str:
             months.add(ym)
-    # Filter out months that turn out to be fully summarized after all
-    # (cheap re-check; covers the case where row-existence by month isn't
-    # enough to call partial — e.g. 2025-06 has web rows + no summary).
-    return sorted(m for m in months if not is_month_fully_summarized(m))
+    # Operator-flagged dirty months get re-considered even if they
+    # were already fully summarized — the operator set the flag
+    # specifically to override that signal.
+    dirty = get_dirty_months()
+    months.update(m for m in dirty if m < today_str)
+    # Filter out months that are both fully summarized AND look
+    # consistent (no orphaned stamps).  Cheap LIMIT-1 probes — fine
+    # to run per backlog candidate.
+    return sorted(m for m in months
+                  if m in dirty
+                  or month_has_orphaned_stamps(m)
+                  or not is_month_fully_summarized(m))
 
 
 def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
@@ -6813,8 +7030,11 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     has_source  = month_has_source(target)
     has_data    = month_has_data(target)
     fully_summ  = is_month_fully_summarized(target) if (has_source or has_data) else False
+    is_dirty    = target in get_dirty_months()
+    orphans     = month_has_orphaned_stamps(target) if has_data else False
+    needs_reset = is_dirty or orphans  # post-bulk-edit invalidation
 
-    if fully_summ:
+    if fully_summ and not needs_reset:
         log.info(f"[catchup] {target} already fully summarized — skipping")
         return False  # let next tick advance past it
 
@@ -6830,7 +7050,15 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
     elif has_data:
-        log.info(f"[catchup] {target}: source ✗ data ✓ — DB-only, resummarize")
+        if needs_reset:
+            why = []
+            if is_dirty:  why.append("dirty marker")
+            if orphans:   why.append("orphaned sessionid stamps")
+            log.info(f"[catchup] {target}: source ✗ data ✓ — derived state stale "
+                     f"({', '.join(why)}); resetting + resummarize")
+            _reset_month_for_resummarize(target, dry_run=dry_run)
+        else:
+            log.info(f"[catchup] {target}: source ✗ data ✓ — DB-only, resummarize")
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
     else:
@@ -6838,6 +7066,12 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
         # Skip — but the backlog probe will keep returning this month
         # if it's a placeholder.  Currently the probe excludes such
         # months (no source / no data → not detected), so we won't loop.
+
+    # Clear the dirty marker once we've handled the month.  The
+    # orphan check is self-clearing — once logfix-session rebuilds
+    # websessions, the stamps line up again on the next pass.
+    if is_dirty and not dry_run:
+        clear_dirty_month(target)
 
     return False  # still in catchup after this tick
 
@@ -6926,6 +7160,84 @@ def cmd_run(args):
             release_lock()
 
 
+_YYYY_MM_RE = re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
+
+def cmd_mark_dirty(args):
+    """Flag one or more YYYY-MM months as needing rework.  Use after a
+    bulk DELETE/UPDATE on `web` (cleanup script, manual surgery) so the
+    next catchup tick redrives those months end-to-end: reset
+    web.sessionid, wipe websessions + summary, re-run logfix-session +
+    summarize.  Months are auto-cleared after the orchestrator processes
+    them."""
+    bad = [m for m in args.months if not _YYYY_MM_RE.match(m)]
+    if bad:
+        log.info(f"[mark-dirty] not in YYYY-MM form: {' '.join(bad)}")
+        return 2
+    add_dirty_months(args.months)
+    log.info(f"[mark-dirty] flagged: {' '.join(sorted(args.months))}")
+    log.info(f"[mark-dirty] current dirty set: "
+             f"{', '.join(sorted(get_dirty_months())) or '(empty)'}")
+    return 0
+
+
+def cmd_clear_dirty(args):
+    """Remove months from the dirty set without processing them.  Mostly
+    a backstop for the case where mark-dirty was used by mistake — the
+    catchup state machine clears the marker automatically once a month
+    finishes a reset+resummarize pass."""
+    if args.all:
+        update_state(dirty_months="")
+        log.info("[clear-dirty] cleared all dirty months")
+        return 0
+    for m in args.months:
+        clear_dirty_month(m)
+    log.info(f"[clear-dirty] remaining dirty set: "
+             f"{', '.join(sorted(get_dirty_months())) or '(empty)'}")
+    return 0
+
+
+def cmd_rebuild_from(args):
+    """Re-enter rebuild mode starting at the given YYYY-MM.  Use after a
+    code change or data fix (e.g., dnload backfill, a new summary
+    formula) that requires every month at or after a cutoff to be
+    resummarized end-to-end.
+
+    Atomically sets `pipeline_state.mode = 'rebuild'` and
+    `pipeline_state.rebuild_cursor = <month>` in one UPDATE.  The next
+    tick will see mode=rebuild and call `_do_rebuild_tick`, which walks
+    the cursor forward through prev_month with all 6 periods per month.
+
+    Operationally equivalent to manually editing pipeline_state, but
+    validates the argument, refuses to point the cursor past today,
+    and logs the before→after transition for audit."""
+    month = args.month
+    if not _YYYY_MM_RE.match(month):
+        log.info(f"[rebuild-from] not in YYYY-MM form: {month!r}")
+        return 2
+    today_ym = date.today().strftime("%Y-%m")
+    if month > today_ym:
+        log.info(f"[rebuild-from] refusing to rebuild from future month "
+                 f"{month} (today is {today_ym})")
+        return 2
+    state = read_state()
+    prev_mode   = state.get("mode", "normal")
+    prev_cursor = state.get("rebuild_cursor", "(unset)")
+    catchup_started = state.get("catchup_started")
+    if catchup_started and month < catchup_started:
+        # Not strictly wrong — the operator may want to rebuild further
+        # back than catchup_started — but warn since the long-window
+        # periods (12, 14) at month < catchup_started were built off
+        # the full historical web data and don't need a refresh in the
+        # usual workflow.
+        log.warning(f"[rebuild-from] cursor {month} predates "
+                    f"catchup_started={catchup_started} — proceeding, but "
+                    f"this is unusual; verify intent")
+    update_state(mode="rebuild", rebuild_cursor=month)
+    log.info(f"[rebuild-from] mode {prev_mode} → rebuild, "
+             f"rebuild_cursor {prev_cursor} → {month}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -6948,6 +7260,26 @@ def main() -> None:
 
     p_status = sub.add_parser("status", help="Show pipeline state")
     p_status.set_defaults(func=cmd_status)
+
+    p_md = sub.add_parser("mark-dirty",
+        help="Flag YYYY-MM months as needing rework after a bulk web mutation")
+    p_md.set_defaults(func=cmd_mark_dirty)
+    p_md.add_argument("months", nargs="+", metavar="YYYY-MM",
+        help="One or more months to flag")
+
+    p_cd = sub.add_parser("clear-dirty",
+        help="Remove months from the dirty set without processing them")
+    p_cd.set_defaults(func=cmd_clear_dirty)
+    p_cd.add_argument("months", nargs="*", metavar="YYYY-MM",
+        help="Months to remove (omit with --all)")
+    p_cd.add_argument("--all", action="store_true",
+        help="Clear every dirty marker")
+
+    p_rf = sub.add_parser("rebuild-from",
+        help="Re-enter rebuild mode starting at the given YYYY-MM")
+    p_rf.set_defaults(func=cmd_rebuild_from)
+    p_rf.add_argument("month", metavar="YYYY-MM",
+        help="Cursor to start rebuilding from (validated; refuses future months)")
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     p_process.set_defaults(func=cmd_process)

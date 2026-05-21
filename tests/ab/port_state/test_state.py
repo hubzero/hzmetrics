@@ -191,6 +191,101 @@ class StateTests(unittest.TestCase):
         finally:
             os.chmod(self.state_file, 0o600)
 
+    # ------------------------------------------------------------------
+    # dirty_months: comma-separated list, deduped + sorted on write,
+    # auto-cleared as the orchestrator processes each month.
+    # ------------------------------------------------------------------
+
+    def test_dirty_empty_by_default(self):
+        self.assertEqual(self.hz.get_dirty_months(), set())
+
+    def test_add_dirty_persists_sorted_csv(self):
+        self.hz.add_dirty_months(["2025-05", "2024-09", "2025-05"])
+        self.assertEqual(self.fake.table["dirty_months"], "2024-09,2025-05")
+        self.assertEqual(self.hz.get_dirty_months(), {"2024-09", "2025-05"})
+
+    def test_add_dirty_is_union(self):
+        self.hz.add_dirty_months(["2025-05"])
+        self.hz.add_dirty_months(["2025-06", "2025-05"])
+        self.assertEqual(self.hz.get_dirty_months(), {"2025-05", "2025-06"})
+
+    def test_add_dirty_no_op_when_already_present(self):
+        self.hz.add_dirty_months(["2025-05"])
+        inserts_before = sum(1 for s in self.fake.exec_log if "INSERT INTO" in s)
+        self.hz.add_dirty_months(["2025-05"])  # no new months
+        inserts_after = sum(1 for s in self.fake.exec_log if "INSERT INTO" in s)
+        # No second INSERT — same-set early-out (read_state SELECTs are fine)
+        self.assertEqual(inserts_after, inserts_before)
+
+    def test_clear_dirty_month_removes_one(self):
+        self.hz.add_dirty_months(["2024-09", "2025-05", "2025-06"])
+        self.hz.clear_dirty_month("2025-05")
+        self.assertEqual(self.hz.get_dirty_months(), {"2024-09", "2025-06"})
+
+    def test_clear_dirty_month_missing_is_noop(self):
+        self.hz.add_dirty_months(["2025-05"])
+        inserts_before = sum(1 for s in self.fake.exec_log if "INSERT INTO" in s)
+        self.hz.clear_dirty_month("2099-12")
+        inserts_after = sum(1 for s in self.fake.exec_log if "INSERT INTO" in s)
+        # No INSERT — month wasn't in the set
+        self.assertEqual(inserts_after, inserts_before)
+
+    def test_dirty_ignores_empty_csv_entries(self):
+        # External writers (or a bug elsewhere) might leave double-commas
+        # or leading/trailing commas — get_dirty_months must drop them.
+        self.fake.table["dirty_months"] = ",2025-05,,2025-06,"
+        self.assertEqual(self.hz.get_dirty_months(), {"2025-05", "2025-06"})
+
+    # ------------------------------------------------------------------
+    # rebuild-from: atomic mode + cursor reset for operator-driven
+    # full-history resummarize after a code change or data fix.
+    # ------------------------------------------------------------------
+
+    def _rebuild_from(self, month, *, today_override=None):
+        """Invoke cmd_rebuild_from with a mocked args + today."""
+        from unittest.mock import MagicMock
+        from datetime import date as real_date
+        if today_override:
+            class FakeDate:
+                @staticmethod
+                def today(): return real_date.fromisoformat(today_override)
+                @staticmethod
+                def fromisoformat(s): return real_date.fromisoformat(s)
+            self.hz.date = FakeDate
+        args = MagicMock()
+        args.month = month
+        return self.hz.cmd_rebuild_from(args)
+
+    def test_rebuild_from_sets_mode_and_cursor(self):
+        self.hz.update_state(mode="normal", rebuild_cursor="2026-05")
+        rc = self._rebuild_from("2022-01", today_override="2026-05-21")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake.table["mode"], "rebuild")
+        self.assertEqual(self.fake.table["rebuild_cursor"], "2022-01")
+
+    def test_rebuild_from_validates_ym_format(self):
+        # Garbage input must be rejected with non-zero exit.
+        self.hz.update_state(mode="normal", rebuild_cursor="2026-05")
+        rc = self._rebuild_from("2022/01", today_override="2026-05-21")
+        self.assertEqual(rc, 2)
+        # State untouched
+        self.assertEqual(self.fake.table["mode"], "normal")
+        self.assertEqual(self.fake.table["rebuild_cursor"], "2026-05")
+
+    def test_rebuild_from_rejects_future_month(self):
+        self.hz.update_state(mode="normal", rebuild_cursor="2026-05")
+        rc = self._rebuild_from("2027-01", today_override="2026-05-21")
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.fake.table["mode"], "normal")
+
+    def test_rebuild_from_accepts_current_month(self):
+        # Same month as today is allowed (operator might want to redo
+        # the current incomplete month for some reason).
+        self.hz.update_state(mode="normal", rebuild_cursor="2026-05")
+        rc = self._rebuild_from("2026-05", today_override="2026-05-21")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake.table["rebuild_cursor"], "2026-05")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
