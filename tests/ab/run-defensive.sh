@@ -23,6 +23,7 @@ tests=(
     port_periods_filter
     port_rebuild_correctness
     port_rebuild_summaries
+    port_referer_spam
     port_session_split
     port_state
     port_window_boundaries

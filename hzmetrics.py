@@ -4055,8 +4055,14 @@ _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
 # Crawlers using browser-style User-Agents leave Referer empty.  These
 # two regexes intentionally stay narrow — they only fire on the two
 # patterns we measured, not on every empty-Referer hit.
-_LOGIN_RETURN_RE = re.compile(r'^/login\?return=',     re.IGNORECASE)
-_BROWSE_QUERY_RE = re.compile(r'^/resources/browse\?', re.IGNORECASE)
+#
+# The `/?` in each regex makes the trailing slash optional: the CMS
+# routes both `/login?return=…` and `/login/?return=…` to the same
+# action (likewise `/resources/browse?…` and `/resources/browse/?…`),
+# and crawlers hit both variants.  The 2023-12 audit found ~200 k
+# slash-variant rows that the no-slash form had been missing.
+_LOGIN_RETURN_RE = re.compile(r'^/login/?\?return=',         re.IGNORECASE)
+_BROWSE_QUERY_RE = re.compile(r'^/resources/browse/?\?',     re.IGNORECASE)
 
 # dnload flag triggers (matches the new-code addition to set web.dnload=1)
 _DOWNLOAD_PATH_RE = re.compile(r'^/resources/.*/download/', re.IGNORECASE)

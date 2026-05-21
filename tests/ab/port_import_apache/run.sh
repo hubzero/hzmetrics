@@ -41,7 +41,7 @@ run_side new    run_new        import-apache                  "$LOGFILE"
 # exactly, then diff.  Same pattern as port_import_auth's action-filter
 # exclusion.
 filter_keepers() {
-    grep -vE '(/cron/tick|/pipermail/|/login\?return=|/resources/browse\?|Scrapy/|PRTG Network Monitor|PycURL/|Yeti/)' "$1"
+    grep -vE '(/cron/tick|/pipermail/|/login/?\?return=|/resources/browse/?\?|Scrapy/|PRTG Network Monitor|PycURL/|Yeti/)' "$1"
 }
 filter_keepers "$OUT/legacy_web.tsv" > "$OUT/legacy_web_filtered.tsv"
 filter_keepers "$OUT/new_web.tsv"    > "$OUT/new_web_filtered.tsv"
