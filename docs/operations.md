@@ -131,6 +131,40 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
 safe to use alongside an in-flight rebuild.  Useful for batched
 operator-driven rebuilds when "one month per tick" is too slow.
 
+### Re-entering rebuild after a code or data fix
+
+When a code change (new summary formula, fixed bug) or a data fix
+(backfill of a missing column, mass cleanup) affects the inputs that
+summarize reads, the existing summary cells are stale.  Use
+`rebuild-from` to atomically reset both the cursor and the mode:
+
+```bash
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+```
+
+Equivalent to editing `pipeline_state` by hand to set
+`mode='rebuild'` and `rebuild_cursor='2022-01'`, but validated
+(YYYY-MM format, refuses future months, warns if before
+`catchup_started`) and atomic (one UPDATE).  The next tick sees
+mode=rebuild and walks the cursor forward through prev_month with all
+6 periods per month.
+
+Typical sequence after a data fix:
+
+```bash
+# 1. Verify the fix went in (e.g., backfill-dnload after the dnload bug)
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+# 2. Reset the cursor
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+# 3. Let the orchestrator chew through it (one tick per month)
+# Or run manually:
+while true; do
+    mode=$(mysql ... -BN -e "SELECT v FROM pipeline_state WHERE k='mode'")
+    [ "$mode" != "rebuild" ] && break
+    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+done
+```
+
 ## My log files aren't where the pipeline looks
 
 The discovery layer scans every place a source log may live, in this
@@ -256,6 +290,60 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py backfill-dnload --start 202
 
 Then re-summarize.
 
+### Download cells reading zero across the whole history
+
+Specifically: if every month's "downloaders" and "download-sessions"
+cells in `summary_misc_vals` (and downstream) read zero, the
+`web.dnload` flag was never populated — neither the legacy importer
+nor the pre-1018cc2-shape port set it at insert.  Confirm with:
+
+```sql
+SELECT dnload, COUNT(*) FROM web GROUP BY dnload;
+```
+
+If you see only `dnload IS NULL` (or NULL plus a small `0` count
+from recent imports), this is the long-standing legacy bug.  Fix:
+
+```bash
+# 1. Confirm the import code now sets dnload at insert time —
+#    look in hzmetrics.py for `INSERT INTO web (..., dnload) VALUES`
+#    and `dnload = 1 if _is_download_url(url) else 0`.  If the
+#    import path doesn't include those, the importer is the old
+#    shape; do not skip this step.
+grep -F 'dnload = 1 if _is_download_url' /opt/hubzero/bin/hzmetrics.py
+
+# 2. Backfill historical rows.  Omit --start to walk every month
+#    that has NULL rows; pass it only to scope a partial run.
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py backfill-dnload
+
+# 3. Re-trigger a full rebuild so the download cells get rewritten:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+# then run ticks until mode flips back to normal.
+```
+
+`backfill-dnload` sets `dnload = IF(<pattern>, 1, 0)` so every NULL
+row in scope ends up as 0 or 1, never left NULL.  The 1's are real
+downloads; the 0's are page views.
+
+### Current-month summary cells look truncated mid-month
+
+That's by design.  Normal-mode ticks run `do_analyze(today_str,
+sessions=False)` for the current incomplete month: row-level
+enrichment (DNS, fill-domain, fill-ipcountry on web/toolstart,
+clean-bots on web) runs daily, but `logfix-session` and the
+websessions-bound steps are held back until month-close.  This
+eliminates the daily-tick session-slicing problem (logfix-session
+re-running over fresh imports would chop sessions that genuinely
+spanned a tick boundary).
+
+The current month's summary cells get written once, at month-close,
+when normal-mode sees `is_month_complete(prev)` flip to True.
+`is_month_complete` is the data-driven check that replaced the
+calendar-based `days_in > 5` fallback: it returns True when either
+the last calendar day's log file is in `imported/`, OR `web` has
+at least one row dated in the *next* month (i.e., import time has
+demonstrably crossed the boundary).
+
 ## A bot is inflating counts
 
 This happens periodically — a crawler that retains the CMS session
@@ -287,6 +375,251 @@ reports.
 
 For broader bot suppression, the `robots.txt` file and the firewall
 are the layers above this — out of scope for `hzmetrics.py`.
+
+## Mass cleanup of accumulated crawler spam
+
+When a hub has been running months/years without effective bot
+suppression, `web` accumulates millions of crawler hits that don't
+look like bots (real browser User-Agent strings, varied IPs).  The
+geodynamics hub hit 13.2 M `web` rows by mid-2026 with 8 M of that
+being two specific crawl patterns — once cleaned, the table dropped to
+4.76 M (64 % reduction) and per-tick wallclocks fell from 18 + min
+to ~40 s.
+
+### How to spot it
+
+```sql
+-- Top URL prefixes for the worst month — anything that dwarfs the
+-- rest is a crawler signature:
+SELECT COUNT(*) AS n, SUBSTRING(content, 1, 40) AS prefix
+FROM web WHERE datetime >= '<YYYY-MM-01>' AND datetime < '<next-month>'
+GROUP BY prefix ORDER BY n DESC LIMIT 25;
+
+-- Then for each candidate pattern, check Referer presence — bots
+-- typically don't send a Referer header, real users have it set
+-- ~50 % of the time:
+SELECT
+  CASE WHEN referrer IS NULL OR referrer IN ('','-') THEN 'empty' ELSE 'has ref' END AS r,
+  COUNT(*) AS n
+FROM web WHERE datetime >= '<...>' AND datetime < '<...>'
+  AND content LIKE '<pattern>%'
+GROUP BY r;
+```
+
+A pattern with >95 % empty Referer + browser UAs is almost certainly
+a distributed crawl.  On geodynamics the smoking guns were:
+
+- `/login?return=<base64>` — 99.9 % empty Referer.  Auth redirect
+  targets, hit by crawlers that follow public links.
+- `/resources/browse?<query>` — 96-97 % empty Referer.  Catalog
+  pagination spam, every tag combination visited.
+
+Together: 93 % of one month's rows.
+
+### Filter at import time
+
+Add a URL+Referer pattern to the import filter in
+`hzmetrics.py:_is_referer_spam`.  Stay narrow — match only the
+specific URL patterns you measured, not every empty-Referer hit.
+Real users have empty Referer plenty of the time (bookmark, direct
+nav, HTTPS→HTTP, privacy browsers).
+
+This is a deliberate A/B divergence from the legacy
+`xlogimport_apache.php`, which doesn't see the Referer column at
+all.  Update `tests/ab/port_import_apache/run.sh` `filter_keepers`
+to drop the new patterns from both sides of the diff.
+
+### Backfill clean: the chunked-DELETE trap
+
+The naive approach (chunked DELETE with `LIMIT 50000`) is **much**
+slower than it looks.  Each chunk re-walks the same secondary index
+from the start to find 50k matching rows, and each candidate row also
+has to fetch the heap to check the un-indexed `referrer` column.  At
+~150 s per 50 k chunk we measured ~3 hours per million rows.
+
+Use a temp PK table instead — one scan, then delete by PK range:
+
+```sql
+SET SESSION wait_timeout=86400;
+DROP TABLE IF EXISTS _spam_pks;
+CREATE TABLE _spam_pks (id BIGINT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO _spam_pks (id)
+SELECT id FROM web
+WHERE (referrer IS NULL OR referrer IN ('','-'))
+  AND (content LIKE '/login?return=%' OR content LIKE '/resources/browse?%');
+```
+
+Then loop PK windows and delete by JOIN — this hits the PK directly,
+so each chunk is a constant ~25 s for 100 k rows regardless of how
+many have already been deleted:
+
+```bash
+range_size=100000
+range_start=$(mysql ... -BN -e "SELECT MIN(id) FROM _spam_pks")
+range_top=$(mysql   ... -BN -e "SELECT MAX(id) FROM _spam_pks")
+while [ "$range_start" -le "$range_top" ]; do
+    range_end=$((range_start + range_size))
+    mysql ... -e "DELETE w FROM web w
+        JOIN _spam_pks s ON s.id = w.id
+        WHERE s.id >= $range_start AND s.id < $range_end;"
+    range_start=$range_end
+done
+```
+
+6.24 M rows in 67 min vs an estimated 3 + hours for the naive
+approach.
+
+### The sessionid landmine
+
+`logfix-session` builds `websessions` from `web` rows where
+`sessionid IS NULL OR sessionid = '0'`.  After it runs, every event
+that landed in a session has `web.sessionid` set to point at the new
+session row.  This means:
+
+**Wiping `websessions` without resetting `web.sessionid` creates ghost
+stamps.**  The next `logfix-session` skips those rows (they look
+already-stamped), so the months end up with vastly fewer sessions
+than the data warrants.  On geodynamics this surfaced as 2025-07
+emitting "0 session(s), stamped 0 web event(s)" for the first two
+weeks of the month even though `web` had ~200 k rows there.
+
+The orchestrator catches this two ways:
+
+1. **`mark-dirty` after surgery** — operator-driven.  Tell the state
+   machine which months need rework, then let it handle the rest:
+
+   ```bash
+   sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py mark-dirty \
+       2024-09 2024-10 2024-11 2024-12 2025-01 2025-02 2025-03 \
+       2025-04 2025-05 2025-06 2025-07
+   ```
+
+   The next catchup tick (auto-triggered if normal mode sees these in
+   the backlog) processes each one through `_reset_month_for_resummarize`
+   — chunked `UPDATE web SET sessionid = NULL`, `DELETE FROM
+   websessions`, `DELETE FROM summary_*_vals` — then re-runs
+   logfix-session + summarize.  The dirty marker auto-clears on
+   success.
+
+2. **`month_has_orphaned_stamps()` consistency check** — runs in
+   `_backlog_months` on every candidate month.  Detects any `web.sessionid`
+   pointing at a non-existent `websessions.id` and forces the same reset
+   path regardless of the dirty marker.  This is the safety net for
+   ad-hoc DELETEs that bypassed `mark-dirty`.
+
+So the cleanup sequence after deleting spam web rows is just:
+
+```bash
+# 1. Tell the orchestrator which months need rework:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py mark-dirty \
+    2024-09 2024-10 ... 2025-07
+
+# 2. Let it run.  The next tick (cron or manual) detects the dirty
+#    set, switches to catchup mode if needed, and processes one
+#    month per tick:
+sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+```
+
+If you do need to do it by hand (e.g. operating on a hub that hasn't
+been upgraded yet), the SQL equivalent of what the state machine
+does is:
+
+```sql
+-- 1. Reset sessionid for the affected date ranges, in chunks
+--    (1.4 M UPDATEs took 176 s on the test hub):
+UPDATE web SET sessionid = NULL
+  WHERE datetime >= '<start>' AND datetime < '<end>'
+    AND sessionid IS NOT NULL AND sessionid <> '0'
+  LIMIT 100000;
+-- repeat until ROW_COUNT() = 0
+
+-- 2. Wipe websessions for those months.
+DELETE FROM websessions
+  WHERE DATE_FORMAT(datetime,'%Y-%m-01') IN ('2024-09-01', ...);
+
+-- 3. Wipe summary cells for those months.  NOTE the date format:
+--    summary_*_vals.datetime uses YYYY-MM-00 (legacy convention),
+--    while websessions.datetime uses real datetime values.  Mixing
+--    the two formats silently wipes 0 rows.
+DELETE FROM summary_user_vals     WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_misc_vals     WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_simusage_vals WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_andmore_vals  WHERE datetime IN ('2024-09-00', ...);
+
+-- 4. Flip pipeline_state back to catchup so the orchestrator
+--    redrives the affected months on the next tick.
+UPDATE pipeline_state SET v='catchup' WHERE k='mode';
+DELETE FROM pipeline_state WHERE k='analyzed';
+```
+
+`catchup` re-imports nothing (the rows are already in `web` cleanly)
+— it just walks forward through every backlog month running
+`logfix-session` + `summarize-month` with `periods=(1,)`.  When the
+backlog drains, the state machine flips itself to `rebuild`, which
+walks forward again refreshing every month's long-window summary
+cells (periods 0/3/12/13/14).  No manual intervention required.
+
+### max_allowed_packet on bulk INSERT
+
+`_ipgeo_lookup_batch` writes the ipinfo HTTPS results back into the
+hub-DB cache via a single `INSERT … VALUES (…), (…), …` with one
+tuple per resolved IP.  On a busy month (212 k new IPs on a single
+weekly websessions chunk) the SQL text alone exceeds 16 MB and
+MariaDB rejects the packet:
+
+```
+pymysql.err.OperationalError: (1153, "Got a packet bigger than 'max_allowed_packet' bytes")
+```
+
+The pipeline now chunks that INSERT at 1000 rows per statement
+(`hzmetrics.py:4685`).  If you see this error on another hub it's the
+same issue — confirm by checking the server's `max_allowed_packet`
+and the number of new IPs in the failing chunk.
+
+### Make resolve-dns cheap once the table is small
+
+After mass cleanup the `web` table is much smaller but the resolve-
+dns scan still does the heavy lifting (`INSERT INTO _dns_tmp …
+SELECT DISTINCT ip FROM web WHERE datetime range …`).  A covering
+index helps:
+
+```sql
+CREATE INDEX web_dt_ip ON web (datetime, ip);
+```
+
+Lets InnoDB satisfy the scan from index pages without touching the
+8 GB+ heap.  ~700 MB index for a 12 M-row table; built in ~2.5 min on
+the geodynamics hub.
+
+After heavy churn the planner's row-count statistics may still pick
+a worse index — run `ANALYZE TABLE web` to refresh stats.  If the
+planner stubbornly picks the wrong index, a `FORCE INDEX (web_dt_ip)`
+hint in the resolve-dns query is the fallback.
+
+### Verification queries
+
+After the cleanup ticks finish, sanity-check the result:
+
+```sql
+-- Should be 0:
+SELECT COUNT(*) FROM web
+  WHERE (referrer IS NULL OR referrer IN ('','-'))
+    AND (content LIKE '/login?return=%' OR content LIKE '/resources/browse?%');
+
+-- Should be 0 for the affected month range:
+SELECT COUNT(*) FROM web
+  WHERE datetime >= '<affected-start>' AND datetime < '<affected-end>'
+    AND sessionid IS NOT NULL AND sessionid <> '0'
+    AND sessionid NOT IN (SELECT id FROM websessions);
+
+-- Should show all 6 periods (1, 0, 3, 12, 13, 14) per month after
+-- the rebuild phase finishes:
+SELECT DATE_FORMAT(datetime,'%Y-%m') AS m,
+       GROUP_CONCAT(DISTINCT period ORDER BY period) AS periods
+FROM summary_user_vals
+WHERE datetime >= '<start>-00'
+GROUP BY m ORDER BY m;
+```
 
 ## Whoisonline map is stale
 

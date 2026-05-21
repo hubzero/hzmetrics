@@ -137,6 +137,31 @@ month forward and sets `web.dnload` from the URL pattern.
 `import-apache` sets `dnload` inline on new rows, so this is only
 needed once after the column was introduced.
 
+`do_analyze(month, sessions=...)` has a `sessions` parameter that
+controls whether the session-bound sub-stages run:
+
+  - `sessions=True` (the default) — runs every step above, including
+    `logfix-session` and the `clean-bots` / `fill-ipcountry` passes
+    against `websessions`.  Used by catchup, rebuild, and month-close
+    normal ticks, where the month's input set is stable.
+
+  - `sessions=False` — skips `logfix-session` and the
+    websessions-bound steps; row-level enrichment (DNS, domain,
+    country, clean-bots on web, fill-user-info, fill-ipcountry on
+    web/toolstart) still runs.  Used by normal-mode for the
+    still-incomplete current month, because daily logfix-session
+    creates a fresh sessionid boundary at every tick (rows already
+    stamped on a prior tick are excluded from the next pass by the
+    `sessionid IS NULL OR sessionid = '0'` predicate, so a session
+    that genuinely spans the tick boundary gets split).
+
+The completeness signal `is_month_complete(prev)` decides when a
+normal-mode tick fires the month-close `sessions=True` analyze on
+prev: it returns True when either prev's last-day log file is in
+`imported/`, OR `web` has at least one row dated in the month after
+prev (a data-driven signal that import time has crossed the
+boundary; replaces the legacy `days_in > 5` calendar fallback).
+
 ### summarize (per-month, full re-aggregation)
 
 ```
@@ -348,6 +373,9 @@ process --month YYYY-MM    process a specific month
 import / analyze / summarize  individual stages, --month YYYY-MM
 rebuild-summaries --since YYYY-MM [--through ...] [--periods 0,1,3,12,13,14]
                            manual range resummarize (doesn't touch state.mode)
+rebuild-from YYYY-MM       atomic reset: sets mode=rebuild + rebuild_cursor
+mark-dirty YYYY-MM ...     flag months as needing rework after bulk web mutation
+clear-dirty [--all|YYYY-MM ...]  remove months from the dirty set
 fill-geo / backfill-dnload    one-shot backfill utilities
 migrate [--apply]          show or apply schema migrations
 setup-db [--dry-run]       create the metrics DB schema from scratch
