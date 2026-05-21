@@ -1062,6 +1062,32 @@ MIGRATIONS.extend([
             "  AND engine='InnoDB';"
         ),
     ),
+    Migration(
+        id=42,
+        description=("Covering index web(datetime, ip) — lets resolve-dns's "
+                     "SELECT DISTINCT ip … WHERE datetime range be served "
+                     "entirely from the index, skipping the 8 GB heap"),
+        sql="CREATE INDEX web_dt_ip ON {metrics_db}.web (datetime, ip);",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema='{metrics_db}' AND table_name='web' "
+            "  AND index_name='web_dt_ip';"
+        ),
+    ),
+    Migration(
+        id=43,
+        description=("Index web(dnload, datetime) — turns the dnload-helper "
+                     "queries in summarize from a full date-range scan with "
+                     "heap-fetch-and-filter into an index-only seek across "
+                     "the dnload=1 slice.  Cut per-month rebuild ticks from "
+                     "~45 min back to a few minutes on the geodynamics audit"),
+        sql="CREATE INDEX web_dnload_dt ON {metrics_db}.web (dnload, datetime);",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema='{metrics_db}' AND table_name='web' "
+            "  AND index_name='web_dnload_dt';"
+        ),
+    ),
 ])
 
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
@@ -1510,7 +1536,9 @@ METRICS_DB_DDL = [
   KEY `content` (`content`(255)),
   KEY `dnload` (`dnload`),
   KEY `web_sessionid_dnload` (`sessionid`,`dnload`),
-  KEY `web_host` (`host`(255))
+  KEY `web_host` (`host`(255)),
+  KEY `web_dt_ip` (`datetime`,`ip`),
+  KEY `web_dnload_dt` (`dnload`,`datetime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`webhits` (
