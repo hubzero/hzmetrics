@@ -113,6 +113,138 @@ GB table).  Schedule alongside a maintenance window when the table
 has accumulated > ~30 % waste.  `pt-online-schema-change` would do
 it lock-free but isn't installed.
 
+## Summarize performance via monthly_seen rollups
+
+The summarize stage currently does the same expensive `COUNT(DISTINCT
+ip, host)` scan against `web` / `websessions` for every period of
+every month.  On the geodynamics 2026-05 rebuild, wide-window periods
+(0, 12, 14) took 9–25 min per month even after the `web(dnload,
+datetime)` index — the bulk of that time is the JOIN against
+`websessions` for distinct-visitor counts, not anything dnload-shaped.
+
+Period 14 (all-time) is the worst case: it re-derives the entire
+historical count on every rebuild tick, even though the answer for
+month M is just "(answer for month M-1) plus this month's deltas."
+
+### Schema
+
+One table serves every period query:
+
+```
+monthly_seen(month, ip, host, ipcountry, orgtype)
+  -- one row per distinct (month, ip, host) — "this user was
+  -- seen in this month".  Per-month deduped at population time.
+  -- PK (month, ip, host)
+  -- INDEX (month, ipcountry)
+  -- INDEX (month, orgtype)
+  -- INDEX (ip, host, month)        — dedup-style lookups
+```
+
+Optional companion (only if period 14 still isn't fast enough off
+`monthly_seen`):
+
+```
+all_time_seen(ip, host, first_seen, ipcountry, orgtype)
+  -- one row per distinct (ip, host) ever seen
+  -- PK (ip, host); INDEX (first_seen, ipcountry, orgtype)
+  -- Maintained as: INSERT IGNORE on monthly_seen population —
+  -- PK uniqueness means re-seeing an (ip, host) is a no-op,
+  -- so first_seen stays correct.
+```
+
+Per-resource variant for andmore-usage:
+
+```
+resource_monthly_seen(resid, month, ip, host)
+  -- PK (resid, month, ip, host); INDEX (resid, month)
+resource_all_time_seen(resid, ip, host, first_seen)   -- optional
+  -- PK (resid, ip, host); INDEX (resid, first_seen)
+```
+
+### Read path
+
+Every period query collapses to a small indexed scan over the rollup
+instead of a wide JOIN against `web` / `websessions`:
+
+```sql
+-- Period 1 (month): exact-match, no DISTINCT needed
+SELECT COUNT(*) FROM monthly_seen WHERE month = '2025-08-01';
+
+-- Periods 0/3/12/13 (multi-month windows): DISTINCT across the window
+SELECT COUNT(DISTINCT ip, host) FROM monthly_seen
+  WHERE month >= '2025-01-01' AND month < '2026-01-01';
+
+-- Period 14 via the optional companion: pure indexed range scan
+SELECT COUNT(*) FROM all_time_seen WHERE first_seen < '2026-01-01';
+```
+
+The 11-column variants (US / EU / Asia / Other; orgtype splits) just
+add an indexed filter — `WHERE … AND ipcountry = 'US'` etc.
+
+### Population
+
+At each tick that imports web rows (current month) or processes a
+historical month (catchup / rebuild reset), populate `monthly_seen`:
+
+```sql
+INSERT IGNORE INTO monthly_seen (month, ip, host, ipcountry, orgtype)
+SELECT
+  DATE_FORMAT(datetime, '%Y-%m-01'),
+  ip, host, ipcountry,
+  COALESCE(u.orgtype, '')
+FROM web
+LEFT JOIN xprofiles_metrics u ON u.username = web.uidNumber  -- or via userlogin_lite
+WHERE datetime >= <month_start> AND datetime < <month_end>;
+```
+
+PK is `(month, ip, host)` so re-running is idempotent.  If the
+companion `all_time_seen` is in play, the same population step does
+an `INSERT IGNORE` into it with `first_seen = month_start`.
+
+### Sequencing
+
+1. **One-time backfill** for existing history — walk every month
+   that has `web` rows, populate `monthly_seen`.  Probably an hour
+   of read-heavy work.
+2. **Wire in incremental population** to the catchup / rebuild / normal
+   tick paths.  `monthly_seen` becomes part of `_do_usage_metrics_stage`'s
+   row-level enrichment (idempotent, fine to run daily).
+3. **Add the read-path** — modify summarize's per-period helpers to
+   read from `monthly_seen` instead of doing the live JOIN.  Keep a
+   feature flag so we can A/B compare numbers against the old code
+   path during validation.
+4. **Validation pass** — for each month, assert
+   `summary_user_vals(via monthly_seen)` matches
+   `summary_user_vals(via live JOIN)` to ±0.  Catches any subtle
+   semantic divergence before cutting over.
+5. **Cut over and remove the live-JOIN path.**
+
+### Estimated win
+
+Concrete on geodynamics:
+
+- Period 1 today: 15s.  After: <1s (already-deduped table).
+- Period 0/12/13 today: 1–9 min depending on month width.  After:
+  seconds (indexed range scan + DISTINCT over a small set).
+- Period 14 today: 5–25 min on heavy months.  After: milliseconds
+  with the companion table, or seconds without.
+- andmore-usage today: ~700 resources × 3 periods × full scan.
+  After: per-resource indexed range scan.
+
+Net: a heavy rebuild tick should drop from 30–50 min to a few
+minutes.  Compounds with everything else (no need for the dedicated
+`(dnload, datetime)` index, etc.).
+
+### Scope
+
+About 1–2 focused weeks: schema migration, population helper,
+read-path rewrites, one-time backfill, parity tests, cut-over.
+This is also the same data structure the deep-prune plan needs
+(both site-wide and per-resource), so the engineering investment is
+reusable.  Easiest to implement after the `resid_match` flag (see
+"Web table retention") since it pre-computes the per-resource bucket
+each row belongs to.
+
 ## Bot detection improvements
 
 Current `identify-bots` is a hardcoded substring list (~20 tokens).
