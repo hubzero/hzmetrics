@@ -19,6 +19,7 @@ tests=(
     port_idempotency
     port_invariants
     port_determinism
+    port_lock
     port_month_complete
     port_periods_filter
     port_rebuild_correctness

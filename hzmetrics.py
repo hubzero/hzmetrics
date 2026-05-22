@@ -704,6 +704,123 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
 
 _lock_fd: int | None = None  # held open across acquire/release so flock survives
 
+
+def _init_start_epoch() -> int | None:
+    """Wall-clock Unix epoch at which the current environment's PID 1
+    started.  Computed as `btime + init_starttime_jiffies // CLK_TCK`,
+    so it captures both "host boot" (bare metal — PID 1 is kernel init,
+    starts at ~0 jiffies after boot) AND "container start" (container
+    runtime — PID 1 is the entrypoint, starts N jiffies after the host
+    boot).  Every meaningful "the environment changed" case (reboot,
+    container restart) yields a different value.
+
+    Used to disambiguate stale PID files: an entry whose stored
+    init_start_epoch differs from the live one is definitively from a
+    prior environment and cannot be the current holder.
+
+    Returns None on non-Linux hosts that don't expose /proc; callers
+    must fall back to treating environment-id as unknown."""
+    try:
+        btime = None
+        for line in Path("/proc/stat").read_text().splitlines():
+            if line.startswith("btime "):
+                btime = int(line.split()[1])
+                break
+        if btime is None:
+            return None
+        # /proc/1/stat field layout:
+        #   pid (comm) state ppid pgrp session tty_nr tpgid flags
+        #   minflt cminflt majflt cmajflt utime stime cutime cstime
+        #   priority nice num_threads itrealvalue starttime ...
+        # starttime is field 22 (1-indexed).  `comm` may contain
+        # whitespace and parens; split after the last `)` to be safe.
+        stat = Path("/proc/1/stat").read_text()
+        after_comm = stat.rsplit(")", 1)[1].split()
+        # after_comm[0] = state ; field 22 overall = after_comm[19]
+        init_jiffies = int(after_comm[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        return btime + init_jiffies // hz
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _process_looks_like_hzmetrics(pid: int) -> bool:
+    """True iff /proc/<pid>/cmdline mentions hzmetrics, suggesting the
+    PID still belongs to a running pipeline instance and not a recycled
+    OS PID that's now some unrelated process.  Cheap probe — used to
+    log a more informative "stale" message when the lock acquire finds
+    a leftover PID file."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return False
+    return b"hzmetrics" in cmdline
+
+
+def _diagnose_stale_lock_file() -> None:
+    """Inspect any pre-existing LOCK_FILE content at acquire time and
+    log what we found.  Purely diagnostic — by the time this is called,
+    flock has already been granted to us (the kernel released any prior
+    holder's lock when its process died, or the file is leftover from
+    a prior environment and no one holds the flock).  This just tells
+    the operator what the stale content represented.
+
+    Expected file format (post-2026 lock-file v2):
+       <pid> <init_start_epoch> <iso_acquired>
+    """
+    try:
+        body = LOCK_FILE.read_text().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return
+    if not body:
+        return
+    parts = body.split()
+    if not parts:
+        return
+    try:
+        prior_pid = int(parts[0])
+    except ValueError:
+        return
+    prior_env = None
+    if len(parts) >= 2:
+        try:
+            prior_env = int(parts[1])
+        except ValueError:
+            prior_env = None
+
+    cur_env = _init_start_epoch()
+    if prior_env is not None and cur_env is not None and prior_env != cur_env:
+        log.info(f"[lock] cleaning up stale lock file from prior environment "
+                 f"(PID {prior_pid}, init_start_epoch {prior_env} ≠ "
+                 f"current {cur_env}) — host reboot or container restart")
+        return
+
+    if _process_looks_like_hzmetrics(prior_pid):
+        # Process exists AND looks like an hzmetrics instance, yet
+        # flock was granted to us — means the prior holder closed its
+        # FD without unlinking, which shouldn't happen in normal exit
+        # but could on a forcible SIGKILL right after acquire.  Note
+        # but don't block.
+        log.info(f"[lock] flock was free but PID {prior_pid} still "
+                 f"appears to be an hzmetrics process — likely a forcibly "
+                 f"killed prior instance that lost its file")
+        return
+
+    # PID either doesn't exist or now belongs to an unrelated process
+    # (PID recycling).  Most common stale case after kill -9 / OOM.
+    try:
+        os.kill(prior_pid, 0)
+        alive = True
+    except (ProcessLookupError, PermissionError):
+        alive = False
+    if alive:
+        log.info(f"[lock] cleaning up stale lock file: PID {prior_pid} "
+                 f"is alive but is not an hzmetrics process (recycled PID)")
+    else:
+        log.info(f"[lock] cleaning up stale lock file: PID {prior_pid} "
+                 f"is no longer running")
+
+
 def acquire_lock() -> bool:
     """Try to acquire an advisory lock on LOCK_FILE.  Returns True if acquired,
     False if another instance already holds it.
@@ -713,9 +830,18 @@ def acquire_lock() -> bool:
     acquire_lock calls from racing ticks are serialized atomically by the
     kernel rather than by a check-then-write that has a TOCTOU window.
 
-    The file's contents are the holder's PID — purely diagnostic
-    (`cat $HZMETRICS_HOME/state/hzmetrics.pid` to see who holds it); the
-    lock itself is the flock, not the file existence.
+    The file's contents on a successful acquire are three space-separated
+    fields on one line:
+       <pid> <init_start_epoch> <iso_acquired_timestamp>
+    All three are purely diagnostic (`cat $HZMETRICS_HOME/state/hzmetrics.pid`
+    to see who holds it); the lock itself is the flock, not the file
+    existence or the file content.  `init_start_epoch` is the wall-clock
+    Unix epoch at which the current environment's PID 1 started — it
+    changes on host reboot AND on container restart, so consumers can
+    distinguish "current holder" from "stale entry survived any kind of
+    environment reset" without needing to test the flock.  Before
+    writing fresh content we inspect any existing entry and log what
+    was stale and why — purely diagnostic but useful for postmortems.
 
     LOCK_FILE.parent is created on demand if the service-user can write
     to HZMETRICS_HOME (the install is self-contained under that tree).
@@ -736,8 +862,14 @@ def acquire_lock() -> bool:
     except BlockingIOError:
         os.close(fd)
         return False
+    # We hold the flock now; anything previously in the file is by
+    # definition stale.  Log what it was before overwriting.
+    _diagnose_stale_lock_file()
+    env_epoch = _init_start_epoch()
+    env_field = str(env_epoch) if env_epoch is not None else "?"
+    acquired_iso = datetime.now().astimezone().isoformat(timespec="milliseconds")
     os.ftruncate(fd, 0)
-    os.write(fd, f"{os.getpid()}\n".encode())
+    os.write(fd, f"{os.getpid()} {env_field} {acquired_iso}\n".encode())
     os.fsync(fd)
     _lock_fd = fd
     return True
