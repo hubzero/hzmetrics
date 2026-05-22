@@ -9,8 +9,35 @@
 AB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$AB_DIR/../.." && pwd)"
 FIXTURES="$AB_DIR/fixtures"
-ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-$FIXTURES/test_access.cfg}"
 LEGACY_DIR="$REPO/tests/legacy"
+
+# Resolve the test access.cfg:
+#   1. HZMETRICS_ACCESS_CFG env var wins outright (operator override).
+#   2. Else use $FIXTURES/test_access.cfg if it has a non-empty db_user
+#      (operator filled in the template for this host).
+#   3. Else fall back to the first $FIXTURES/test_access_*.cfg that has
+#      a non-empty db_user — the per-hub starter cfgs.  This lets a
+#      fresh checkout on a hub with a matching test_access_<hub>.cfg
+#      "just work" without operator setup.
+#   4. Else point at the empty template and let downstream fail with a
+#      clear error from setup_test_dbs.sh / validate_config.
+_has_db_user() {
+    [ -f "$1" ] && grep -qE "^\\\$db_user[[:space:]]*=[[:space:]]*'[^']" "$1"
+}
+ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-}"
+if [ -z "$ACCESS_CFG" ]; then
+    if _has_db_user "$FIXTURES/test_access.cfg"; then
+        ACCESS_CFG="$FIXTURES/test_access.cfg"
+    else
+        for _cand in "$FIXTURES"/test_access_*.cfg; do
+            if _has_db_user "$_cand"; then
+                ACCESS_CFG="$_cand"
+                break
+            fi
+        done
+        : "${ACCESS_CFG:=$FIXTURES/test_access.cfg}"
+    fi
+fi
 
 AB_SKIP=77
 
@@ -43,9 +70,16 @@ reset_test_dbs() {
 }
 
 # Load a test's per-fixture SQL (web rows, exclude_list rows, etc).
+# seed.sql files historically hard-code `USE foo_test` / `USE foo_metrics_test`
+# (the original placeholder DB names).  We rewrite those USE statements on the
+# fly to the active HUB_DB / METRICS_DB so the same seeds work on whatever DB
+# names the operator's test_access.cfg points at — e.g. geodynamics_test /
+# geodynamics_metrics_test on this hub.
 load_fixture() {
     local sql="$1"
-    mysql_test < "$sql"
+    sed -e "s/^USE foo_test;/USE \`$HUB_DB\`;/" \
+        -e "s/^USE foo_metrics_test;/USE \`$METRICS_DB\`;/" \
+        "$sql" | mysql_test
 }
 
 # Dump a metrics-side table to TSV, deterministically ordered by id.

@@ -36,13 +36,23 @@ for i in $(seq 1 "$ITERS"); do
     dump_full userlogin "$METRICS_DB" "datetime, user, ip, action" \
         > "$OUT/seed_${seed}_new.tsv"
 
-    if ! diff -q "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" >/dev/null 2>&1; then
+    # Same A/B-divergence handling as port_import_auth: new code
+    # filters action ∈ (login, simulation) at insert time; legacy
+    # keeps every action.  Pipeline only ever queries the kept
+    # actions, so filter both sides to those rows before diffing.
+    # dump_full userlogin columns: datetime user uidNumber ip action.
+    awk -F'\t' '$5 == "login" || $5 == "simulation"' \
+        "$OUT/seed_${seed}_legacy.tsv" > "$OUT/seed_${seed}_legacy_filt.tsv"
+    awk -F'\t' '$5 == "login" || $5 == "simulation"' \
+        "$OUT/seed_${seed}_new.tsv" > "$OUT/seed_${seed}_new_filt.tsv"
+
+    if ! diff -q "$OUT/seed_${seed}_legacy_filt.tsv" "$OUT/seed_${seed}_new_filt.tsv" >/dev/null 2>&1; then
         echo
         echo "FAIL iteration $i  seed=$seed"
         echo "  reproduce: $PY $DIR/gen_auth_log.py $LINES $seed > /tmp/fuzz.log"
         echo "  log: $log_file"
         echo "  first 30 diff lines:"
-        diff "$OUT/seed_${seed}_legacy.tsv" "$OUT/seed_${seed}_new.tsv" | sed -n '1,30p' || true
+        diff "$OUT/seed_${seed}_legacy_filt.tsv" "$OUT/seed_${seed}_new_filt.tsv" | sed -n '1,30p' || true
         echo
         echo "  $passed / $i iterations passed before failure"
         exit 1
