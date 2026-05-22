@@ -8,6 +8,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB_SKIP="${AB_SKIP:-77}"
 
 tests=(
+    port_bootstrap
     port_cli_contracts
     port_cmd_run
     port_decisions

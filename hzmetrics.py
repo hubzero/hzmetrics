@@ -31,6 +31,8 @@ Usage:
   hzmetrics.py middleware-cpu
   hzmetrics.py migrate [--apply]
   hzmetrics.py setup-db
+  hzmetrics.py init                                                   # one-shot install bootstrap (dirs + DB + migrate)
+  hzmetrics.py doctor [--fix]                                         # diagnose install health; --fix attempts repair
 """
 
 import os
@@ -133,14 +135,21 @@ log = logging.getLogger("hzmetrics")
 def _pipeline_paths():
     """Detect site name and APACHELOGDIR from /etc/hubzero.conf and the
     presence of /etc/apache2 vs /etc/httpd.  Falls back to safe defaults
-    so the module still imports outside a deployed hub host."""
+    so the module still imports outside a deployed hub host.
+
+    `site_explicit` is True iff `/etc/hubzero.conf` was readable and
+    contained a `site = …` line.  Self-bootstrap checks this and aborts
+    when running as apache without an explicit site (filename and DB
+    prefixes would all collide on the literal string "hub")."""
     site = "hub"
+    site_explicit = False
     try:
         with open("/etc/hubzero.conf") as f:
             for line in f:
                 m = re.match(r"\s*site\s*=\s*(\S+)", line)
                 if m:
                     site = m.group(1).strip()
+                    site_explicit = True
                     break
     except (FileNotFoundError, PermissionError, OSError):
         pass
@@ -150,6 +159,7 @@ def _pipeline_paths():
         apache_log_dir = Path("/var/log/httpd")
     return {
         "site":            site,
+        "site_explicit":   site_explicit,
         "apache_log_dir": apache_log_dir,
         "cms_log_dir":    Path("/var/log/hubzero"),
         "metrics_log_dir": Path("/var/log/hubzero/metrics"),
@@ -158,6 +168,7 @@ def _pipeline_paths():
 
 _PIPELINE_PATHS    = _pipeline_paths()
 SITE               = _PIPELINE_PATHS["site"]
+SITE_EXPLICIT      = _PIPELINE_PATHS["site_explicit"]
 APACHE_LOG_DIR     = _PIPELINE_PATHS["apache_log_dir"]
 CMS_LOG_DIR        = _PIPELINE_PATHS["cms_log_dir"]
 HTTPD_DAILY        = APACHE_LOG_DIR / "daily"
@@ -917,6 +928,129 @@ def release_lock() -> None:
         except FileNotFoundError:
             pass
 
+
+# ---------------------------------------------------------------------------
+# Self-bootstrap.  Run at the top of cron entry points (cmd_run, cmd_tick)
+# when the process is owned by the service user — creates any missing
+# install / log / staging directory and the metrics database if absent, so
+# a fresh access.cfg + an empty $HZMETRICS_HOME is enough to start a hub.
+# Strictly gated to the apache (RHEL/Rocky) or www-data (Debian/Ubuntu)
+# UID: dev shells, root, and the A/B harness do nothing, which keeps
+# shared state out of their reach.
+# ---------------------------------------------------------------------------
+
+# The named user is whoever runs the HUBzero web server.  We check
+# euid identity (not effective name) so a privilege drop via setuid
+# is honored.
+_SERVICE_USERS = ("apache", "www-data")
+
+
+def _running_as_service_user() -> bool:
+    """True iff our euid maps to one of the known HUBzero web-server
+    user names.  Returns False on KeyError (uid not in /etc/passwd) so
+    rootless / namespaced environments are treated as not-service."""
+    import pwd
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name in _SERVICE_USERS
+    except KeyError:
+        return False
+
+
+# Expected directory tree.  Every entry must exist (and be writable) for
+# the pipeline to make progress.  Order matters only insofar as a missing
+# parent is the most useful thing to report first — pathlib's mkdir
+# parents=True will create chains transparently as long as we have
+# permission on the topmost existing ancestor.
+def _expected_dirs() -> list:
+    return [
+        HZMETRICS_HOME,
+        HZMETRICS_HOME / "bin",
+        HZMETRICS_HOME / "conf",
+        HZMETRICS_HOME / "state",
+        HZ_METRICS_STAGING,  # /var/log/hubzero/metrics
+        HZ_DAILY,            # /var/log/hubzero/daily
+        HZ_IMPORTED,         # /var/log/hubzero/imported
+        HTTPD_DAILY,         # /var/log/{httpd,apache2}/daily
+        HTTPD_IMPORTED,      # /var/log/{httpd,apache2}/imported
+    ]
+
+
+def _bootstrap_dirs() -> None:
+    """Create any missing entry in _expected_dirs().  Logs each fresh
+    create.  Aborts with a clear next-step on PermissionError — the
+    typical cause is HZMETRICS_HOME (under /opt) or a /var/log subtree
+    that the service user can't write to because the parent isn't
+    apache-owned yet."""
+    for d in _expected_dirs():
+        if d.is_dir():
+            continue
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            log.info(f"[bootstrap] created {d}")
+        except PermissionError:
+            log.error(
+                f"[bootstrap] cannot create {d} — permission denied.\n"
+                f"  Run once as root to seat the install:\n"
+                f"    sudo make install-bootstrap   "
+                f"(creates {HZMETRICS_HOME} owned by the web-server user)\n"
+                f"  And ensure /var/log/hubzero/ exists and is writable by "
+                f"the web-server user."
+            )
+            raise SystemExit(2) from None
+
+
+def _bootstrap_database() -> None:
+    """Run the setup-db baseline DDL and apply any pending migrations.
+    METRICS_DB_DDL[0] is itself `CREATE DATABASE IF NOT EXISTS` so this
+    works against an empty server as well as one with an established
+    schema — every statement is idempotent.
+
+    Aborts on any DDL failure: better to fail loudly than to enter
+    the steady-state loop with a half-built schema."""
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    if not metrics_db:
+        log.error("[bootstrap] access.cfg has no metrics_db — set it and retry")
+        raise SystemExit(2)
+
+    for stmt in METRICS_DB_DDL:
+        sql = stmt.format(metrics_db=metrics_db)
+        if mysql_exec(sql) != 0:
+            log.error("[bootstrap] setup-db DDL failed — aborting")
+            raise SystemExit(2)
+
+    _apply_pending_migrations(metrics_db, source="bootstrap")
+
+
+def _self_bootstrap() -> None:
+    """Idempotent self-repair invoked at the top of cron entry points.
+    Splits cleanly so the unit tests can exercise each phase:
+
+      1. Identity gate — only the apache / www-data UID does anything.
+      2. Site-name gate — refuses to proceed if /etc/hubzero.conf had
+         no `site = …` line; the site string is woven into filenames
+         (e.g. `${SITE}-access*log*`) and the DB-prefix expectations,
+         so a silent fallback to the literal "hub" would collide on
+         every multi-hub host.
+      3. Filesystem repair — mkdir every entry in _expected_dirs() that
+         doesn't already exist.
+      4. Database repair — CREATE DATABASE IF NOT EXISTS, baseline DDL,
+         migrate apply.
+    """
+    if not _running_as_service_user():
+        return
+    if not SITE_EXPLICIT:
+        log.error(
+            "[bootstrap] site name missing from /etc/hubzero.conf.\n"
+            "  Expected a line of the form `site = <hubname>`.\n"
+            "  Refusing to proceed — the site name is the prefix for "
+            "every staged log filename and several DB conventions."
+        )
+        raise SystemExit(2)
+    _bootstrap_dirs()
+    _bootstrap_database()
+
+
 # State lives in `<metrics_db>.pipeline_state` (a simple key/value table).
 # Previously it was a one-line-per-key file at /var/run/hzmetrics/hzmetrics.state.
 # The DB location survives reboots (tmpfs wipes /var/run on most distros),
@@ -1311,6 +1445,37 @@ def _automark_applied(metrics_db: str) -> None:
 def applied_migration_ids(metrics_db: str) -> set[int]:
     return set(mysql_column(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;"))
 
+def _apply_pending_migrations(metrics_db: str, *, source: str = "migrate") -> None:
+    """Apply every MIGRATIONS entry not yet recorded in the tracker
+    table.  Shared by cmd_migrate (operator-driven) and _self_bootstrap
+    (cron-driven on the first tick of a fresh install).  `source` only
+    affects the log prefix so the two callers stay distinguishable in
+    journalctl / manage.log."""
+    ensure_migrations_table(metrics_db)
+    applied = applied_migration_ids(metrics_db)
+    pending = [m for m in MIGRATIONS if m.id not in applied]
+    if not pending:
+        return
+    log.info(f"[{source}] {len(pending)} pending migration(s)")
+    for m in pending:
+        sql = m.sql.format(metrics_db=metrics_db)
+        log.info(f"[{source}] [{m.id}] {m.description}")
+        log.info(f"    {sql}")
+        rc = mysql_exec(sql)
+        if rc == 0:
+            mysql_exec(
+                f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
+                f"VALUES (%s, %s);",
+                (m.id, m.description),
+            )
+            log.info(f"    done.")
+            log.debug(f"migration {m.id}: {m.description}")
+        else:
+            log.error(f"    FAILED (rc={rc}) — stopping.")
+            log.debug(f"migration {m.id} FAILED")
+            raise SystemExit(1)
+
+
 def cmd_migrate(args):
     _, _, _, metrics_db = db_credentials()
     ensure_migrations_table(metrics_db)
@@ -1334,24 +1499,7 @@ def cmd_migrate(args):
         return
 
     log.debug(f"=== hzmetrics.py migrate --apply  @ {datetime.now()} ===")
-    for m in pending:
-        sql = m.sql.format(metrics_db=metrics_db)
-        log.info(f"[{m.id}] {m.description}")
-        log.info(f"    {sql}")
-        rc = mysql_exec(sql)
-        if rc == 0:
-            mysql_exec(
-                f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES (%s, %s);",
-                (m.id, m.description),
-            )
-            log.info(f"    done.")
-            log.debug(f"migration {m.id}: {m.description}")
-        else:
-            log.error(f"    FAILED (rc={rc}) — stopping.")
-            log.debug(f"migration {m.id} FAILED")
-            break
-
+    _apply_pending_migrations(metrics_db, source="migrate")
     log.info(">>> done")
 
 
@@ -1779,6 +1927,183 @@ def cmd_setup_db(args):
         else:
             log.info(f"  {len(METRICS_DB_DDL)} statement(s) executed, database ready.")
     log.info(">>> done")
+
+
+# ---------------------------------------------------------------------------
+# init / doctor — operator-driven setup and diagnosis.
+#
+# `init` is the manual counterpart of the cron-time _self_bootstrap: it
+# does the same idempotent dir + DB + migrate work but always runs (no
+# apache-uid gate), so root or the operator can drive it during install
+# or after a reorg.  Safe to re-invoke — every step is "create if
+# missing".
+#
+# `doctor` is the diagnostic.  By default it only reports.  With --fix
+# it tries to repair anything fixable from the same toolbox _self_
+# bootstrap uses; anything that needs root (chown, parent dir create)
+# is reported but not attempted.
+# ---------------------------------------------------------------------------
+
+
+def cmd_init(args):
+    """Idempotent one-shot setup: dirs + database + migrate.  Same
+    machinery cmd_run / cmd_tick invoke on the first cron tick, but
+    runs regardless of the invoking user so an operator can drive the
+    install steps before cron is registered."""
+    if not SITE_EXPLICIT:
+        log.error("[init] site name missing from /etc/hubzero.conf.")
+        log.error("  Expected a line of the form `site = <hubname>` "
+                  "(SITE prefixes every staged-log filename and DB convention).")
+        return 2
+    _bootstrap_dirs()
+    _bootstrap_database()
+    log.info("[init] done — pipeline is ready, register cron and "
+             "drop access.cfg into HZMETRICS_HOME/conf/ if not already.")
+    return 0
+
+
+def cmd_doctor(args):
+    """Diagnose install health.  Reports every issue first; with --fix,
+    repeats the apache-gated _self_bootstrap repair steps.  Exits 0 if
+    everything is healthy (or got fixed), 1 if any issue remains.
+
+    Checks:
+      - site name resolved from /etc/hubzero.conf
+      - access.cfg present and parseable
+      - every directory in _expected_dirs() exists AND is writable by
+        the invoking user (catches a chown drift between operator
+        installs)
+      - DB reachable with the access.cfg credentials
+      - metrics_db exists, has the baseline tables, and is migrated up
+        to the latest known MIGRATIONS id"""
+    fix = bool(getattr(args, "fix", False))
+    problems: list[str] = []
+
+    # --- 1. Site name ---------------------------------------------------
+    if SITE_EXPLICIT:
+        log.info(f"[doctor] OK    site name = {SITE}")
+    else:
+        problems.append(
+            "site name missing from /etc/hubzero.conf "
+            "(add a line `site = <hubname>` — not fixable from here)"
+        )
+        log.error("[doctor] FAIL  site name unresolved")
+
+    # --- 2. access.cfg --------------------------------------------------
+    try:
+        cfg = db_config()
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        problems.append(f"access.cfg unreadable: {e} (not fixable from here)")
+        log.error(f"[doctor] FAIL  cannot read access.cfg: {e}")
+        cfg = {}
+    else:
+        missing_keys = [k for k in ("db_host", "db_user", "db_pass", "metrics_db")
+                        if not cfg.get(k)]
+        if missing_keys:
+            problems.append(
+                f"access.cfg missing required key(s): {', '.join(missing_keys)} "
+                "(operator must populate)"
+            )
+            log.error(f"[doctor] FAIL  access.cfg missing: {', '.join(missing_keys)}")
+        else:
+            log.info(f"[doctor] OK    access.cfg parsed "
+                     f"(metrics_db={cfg.get('metrics_db')})")
+
+    # --- 3. Directories -------------------------------------------------
+    def _dir_state(d: Path) -> str:
+        """Returns one of: "ok", "missing", "unwritable", "inaccessible".
+        is_dir() / access() can raise PermissionError when a parent
+        directory is 0750 root:apache and the invoking shell is neither
+        — treat that as inaccessible so the doctor doesn't crash on a
+        legitimate ownership-mismatch case."""
+        try:
+            if not d.is_dir():
+                return "missing"
+            return "ok" if os.access(d, os.W_OK) else "unwritable"
+        except PermissionError:
+            return "inaccessible"
+
+    bad_dirs: list = []
+    for d in _expected_dirs():
+        state = _dir_state(d)
+        if state == "ok":
+            log.info(f"[doctor] OK    dir            {d}")
+        else:
+            bad_dirs.append((state, d))
+            log.error(f"[doctor] FAIL  {state:<12}  {d}")
+    if bad_dirs and fix:
+        try:
+            _bootstrap_dirs()
+            bad_dirs = [
+                (state, d) for (state, d) in bad_dirs
+                if _dir_state(d) != "ok"
+            ]
+        except SystemExit:
+            problems.append(
+                "could not create one or more expected directories "
+                "(likely a parent dir owned by root — see preceding error)"
+            )
+    if bad_dirs:
+        for state, d in bad_dirs:
+            problems.append(f"directory {d} is {state}")
+
+    # --- 4. Database reachability + schema -----------------------------
+    if cfg.get("metrics_db"):
+        db_reachable = False
+        db_present   = False
+        pending: list = []
+        try:
+            db_present = (mysql_scalar(
+                "SELECT SCHEMA_NAME FROM information_schema.schemata "
+                "WHERE SCHEMA_NAME = %s",
+                (cfg["metrics_db"],),
+            ) is not None)
+            db_reachable = True
+        except Exception as e:  # pymysql.* or env
+            problems.append(f"cannot connect to MySQL: {e}")
+            log.error(f"[doctor] FAIL  MySQL unreachable: {e}")
+
+        if db_reachable and not db_present:
+            log.error(f"[doctor] FAIL  database `{cfg['metrics_db']}` missing")
+            problems.append(f"database `{cfg['metrics_db']}` does not exist")
+        elif db_reachable and db_present:
+            log.info(f"[doctor] OK    database `{cfg['metrics_db']}` exists")
+            try:
+                ensure_migrations_table(cfg["metrics_db"])
+                applied = applied_migration_ids(cfg["metrics_db"])
+                pending = [m for m in MIGRATIONS if m.id not in applied]
+            except Exception as e:
+                problems.append(f"cannot read migrations table: {e}")
+                log.error(f"[doctor] FAIL  migrations table unreadable: {e}")
+            else:
+                if pending:
+                    log.error(f"[doctor] FAIL  {len(pending)} pending migration(s): "
+                              f"{', '.join(str(m.id) for m in pending)}")
+                    problems.append(
+                        f"{len(pending)} unapplied migration(s) "
+                        f"({', '.join(str(m.id) for m in pending)})"
+                    )
+                else:
+                    log.info("[doctor] OK    migrations up to date")
+
+        # Fix path: full DB bootstrap (CREATE DATABASE + DDL + migrate).
+        # Only attempt if we got past the connect probe — no point if
+        # MySQL itself is unreachable.
+        if fix and db_reachable and (not db_present or pending):
+            _bootstrap_database()
+            problems = [p for p in problems
+                        if "database `" not in p and "unapplied migration" not in p]
+
+    # --- summary --------------------------------------------------------
+    if problems:
+        log.error(f"[doctor] {len(problems)} unresolved issue(s):")
+        for p in problems:
+            log.error(f"  - {p}")
+        if not fix:
+            log.error("  Re-run with --fix to attempt automatic repair.")
+        return 1
+    log.info("[doctor] all checks passed")
+    return 0
 
 
 DOWNLOAD_EXTS = [
@@ -3131,6 +3456,14 @@ def cmd_whoisonline(args):
 # ---------------------------------------------------------------------------
 
 def cmd_tick(args):
+    # Self-repair before any DB-touching work.  No-op for non-apache
+    # users (dev shells, root, A/B harness); on apache it lazy-creates
+    # the install tree + metrics DB + tables on a fresh hub so cron can
+    # take a brand-new access.cfg straight to a working pipeline
+    # without an operator-driven setup-db / migrate sequence.
+    if not args.dry_run:
+        _self_bootstrap()
+
     # Capture the minute now so we can decide on the metrics run
     # before whoisonline consumes any time.
     at_metrics_tick = (datetime.now().minute == 30)
@@ -7587,7 +7920,12 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
 def cmd_run(args):
     dry_run = args.dry_run
 
+    # Self-repair before lock acquire (the lock file lives under
+    # HZMETRICS_HOME/state which bootstrap is responsible for creating).
+    # Idempotent + apache-gated; see _self_bootstrap.  Skipped when
+    # invoked from cmd_tick (already ran there) and during dry-run.
     if not dry_run:
+        _self_bootstrap()
         if not acquire_lock():
             log.info(f"[run] still running — skipping.")
             return
@@ -7876,6 +8214,24 @@ def main() -> None:
     p_migrate = sub.add_parser("migrate", help="Show or apply schema migrations")
     p_migrate.set_defaults(func=cmd_migrate)
     p_migrate.add_argument("--apply", action="store_true", help="Apply all pending migrations")
+
+    p_init = sub.add_parser(
+        "init",
+        help="One-shot install bootstrap: create expected dirs, "
+             "create the metrics database, run setup-db DDL, apply "
+             "migrations.  Idempotent — safe to re-run.")
+    p_init.set_defaults(func=cmd_init)
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Diagnose install health.  Reports every dir / DB / "
+             "migration issue first; --fix attempts to repair what's "
+             "safely repairable.")
+    p_doctor.set_defaults(func=cmd_doctor)
+    p_doctor.add_argument(
+        "--fix", action="store_true",
+        help="Attempt to repair (run the same dir + DB + migrate "
+             "bootstrap _self_bootstrap uses on cron startup)")
 
     p_dnload = sub.add_parser("backfill-dnload", help="Populate web.dnload flag for historical rows")
     p_dnload.set_defaults(func=cmd_backfill_dnload)
