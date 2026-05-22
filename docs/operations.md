@@ -665,7 +665,7 @@ first.
 ## Logs and observability
 
 Three destinations, all populated simultaneously with ISO 8601
-timestamps (`2026-05-21T14:05:49-04:00`):
+timestamps to millisecond precision (`2026-05-21T14:05:49.123-04:00`):
 
 ```
 /var/log/hubzero/metrics/manage.log     # DEBUG+ — authoritative file (HZMETRICS_LOG override)

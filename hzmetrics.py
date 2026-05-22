@@ -175,17 +175,18 @@ STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
 # ---------------------------------------------------------------------------
 
 class _IsoFormatter(logging.Formatter):
-    """Logger output uses ISO 8601 with the `T` date/time separator and a
-    local-timezone offset suffix: `2026-05-21T14:05:49-04:00`.  Single
-    machine-parseable form across stderr, file, and syslog handlers;
-    unambiguous regardless of the operator's timezone or how their
-    downstream tooling parses timestamps."""
+    """Logger output uses ISO 8601 with the `T` date/time separator,
+    millisecond precision, and a local-timezone offset suffix
+    (e.g. `2026-05-21T14:05:49.123-04:00`).  Single machine-parseable
+    form across stderr, file, and syslog handlers; unambiguous
+    regardless of the operator's timezone or how their downstream
+    tooling parses timestamps."""
 
     _LOCAL_TZ = datetime.now().astimezone().tzinfo
 
     def formatTime(self, record, datefmt=None):  # noqa: ARG002
         dt = datetime.fromtimestamp(record.created, tz=self._LOCAL_TZ)
-        return dt.isoformat(timespec="seconds")
+        return dt.isoformat(timespec="milliseconds")
 
 
 def setup_logging() -> None:
