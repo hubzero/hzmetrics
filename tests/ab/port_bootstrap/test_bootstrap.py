@@ -90,17 +90,25 @@ class ExpectedDirsTests(unittest.TestCase):
 
     def test_includes_log_staging_and_imports(self):
         names = [str(d) for d in self.hz._expected_dirs()]
-        # Source-side: where the logrotate / hub processes drop the
-        # files we ingest.
-        self.assertTrue(any(n.endswith("/httpd/daily")    for n in names))
-        self.assertTrue(any(n.endswith("/hubzero/daily")  for n in names))
+        # Source-side: where logrotate / hub processes drop the files
+        # we ingest.  The apache parent differs by distro — /var/log/
+        # httpd on RHEL/Rocky vs /var/log/apache2 on Debian/Ubuntu —
+        # so check for the daily/imported suffix under either parent.
+        def _has(suffix):
+            return any(n.endswith(suffix) for n in names)
+        self.assertTrue(_has("/httpd/daily") or _has("/apache2/daily"),
+                        f"apache daily dir missing from {names!r}")
+        self.assertTrue(_has("/hubzero/daily"),
+                        f"hubzero daily dir missing from {names!r}")
         # Sink-side: where archive-logs moves imported files to.
-        self.assertTrue(any(n.endswith("/httpd/imported")    for n in names))
-        self.assertTrue(any(n.endswith("/hubzero/imported")  for n in names))
+        self.assertTrue(_has("/httpd/imported") or _has("/apache2/imported"),
+                        f"apache imported dir missing from {names!r}")
+        self.assertTrue(_has("/hubzero/imported"),
+                        f"hubzero imported dir missing from {names!r}")
         # Stage-side: where fetch-logs deposits the temporary working
         # copies (also the home of manage.log).
-        self.assertTrue(any(n.endswith("/var/log/hubzero/metrics")
-                            for n in names))
+        self.assertTrue(_has("/var/log/hubzero/metrics"),
+                        f"metrics staging dir missing from {names!r}")
 
 
 class BootstrapDirsTests(unittest.TestCase):
