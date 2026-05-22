@@ -29,8 +29,12 @@ echo
 passed=0
 for i in $(seq 1 "$ITERS"); do
     seed=$((SEED_BASE + i))
-    # Generate the random fixture
-    "$PY" "$DIR/gen_hostnames.py" "$HOSTS" "$seed" > "$OUT/seed_${seed}.sql"
+    # Generate the random fixture.  gen_hostnames.py emits
+    # `USE foo_metrics_test;` as the placeholder DB name from the
+    # template era; rewrite to the active METRICS_DB on load.
+    "$PY" "$DIR/gen_hostnames.py" "$HOSTS" "$seed" \
+        | sed "s/^USE foo_metrics_test;/USE \`$METRICS_DB\`;/" \
+        > "$OUT/seed_${seed}.sql"
 
     # ── legacy run ───────────────────────────────────────────────
     reset_test_dbs > /dev/null

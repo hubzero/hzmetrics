@@ -24,7 +24,11 @@ echo
 passed=0
 for i in $(seq 1 "$ITERS"); do
     seed=$((SEED_BASE + i))
-    "$PY" "$DIR/gen_web_events.py" "$EVENTS" "$seed" > "$OUT/seed_${seed}.sql"
+    # gen_web_events.py emits `USE foo_metrics_test;` as a placeholder
+    # DB name; rewrite to the active METRICS_DB on load.
+    "$PY" "$DIR/gen_web_events.py" "$EVENTS" "$seed" \
+        | sed "s/^USE foo_metrics_test;/USE \`$METRICS_DB\`;/" \
+        > "$OUT/seed_${seed}.sql"
 
     # ── legacy ────────────────────────────────────────────────
     reset_test_dbs > /dev/null

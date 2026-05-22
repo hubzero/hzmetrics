@@ -3472,18 +3472,26 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                 f"wall={dns_dt:.1f}s rate={rate:.0f} IPs/s")
 
             # Phase 3: write resolved hosts back to the target table via
-            # JOIN-UPDATE.  Skip the "?" placeholder rows (no PTR
-            # available).  LOWER(d.host) normalises PTR records on write
-            # so downstream fill-domain can JOIN on t.host = d.host
-            # (indexed) instead of LOWER(t.host) = d.host (function
-            # defeats the index).
+            # JOIN-UPDATE.  The "?" placeholder is persisted on purpose
+            # — it marks "we tried, no PTR available" and prevents the
+            # next resolve-dns pass from retrying the same dead IPs
+            # (the scan filter is `host IS NULL OR host = ''`, so a
+            # row with host='?' falls out of the work set).  Matches
+            # the legacy xlogfix_dns_v2.sh behavior; the pre-2026-05
+            # variant of this port dropped the '?' writeback, which
+            # caused every tick to re-resolve the same unresolvable
+            # IPs and surfaced as a port_pipeline A/B divergence on
+            # web.host / web.domain.  LOWER(d.host) normalises PTR
+            # records on write so downstream fill-domain can JOIN on
+            # t.host = d.host (indexed) instead of LOWER(t.host) =
+            # d.host (function defeats the index).
             t_apply = time.monotonic()
             update_date_pred = _build_pred("t.")
             cur.execute(
                 f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
                 f"SET t.host = LOWER(d.host) "
                 f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred} "
-                f"  AND d.host IS NOT NULL AND d.host <> '?'")
+                f"  AND d.host IS NOT NULL")
             updated = cur.rowcount
             apply_dt = time.monotonic() - t_apply
             log.info(f"[resolve-dns] applied: {updated} rows updated in {table}  "

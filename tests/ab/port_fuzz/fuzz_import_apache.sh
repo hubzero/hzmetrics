@@ -28,17 +28,22 @@ for i in $(seq 1 "$ITERS"); do
     "$PY" "$DIR/gen_apache_log.py" "$LINES" "$seed" > "$log_file"
 
     # ── legacy ────────────────────────────────────────────────
+    # Exclude `dnload` from the dump: the new import-apache sets it
+    # inline at insert time, the legacy import doesn't touch it, so a
+    # raw column-by-column diff always disagrees on that one field.
+    # The port_import_apache test already excludes dnload for the same
+    # reason; pin the same handling here.
     reset_test_dbs > /dev/null
     run_legacy_php import/xlogimport_apache.php "$log_file" \
         > "$OUT/seed_${seed}_legacy.log" 2>&1
-    dump_full web "$METRICS_DB" "datetime, ip, content" \
+    dump_full web "$METRICS_DB" "datetime, ip, content" "dnload" \
         > "$OUT/seed_${seed}_legacy_web.tsv"
 
     # ── new ───────────────────────────────────────────────────
     reset_test_dbs > /dev/null
     run_new import-apache "$log_file" \
         > "$OUT/seed_${seed}_new.log" 2>&1
-    dump_full web "$METRICS_DB" "datetime, ip, content" \
+    dump_full web "$METRICS_DB" "datetime, ip, content" "dnload" \
         > "$OUT/seed_${seed}_new_web.tsv"
 
     # ── diff ──────────────────────────────────────────────────
