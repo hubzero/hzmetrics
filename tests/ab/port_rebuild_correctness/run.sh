@@ -19,7 +19,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 
-export HZMETRICS_ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-$AB/fixtures/test_access_geodynamics.cfg}"
 . "$AB/conftest.sh"
 
 OUT="$DIR/_out"

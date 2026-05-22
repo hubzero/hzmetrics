@@ -2,13 +2,13 @@
 # Integration test: _wipe_month_data deletes exactly the target month's
 # rows from the base + summary tables, and leaves other months untouched.
 #
-# Hits the real test DB (geodynamics_metrics_test) so we're testing the
-# actual DELETE SQL, not a mock.
+# Hits the real test DB so we're testing the actual DELETE SQL, not a
+# mock.  conftest.sh resolves the right access.cfg for the host
+# (CI-patched test_access.cfg, the per-hub starter, etc.).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AB="$(cd "$DIR/.." && pwd)"
 
-export HZMETRICS_ACCESS_CFG="${HZMETRICS_ACCESS_CFG:-$AB/fixtures/test_access_geodynamics.cfg}"
 . "$AB/conftest.sh"
 
 OUT="$DIR/_out"
