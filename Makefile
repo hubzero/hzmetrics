@@ -1,7 +1,7 @@
 # Build / install for hzmetrics.
 #
 # Production install (run on the target HUBzero host):
-#   sudo make install                       # install under /opt/hubzero/metrics, no root needed beyond bootstrap
+#   sudo make install                       # install under /opt/hubzero/metrics (root required to set ownership)
 #   sudo make uninstall                     # remove /opt/hubzero/metrics tree
 #
 # Dev / CI:
@@ -33,11 +33,14 @@ POSTROTATE_DST     := $(BIN_DST)/hzmetrics-postrotate.sh
 CRON_TEMPLATE_DST  := $(CONF_DST)/cron.apache
 CONF_SAMPLE_DST    := $(CONF_DST)/hzmetrics.conf.sample
 
-.PHONY: help install install-bootstrap uninstall test test-ab lint \
+.PHONY: help install install-bootstrap install-deps uninstall test test-ab lint \
         install-script install-logrotate install-cron-template install-conf-sample
 
 help:  ## List all targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z][a-zA-Z0-9_-]*:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+install-deps:  ## Install Python dependencies system-wide (run as root; sets umask 022 so files are world-readable)
+	umask 022 && python3.11 -m pip install aiodns pymysql
 
 install-bootstrap:  ## One-time root step: create HZMETRICS_HOME owned by INSTALL_OWNER
 	install -d -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0750 \

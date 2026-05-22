@@ -1080,7 +1080,7 @@ def _bootstrap_database() -> None:
             log.error("[bootstrap] setup-db DDL failed — aborting")
             raise SystemExit(2)
 
-    _apply_pending_migrations(metrics_db, source="bootstrap")
+    _apply_pending_migrations(metrics_db, source="bootstrap", required_only=True)
 
 
 def _self_bootstrap() -> None:
@@ -1210,6 +1210,7 @@ class Migration:
     sql: str                         # uses {metrics_db} placeholder
     check_sql: str | None = None
     check_expect: int | None = None  # if set, "already applied" means count == this
+    required: bool = True            # False = performance/optional; skipped by init/bootstrap
 
 MIGRATIONS = [
     Migration(
@@ -1217,18 +1218,21 @@ MIGRATIONS = [
         description="Index web(dnload) — applied by backfill-dnload May 2026",
         sql="ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';",
+        required=False,
     ),
     Migration(
         id=2,
         description="Composite index web(sessionid, dnload) — covering index for download_users JOIN",
         sql="ALTER TABLE {metrics_db}.web ADD INDEX web_sessionid_dnload (sessionid, dnload);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='web_sessionid_dnload';",
+        required=False,
     ),
     Migration(
         id=3,
         description="Composite index websessions(datetime, jobs, duration, ipcountry) — filter pushdown for int/download_users",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_datetime_jobs_dur_country (datetime, jobs, duration, ipcountry);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_datetime_jobs_dur_country';",
+        required=False,
     ),
     Migration(
         id=4,
@@ -1236,18 +1240,21 @@ MIGRATIONS = [
         sql="DELETE FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
         check_sql="SELECT COUNT(*) FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
         check_expect=0,
+        required=False,
     ),
     Migration(
         id=5,
         description="Index websessions(domain) — speeds up domainclass JOIN in download org queries",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_domain (domain);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_domain';",
+        required=False,
     ),
     Migration(
         id=6,
         description="Index websessions(jobs, ipcountry, duration) — period-14 all-time download_users filter",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_jobs_country_dur (jobs, ipcountry, duration);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_jobs_country_dur';",
+        required=False,
     ),
     Migration(
         id=7,
@@ -1327,6 +1334,7 @@ for _i, _tbl in enumerate(_INNODB_CONVERT_TABLES):
             f"WHERE table_schema='{{metrics_db}}' "
             f"AND table_name='{_tbl}' AND engine='InnoDB';"
         ),
+        required=False,
     ))
 del _i, _tbl
 
@@ -1348,6 +1356,7 @@ MIGRATIONS.extend([
                    "WHERE host IS NOT NULL AND host <> '' "
                    "  AND BINARY host <> BINARY LOWER(host);"),
         check_expect=0,
+        required=False,
     ),
     Migration(
         id=37,
@@ -1358,6 +1367,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_host';"
         ),
+        required=False,
     ),
     Migration(
         id=38,
@@ -1369,6 +1379,7 @@ MIGRATIONS.extend([
                    "WHERE host IS NOT NULL AND host <> '' "
                    "  AND BINARY host <> BINARY LOWER(host);"),
         check_expect=0,
+        required=False,
     ),
     Migration(
         id=39,
@@ -1379,6 +1390,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
             "  AND index_name='ws_host';"
         ),
+        required=False,
     ),
     Migration(
         id=40,
@@ -1390,6 +1402,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
             "  AND engine='InnoDB';"
         ),
+        required=False,
     ),
     Migration(
         id=41,
@@ -1402,6 +1415,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND engine='InnoDB';"
         ),
+        required=False,
     ),
     Migration(
         id=42,
@@ -1414,6 +1428,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_dt_ip';"
         ),
+        required=False,
     ),
     Migration(
         id=43,
@@ -1428,6 +1443,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_dnload_dt';"
         ),
+        required=False,
     ),
     Migration(
         id=44,
@@ -1506,19 +1522,29 @@ def _automark_applied(metrics_db: str) -> None:
 def applied_migration_ids(metrics_db: str) -> set[int]:
     return set(mysql_column(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;"))
 
-def _apply_pending_migrations(metrics_db: str, *, source: str = "migrate") -> None:
+def _apply_pending_migrations(metrics_db: str, *, source: str = "migrate",
+                               required_only: bool = False) -> None:
     """Apply every MIGRATIONS entry not yet recorded in the tracker
     table.  Shared by cmd_migrate (operator-driven) and _self_bootstrap
     (cron-driven on the first tick of a fresh install).  `source` only
     affects the log prefix so the two callers stay distinguishable in
-    journalctl / manage.log."""
+    journalctl / manage.log.
+
+    When `required_only` is True only migrations with required=True are
+    applied — used by init/bootstrap so that long-running optional
+    performance migrations (large-table InnoDB conversions, index builds)
+    don't block the initial install.  Run `migrate --apply` afterwards to
+    apply the remainder at a convenient time."""
     ensure_migrations_table(metrics_db)
     applied = applied_migration_ids(metrics_db)
-    pending = [m for m in MIGRATIONS if m.id not in applied]
-    if not pending:
+    candidates = [m for m in MIGRATIONS if m.id not in applied]
+    if required_only:
+        candidates = [m for m in candidates if m.required]
+    if not candidates:
         return
-    log.info(f"[{source}] {len(pending)} pending migration(s)")
-    for m in pending:
+    log.info(f"[{source}] {len(candidates)} pending migration(s)"
+             + (" (required only)" if required_only else ""))
+    for m in candidates:
         sql = m.sql.format(metrics_db=metrics_db)
         log.info(f"[{source}] [{m.id}] {m.description}")
         log.info(f"    {sql}")
@@ -1542,25 +1568,29 @@ def cmd_migrate(args):
     ensure_migrations_table(metrics_db)
     applied = applied_migration_ids(metrics_db)
 
-    log.info(f"{'ID':<4}  {'STATUS':<9}  DESCRIPTION")
-    log.info("-" * 72)
+    log.info(f"{'ID':<4}  {'STATUS':<9}  {'TYPE':<11}  DESCRIPTION")
+    log.info("-" * 80)
     for m in MIGRATIONS:
         status = "applied" if m.id in applied else "PENDING"
-        log.info(f"{m.id:<4}  {status:<9}  {m.description}")
+        kind = "required" if m.required else "performance"
+        log.info(f"{m.id:<4}  {status:<9}  {kind:<11}  {m.description}")
 
     pending = [m for m in MIGRATIONS if m.id not in applied]
     if not pending:
         log.info("All migrations applied.")
         return
 
-    log.info(f"{len(pending)} pending migration(s).")
+    req = sum(1 for m in pending if m.required)
+    opt = len(pending) - req
+    log.info(f"{len(pending)} pending migration(s): {req} required, {opt} performance.")
 
     if not args.apply:
-        log.info("Run with --apply to execute them.")
+        log.info("Run with --apply to execute them, or --apply --required-only for required only.")
         return
 
     log.debug(f"=== hzmetrics.py migrate --apply  @ {datetime.now()} ===")
-    _apply_pending_migrations(metrics_db, source="migrate")
+    _apply_pending_migrations(metrics_db, source="migrate",
+                              required_only=args.required_only)
     log.info(">>> done")
 
 
@@ -2137,15 +2167,23 @@ def cmd_doctor(args):
                 problems.append(f"cannot read migrations table: {e}")
                 log.error(f"[doctor] FAIL  migrations table unreadable: {e}")
             else:
-                if pending:
-                    log.error(f"[doctor] FAIL  {len(pending)} pending migration(s): "
-                              f"{', '.join(str(m.id) for m in pending)}")
+                req_pending = [m for m in pending if m.required]
+                opt_pending = [m for m in pending if not m.required]
+                if req_pending:
+                    log.error(f"[doctor] FAIL  {len(req_pending)} required migration(s) pending: "
+                              f"{', '.join(str(m.id) for m in req_pending)}")
                     problems.append(
-                        f"{len(pending)} unapplied migration(s) "
-                        f"({', '.join(str(m.id) for m in pending)})"
+                        f"{len(req_pending)} unapplied required migration(s) "
+                        f"({', '.join(str(m.id) for m in req_pending)})"
                     )
+                elif pending:
+                    log.info("[doctor] OK    migrations up to date (required)")
                 else:
                     log.info("[doctor] OK    migrations up to date")
+                if opt_pending:
+                    log.info(f"[doctor] INFO  {len(opt_pending)} optional performance migration(s) pending: "
+                             f"{', '.join(str(m.id) for m in opt_pending)} "
+                             f"— run `migrate --apply` when convenient")
 
         # Fix path: full DB bootstrap (CREATE DATABASE + DDL + migrate).
         # Only attempt if we got past the connect probe — no point if
@@ -2153,7 +2191,7 @@ def cmd_doctor(args):
         if fix and db_reachable and (not db_present or pending):
             _bootstrap_database()
             problems = [p for p in problems
-                        if "database `" not in p and "unapplied migration" not in p]
+                        if "database `" not in p and "unapplied required migration" not in p]
 
     # --- summary --------------------------------------------------------
     if problems:
@@ -3399,7 +3437,7 @@ def _whoisonline_resolve_dns(conn, hub_db, db_prefix):
         # is wrong.
         log.warning(f"[whoisonline] aiodns unavailable ({e}); "
                     f"{len(unresolved)} session(s) will have "
-                    f"host=ip (install python3-aiodns to fix)")
+                    f"host=ip (install via: sudo -H python3.11 -m pip install aiodns)")
         pairs = [(ip, ip) for ip in unresolved]
 
     with conn.cursor() as cur:
@@ -8318,7 +8356,9 @@ def main() -> None:
 
     p_migrate = sub.add_parser("migrate", help="Show or apply schema migrations")
     p_migrate.set_defaults(func=cmd_migrate)
-    p_migrate.add_argument("--apply", action="store_true", help="Apply all pending migrations")
+    p_migrate.add_argument("--apply", action="store_true", help="Apply pending migrations")
+    p_migrate.add_argument("--required-only", action="store_true",
+                           help="With --apply: skip optional performance migrations")
 
     p_init = sub.add_parser(
         "init",

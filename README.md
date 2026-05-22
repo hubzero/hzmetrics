@@ -35,11 +35,12 @@ bug-for-bug parity target the A/B test harness compares against.
 ## Quickstart
 
 ```sh
-# 1. Lay down the install tree (only root step — once per host).
+# 1. Lay down the install tree and Python dependencies (root, once per host).
 sudo make install-bootstrap
+sudo make install-deps
 
 # 2. Install the script + cron + logrotate hook + sample conf.
-sudo -u apache make install
+sudo make install
 
 # 3. Drop your DB credentials in place.
 sudo -u apache install -m 640 access.cfg \
