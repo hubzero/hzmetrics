@@ -1226,6 +1226,31 @@ MIGRATIONS.extend([
             "  AND index_name='web_dnload_dt';"
         ),
     ),
+    Migration(
+        id=44,
+        description=("imported_sources table — tracks per-file import "
+                     "atomicity for crash recovery.  filename UNIQUE per "
+                     "target table prevents duplicate inserts on retry "
+                     "after a post-commit, pre-move crash; pk_start/pk_end "
+                     "bound the inserted rows so forget-import (or any "
+                     "recovery) can DELETE the data via an indexed PK "
+                     "range — works at nanoHUB 800M-row scale because the "
+                     "range scan is bounded by file size, not table size."),
+        sql=("CREATE TABLE IF NOT EXISTS {metrics_db}.imported_sources ("
+             "  id BIGINT PRIMARY KEY AUTO_INCREMENT,"
+             "  filename VARCHAR(255) NOT NULL,"
+             "  target_table ENUM('web','userlogin','webhits') NOT NULL,"
+             "  pk_start BIGINT NULL,"
+             "  pk_end BIGINT NULL,"
+             "  row_count BIGINT NOT NULL DEFAULT 0,"
+             "  imported_at DATETIME NOT NULL,"
+             "  UNIQUE KEY uniq_filename_target (filename, target_table)"
+             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;"),
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='{metrics_db}' AND table_name='imported_sources';"
+        ),
+    ),
 ])
 
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
@@ -1710,6 +1735,18 @@ METRICS_DB_DDL = [
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`k`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
+
+    """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`imported_sources` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `filename` varchar(255) NOT NULL,
+  `target_table` enum('web','userlogin','webhits') NOT NULL,
+  `pk_start` bigint(20) DEFAULT NULL,
+  `pk_end` bigint(20) DEFAULT NULL,
+  `row_count` bigint(20) NOT NULL DEFAULT 0,
+  `imported_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_filename_target` (`filename`,`target_table`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
 ]
 
 
@@ -1993,22 +2030,194 @@ def do_import_staged_logs(*, dry_run=False):
     return 0
 
 
+def _record_imported_source(cur, filename: str, target_table: str,
+                            pk_start: int | None, pk_end: int | None,
+                            row_count: int) -> bool:
+    """INSERT IGNORE into imported_sources, then UPDATE pk_range if we're
+    the first to record this (filename, target) pair.  Returns True if
+    this was a fresh insert (caller should do the data INSERT), False
+    if a prior committed run already recorded it (caller should skip
+    the data INSERT — typical post-commit-pre-move crash recovery)."""
+    _, _, _, metrics_db = db_credentials()
+    cur.execute(
+        f"INSERT IGNORE INTO {metrics_db}.imported_sources "
+        f"(filename, target_table, imported_at) VALUES (%s, %s, NOW())",
+        (filename, target_table))
+    if cur.rowcount == 0:
+        return False
+    src_id = cur.lastrowid
+    cur.execute(
+        f"UPDATE {metrics_db}.imported_sources "
+        f"SET pk_start = %s, pk_end = %s, row_count = %s "
+        f"WHERE id = %s",
+        (pk_start, pk_end, row_count, src_id))
+    return True
+
+
+def _move_to_imported(src_path: Path, imported_dir: Path) -> None:
+    """Move a source log file from daily/ to imported/.  Same-filesystem
+    rename is atomic; cross-filesystem falls back to copy+unlink via
+    shutil.move (rare but not catastrophic — if it fails after the
+    transaction committed, the imported_sources row makes the next
+    tick's retry skip the data INSERT and just retry the move)."""
+    imported_dir.mkdir(parents=True, exist_ok=True)
+    dst = imported_dir / src_path.name
+    shutil.move(str(src_path), str(dst))
+    log.info(f"  -> {dst}")
+
+
+def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
+    """Atomic per-file apache-log import:
+      1. Stream-decompress source → STAGED_APACHE
+      2. Open conn, BEGIN
+      3. INSERT IGNORE imported_sources(filename, 'web')
+      4. If first-time: parse + INSERT into web; capture pk_start..pk_end;
+         identify-bots; INSERT IGNORE imported_sources(filename, 'webhits')
+         and import-webhits if also first-time.
+      5. COMMIT — atomically commits imported_sources rows AND data rows
+      6. Move source → imported/  (best-effort; failure is recoverable)
+
+    Crash anywhere in 2-5 → InnoDB rolls back, file stays in daily/,
+    next tick re-imports cleanly.  Crash between 5 and 6 → next tick
+    sees imported_sources rowcount=0 → skips data, retries the move.
+    """
+    filename = src_path.name
+    HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
+
+    if dry_run:
+        log.info(f"[import-apache-atomic] [dry-run] {filename}")
+        return
+
+    # Stage the file (overwrites any prior staging — idempotent).
+    with open(STAGED_APACHE, "wb") as out:
+        _stream_decompress(src_path, out)
+    log.info(f"[import-apache-atomic] staged {filename} -> {STAGED_APACHE}")
+
+    conn = _open_db()
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            # web target
+            web_first = _record_imported_source(
+                cur, filename, "web", None, None, 0)
+            if web_first:
+                _rc, pk_start, pk_end, n = do_import_apache(
+                    str(STAGED_APACHE), conn=conn, dry_run=False)
+                if pk_start is not None:
+                    _, _, _, mdb = db_credentials()
+                    cur.execute(
+                        f"UPDATE {mdb}.imported_sources "
+                        f"SET pk_start=%s, pk_end=%s, row_count=%s "
+                        f"WHERE filename=%s AND target_table='web'",
+                        (pk_start, pk_end, n, filename))
+                do_identify_bots(str(STAGED_APACHE), conn=conn, dry_run=False)
+            else:
+                log.info(f"[import-apache-atomic] {filename}: web already "
+                         f"committed by prior run; skipping data INSERT")
+
+            # webhits target (no PK; just tracking).
+            webhits_first = _record_imported_source(
+                cur, filename, "webhits", None, None, 0)
+            if webhits_first:
+                _rc, _ps, _pe, n = do_import_webhits(
+                    str(STAGED_APACHE), conn=conn, dry_run=False)
+                _, _, _, mdb = db_credentials()
+                cur.execute(
+                    f"UPDATE {mdb}.imported_sources "
+                    f"SET row_count=%s "
+                    f"WHERE filename=%s AND target_table='webhits'",
+                    (n, filename))
+            else:
+                log.info(f"[import-apache-atomic] {filename}: webhits "
+                         f"already committed by prior run; skipping")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception(f"[import-apache-atomic] rollback on {filename}")
+        raise
+    finally:
+        conn.close()
+
+    # Outside the transaction — best-effort move.  If this fails, the
+    # imported_sources row makes the next attempt idempotent.
+    try:
+        _move_to_imported(src_path, HTTPD_IMPORTED)
+    except OSError as e:
+        log.warning(f"[import-apache-atomic] data committed for {filename} "
+                    f"but move failed: {e}; next tick will retry the move")
+
+
+def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> None:
+    """Atomic per-file cmsauth-log import.  Same shape as
+    _import_apache_file_atomic but for userlogin."""
+    filename = src_path.name
+    HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
+
+    if dry_run:
+        log.info(f"[import-auth-atomic] [dry-run] {filename}")
+        return
+
+    with open(STAGED_AUTH, "wb") as out:
+        _stream_decompress(src_path, out)
+    log.info(f"[import-auth-atomic] staged {filename} -> {STAGED_AUTH}")
+
+    conn = _open_db()
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            ul_first = _record_imported_source(
+                cur, filename, "userlogin", None, None, 0)
+            if ul_first:
+                _rc, pk_start, pk_end, n = do_import_auth(
+                    str(STAGED_AUTH), conn=conn, dry_run=False)
+                if pk_start is not None:
+                    _, _, _, mdb = db_credentials()
+                    cur.execute(
+                        f"UPDATE {mdb}.imported_sources "
+                        f"SET pk_start=%s, pk_end=%s, row_count=%s "
+                        f"WHERE filename=%s AND target_table='userlogin'",
+                        (pk_start, pk_end, n, filename))
+            else:
+                log.info(f"[import-auth-atomic] {filename}: userlogin "
+                         f"already committed by prior run; skipping")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception(f"[import-auth-atomic] rollback on {filename}")
+        raise
+    finally:
+        conn.close()
+
+    try:
+        _move_to_imported(src_path, HZ_IMPORTED)
+    except OSError as e:
+        log.warning(f"[import-auth-atomic] data committed for {filename} "
+                    f"but move failed: {e}; next tick will retry the move")
+
+
 def do_import_day(date_str, dry_run=False):
-    """Fetch, import, then archive logs for a single day.  date_str is
-    'YYYYMMDD'."""
+    """Per-source-file atomic import for one day.  Each source file is
+    its own commit unit: a partial import rolls back, file stays in
+    daily/, next tick re-imports cleanly.  A successful import that
+    crashes between COMMIT and the move-to-imported/ step is handled
+    by the imported_sources UNIQUE constraint on retry."""
     with _timed_stage(f"import-day {date_str}"):
+        access  = _source_files_matching("access", date_str)
+        cmsauth = _source_files_matching("auth",   date_str)
+
         if dry_run:
-            access  = _source_files_matching("access", date_str)
-            cmsauth = _source_files_matching("auth",   date_str)
             for f in access + cmsauth:
-                log.info(f"    [dry-run] would fetch: {f}")
+                log.info(f"    [dry-run] would import: {f}")
             if not access:
-                log.info(f"    [dry-run] WARNING: no access log found for {date_str} in any source dir")
+                log.info(f"    [dry-run] WARNING: no access log found for {date_str}")
             if not cmsauth:
-                log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str} in any source dir")
-        do_fetch_logs(       date_str, dry_run=dry_run)
-        do_import_staged_logs(         dry_run=dry_run)
-        do_archive_logs(     date_str, dry_run=dry_run)
+                log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str}")
+            return
+
+        for src in access:
+            _import_apache_file_atomic(src, dry_run=dry_run)
+        for src in cmsauth:
+            _import_auth_file_atomic(src, dry_run=dry_run)
 
 
 def cmd_fetch_logs(args):
@@ -3489,9 +3698,14 @@ def _ip_excluded(ip, filters):
             return True
     return False
 
-def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
+def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None):
     """Parse a cmsauth-format file and INSERT IGNORE every recognized
     auth event (with action ∈ {login, simulation}) into metrics.userlogin.
+
+    If `conn` is provided, the INSERTs run inside the caller's
+    transaction (caller owns commit/rollback) and the function
+    returns (rc, pk_start, pk_end, inserted) so the caller can record
+    the PK range in imported_sources for crash recovery.
 
     Deliberately diverges from legacy `xlogimport_authlog.php` (master
     branch), which inserted every action type unfiltered and relied on a
@@ -3514,16 +3728,23 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     if not metrics_db:
         msg = "[import-auth] missing metrics_db in access.cfg"
         log.info(msg)
-        return 2
+        return (2, None, None, 0) if conn is not None else 2
 
-    # Pull the IP exclusion list once
-    conn = _open_db(metrics_db)
-    try:
+    # Pull the IP exclusion list — use the caller's conn if we have
+    # one (so we don't open a second connection alongside their
+    # transaction), otherwise a short-lived one.
+    if conn is not None:
         with conn.cursor() as cur:
             cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
             ip_filters = [r[0] for r in cur.fetchall()]
-    finally:
-        conn.close()
+    else:
+        _fc = _open_db(metrics_db)
+        try:
+            with _fc.cursor() as cur:
+                cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+                ip_filters = [r[0] for r in cur.fetchall()]
+        finally:
+            _fc.close()
 
     rows = []
     unrec = 0
@@ -3582,10 +3803,15 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
         f"other-action skipped = {skipped_action}")
 
     if dry_run or not rows:
+        if conn is not None:
+            return 0, None, None, 0
         return 0
 
     inserted = 0
-    conn = _open_db(metrics_db)
+    pk_start: int | None = None
+    _owns_conn = (conn is None)
+    if _owns_conn:
+        conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
             sql = ("INSERT IGNORE INTO userlogin "
@@ -3593,9 +3819,12 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
                    "VALUES (%s, %s, %s, %s, %s)")
             for i in range(0, len(rows), batch_size):
                 cur.executemany(sql, rows[i:i + batch_size])
+                if pk_start is None and cur.lastrowid:
+                    pk_start = cur.lastrowid
                 inserted += cur.rowcount
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
     log.info(f"[import-auth] inserted {inserted} new row(s) into userlogin "
         f"(others were duplicates rejected by INSERT IGNORE)")
@@ -3612,6 +3841,10 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False):
     elif len(months_seen) == 2:
         log.info(f"[import-auth] rows span {sorted(months_seen)} "
                  f"(normal midnight/TZ-bleed)")
+
+    pk_end = (pk_start + inserted - 1) if (pk_start is not None and inserted) else None
+    if not _owns_conn:
+        return 0, pk_start, pk_end, inserted
     return 0
 
 def cmd_import_auth(args):
@@ -3756,7 +3989,7 @@ def _ua_is_bot(ua):
             return True
     return False
 
-def do_identify_bots(input_file, *, dry_run=False):
+def do_identify_bots(input_file, *, dry_run=False, conn=None):
     """Scan an apache-format staged log file, collect unique user-agent
     strings that match any of the bot substring filters, and INSERT IGNORE
     them into metrics.bot_useragents.  Then DELETE two whitelist
@@ -3805,7 +4038,9 @@ def do_identify_bots(input_file, *, dry_run=False):
                 log.info(f"  [dry-run] ... and {len(matched) - 5} more")
         return 0
 
-    conn = _open_db(metrics_db)
+    _owns_conn = (conn is None)
+    if _owns_conn:
+        conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
             cur.executemany(
@@ -3821,7 +4056,8 @@ def do_identify_bots(input_file, *, dry_run=False):
             )
             removed = cur.rowcount
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
     log.info(f"[identify-bots] inserted {inserted} new bot UA(s); "
         f"removed {removed} whitelist override(s)")
@@ -3854,10 +4090,17 @@ def _search_array(needle, filters):
 # Backwards-compatible alias for code that already called _ip_excluded.
 _ip_excluded = _search_array
 
-def do_import_webhits(input_file, *, dry_run=False):
+def do_import_webhits(input_file, *, dry_run=False, conn=None):
     """Aggregate per-day hit counts from an apache staged log and
     INSERT one row per day into metrics.webhits.  Faithful port of
     xlogimport_webhits.php.
+
+    If `conn` is provided, the INSERTs run inside the caller's
+    transaction (caller owns commit/rollback) and the function
+    returns (rc, None, None, inserted) for imported_sources tracking.
+    webhits has no auto-increment PK, so pk_start/pk_end are always
+    None — forget-import on webhits records logs a warning instead of
+    auto-deleting.
 
     Counted rows: status=200, bytes>0, method ∈ {GET,POST}, IP/UA/URL
     not matched by their respective exclude_list filters (substring,
@@ -3872,20 +4115,29 @@ def do_import_webhits(input_file, *, dry_run=False):
     if not metrics_db:
         msg = "[import-webhits] missing metrics_db in access.cfg"
         log.info(msg)
-        return 2
+        return (2, None, None, 0) if conn is not None else 2
 
-    # Pull filter lists once
-    conn = _open_db(metrics_db)
-    try:
+    # Pull filter lists — use the caller's conn if we have one,
+    # otherwise a short-lived one.
+    def _load_filters(cur):
+        cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+        ipf = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
+        uaf = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
+        urlf = [r[0] for r in cur.fetchall()]
+        return ipf, uaf, urlf
+
+    if conn is not None:
         with conn.cursor() as cur:
-            cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
-            ip_filters = [r[0] for r in cur.fetchall()]
-            cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
-            ua_filters = [r[0] for r in cur.fetchall()]
-            cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
-            url_filters = [r[0] for r in cur.fetchall()]
-    finally:
-        conn.close()
+            ip_filters, ua_filters, url_filters = _load_filters(cur)
+    else:
+        _fc = _open_db(metrics_db)
+        try:
+            with _fc.cursor() as cur:
+                ip_filters, ua_filters, url_filters = _load_filters(cur)
+        finally:
+            _fc.close()
 
     daily_hits = defaultdict(int)
     total = 0
@@ -3954,9 +4206,13 @@ def do_import_webhits(input_file, *, dry_run=False):
                 log.info(f"  [dry-run] {d}  hits={h}")
             if len(daily_hits) > 5:
                 log.info(f"  [dry-run] ... and {len(daily_hits) - 5} more day(s)")
+        if conn is not None:
+            return 0, None, None, 0
         return 0
 
-    conn = _open_db(metrics_db)
+    _owns_conn = (conn is None)
+    if _owns_conn:
+        conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
             cur.executemany(
@@ -3965,9 +4221,13 @@ def do_import_webhits(input_file, *, dry_run=False):
             )
             inserted = cur.rowcount
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
     log.info(f"[import-webhits] inserted {inserted} row(s) into webhits")
+    if not _owns_conn:
+        # webhits has no AUTO_INCREMENT PK — return pk_start/pk_end as None
+        return 0, None, None, inserted
     return 0
 
 def cmd_import_webhits(args):
@@ -4264,11 +4524,19 @@ def _is_referer_spam(url, referrer):
         return False
     return bool(_LOGIN_RETURN_RE.match(url) or _BROWSE_QUERY_RE.match(url))
 
-def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
+def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     """Parse an apache staged log file and INSERT eligible rows into
     metrics.web.  Faithful port of xlogimport_apache.php (the 1018cc2^
     snapshot — the column `dnload` did not exist yet in the legacy
     schema at that point).
+
+    If `conn` is provided, the INSERTs run inside the caller's
+    transaction (caller owns commit/rollback) and the function
+    returns (return_code, pk_start, pk_end, inserted_count) so the
+    caller can record the PK range in imported_sources for crash
+    recovery.  If `conn` is None, the function opens its own short-
+    lived connection with autocommit — backward-compatible path used
+    by the standalone `import-apache` CLI for ad-hoc imports.
 
     Eligibility:
       - regex matches new or old apache log format
@@ -4288,22 +4556,31 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     if not metrics_db:
         msg = "[import-apache] missing metrics_db in access.cfg"
         log.info(msg)
-        return 2
+        return (2, None, None, 0) if conn is not None else 2
 
-    # Load filter lists once
-    conn = _open_db(metrics_db)
-    try:
+    # Load filter lists — use the caller's conn if we have one,
+    # otherwise a short-lived one.
+    def _load_filters(cur):
+        cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
+        ipf = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
+        uaf = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
+        urlf = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT useragent FROM bot_useragents")
+        b = {r[0] for r in cur.fetchall()}
+        return ipf, uaf, urlf, b
+
+    if conn is not None:
         with conn.cursor() as cur:
-            cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
-            ip_filters = [r[0] for r in cur.fetchall()]
-            cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
-            ua_filters = [r[0] for r in cur.fetchall()]
-            cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
-            url_filters = [r[0] for r in cur.fetchall()]
-            cur.execute("SELECT useragent FROM bot_useragents")
-            bot_uas = {r[0] for r in cur.fetchall()}
-    finally:
-        conn.close()
+            ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
+    else:
+        _fc = _open_db(metrics_db)
+        try:
+            with _fc.cursor() as cur:
+                ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
+        finally:
+            _fc.close()
 
     log.info(f"[import-apache] loaded filters: "
         f"ip={len(ip_filters)} ua={len(ua_filters)} url={len(url_filters)} "
@@ -4341,7 +4618,10 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     # logrotate failure — log a warning so the operator can investigate.
     months_seen: set = set()
 
-    conn = _open_db(metrics_db)
+    _owns_conn = (conn is None)
+    if _owns_conn:
+        conn = _open_db(metrics_db)
+    pk_start: int | None = None
     try:
         with conn.cursor() as cur:
             with _open_input(input_file) as src:
@@ -4460,14 +4740,19 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
 
                     if len(rows_buf) >= batch_size and not dry_run:
                         cur.executemany(insert_sql, rows_buf)
+                        if pk_start is None and cur.lastrowid:
+                            pk_start = cur.lastrowid
                         inserted += cur.rowcount
                         rows_buf = []
 
             if rows_buf and not dry_run:
                 cur.executemany(insert_sql, rows_buf)
+                if pk_start is None and cur.lastrowid:
+                    pk_start = cur.lastrowid
                 inserted += cur.rowcount
     finally:
-        conn.close()
+        if _owns_conn:
+            conn.close()
 
     log.info(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
         f"eligible={len(rows_buf) if dry_run else inserted}; "
@@ -4491,6 +4776,13 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False):
     elif len(months_seen) == 2:
         log.info(f"[import-apache] rows span {sorted(months_seen)} "
                  f"(normal midnight/TZ-bleed)")
+
+    # Under single-writer flock, the inserted PKs are contiguous from
+    # pk_start through pk_start + inserted - 1.  Return the range so
+    # the caller can record it in imported_sources for crash recovery.
+    pk_end = (pk_start + inserted - 1) if (pk_start is not None and inserted) else None
+    if not _owns_conn:
+        return 0, pk_start, pk_end, inserted
     return 0
 
 def cmd_import_apache(args):
@@ -7409,6 +7701,62 @@ def cmd_rebuild_from(args):
     return 0
 
 
+def cmd_forget_import(args):
+    """Remove an imported_sources record AND the data rows it tracked.
+    After this, re-feeding the file (move from imported/ back to
+    daily/) triggers a fresh import on the next tick.
+
+    Operator use case: a previously imported file's data turned out to
+    be wrong (corrupt log, schema mismatch, bad day) and the operator
+    wants to redo from scratch.  Without forget-import, the
+    imported_sources UNIQUE constraint would skip the re-INSERT.
+
+    For 'web' / 'userlogin' targets, pk_start/pk_end identify the
+    inserted rows exactly — indexed PK-range DELETE.  For 'webhits'
+    (no AUTO_INCREMENT PK), data rows aren't auto-removed; this
+    command logs a warning and leaves them in place — operator
+    handles them manually if needed.
+    """
+    _, _, _, metrics_db = db_credentials()
+    rows = mysql_query(
+        f"SELECT id, target_table, pk_start, pk_end, row_count "
+        f"FROM {metrics_db}.imported_sources WHERE filename = %s "
+        f"ORDER BY target_table",
+        (args.filename,))
+    if not rows:
+        log.info(f"[forget-import] no record found for {args.filename}")
+        return 1
+    if args.table and args.table != "all":
+        rows = [r for r in rows if r[1] == args.table]
+        if not rows:
+            log.info(f"[forget-import] no '{args.table}' record for "
+                     f"{args.filename}")
+            return 1
+    for src_id, table, pk_start, pk_end, row_count in rows:
+        if pk_start is not None and pk_end is not None:
+            if args.dry_run:
+                log.info(f"[forget-import] [dry-run] would DELETE FROM "
+                         f"{table} id IN [{pk_start}, {pk_end}] "
+                         f"(~{row_count} row(s))")
+            else:
+                mysql_exec(
+                    f"DELETE FROM {metrics_db}.{table} "
+                    f"WHERE id BETWEEN %s AND %s",
+                    (pk_start, pk_end))
+                log.info(f"[forget-import] removed {row_count} row(s) from "
+                         f"{table} (id {pk_start}..{pk_end})")
+        else:
+            log.warning(f"[forget-import] {table} record for {args.filename} "
+                        f"has no PK range (table likely has no AUTO_INCREMENT "
+                        f"— webhits).  Data rows NOT auto-removed; operator "
+                        f"must clean {table} manually if desired.")
+        if not args.dry_run:
+            mysql_exec(
+                f"DELETE FROM {metrics_db}.imported_sources WHERE id = %s",
+                (src_id,))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -7451,6 +7799,17 @@ def main() -> None:
     p_rf.set_defaults(func=cmd_rebuild_from)
     p_rf.add_argument("month", metavar="YYYY-MM",
         help="Cursor to start rebuilding from (validated; refuses future months)")
+
+    p_fi = sub.add_parser("forget-import",
+        help="Remove imported_sources record + data rows for a file (enables re-import)")
+    p_fi.set_defaults(func=cmd_forget_import)
+    p_fi.add_argument("filename", metavar="FILENAME",
+        help="Source filename as recorded in imported_sources")
+    p_fi.add_argument("--table", choices=["web", "userlogin", "webhits", "all"],
+        default="all",
+        help="Target table to forget (default: all targets for this filename)")
+    p_fi.add_argument("--dry-run", action="store_true",
+        help="Show what would be deleted without doing it")
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     p_process.set_defaults(func=cmd_process)

@@ -17,6 +17,7 @@ tests=(
     port_empty_input
     port_fuzz
     port_idempotency
+    port_import_atomic
     port_invariants
     port_determinism
     port_lock
