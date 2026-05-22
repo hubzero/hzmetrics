@@ -235,15 +235,79 @@ Net: a heavy rebuild tick should drop from 30–50 min to a few
 minutes.  Compounds with everything else (no need for the dedicated
 `(dnload, datetime)` index, etc.).
 
+### Storage cost — be honest
+
+`monthly_seen` is not a small table.  Sized on geodynamics 2026-05:
+
+- Per-month distinct `(ip, host)` averages 200k–400k tuples across
+  the 4-year history.  Heavy bot-traffic months reach 500k–1M.
+- Row width ~500 B with PK + secondary indexes.
+- Projected 4-year total: ~12 M rows, **~6 GB**.
+
+That's bigger than the current `websessions` (~1.3 GB), smaller than
+current `web` (~13 GB).  On a hub with disk headroom this is a clear
+disk-for-CPU win; on geodynamics specifically (16 GB free on
+/var/lib/mysql today) it'd be a meaningful commitment.
+
+Critically, the bulk of `monthly_seen`'s rows aren't real users —
+they're surviving bot / crawler traffic.  The 2026-05 websessions
+audit showed sessions-per-event ≈ 1.05, meaning almost every
+"session" is a single-hit crawler with a fresh IP.  A crawl that
+rotates through 100k IPs in a month adds 100k `monthly_seen` rows
+that represent zero real visitors.  So the size scales with how
+tight the upstream bot filtering is — see the next section.
+
+### Alternatives if size is the binding constraint
+
+In rough order of preference if disk is tight:
+
+1. **Materialize period 14 only.**  Build just
+   `all_time_seen(ip, host, first_seen, …)` and leave the other
+   periods doing live JOINs.  ~150k rows × ~50 B = ~30–60 MB on
+   geodynamics — three orders of magnitude smaller than full
+   `monthly_seen`.  Only the worst-case period gets the speed
+   boost (5–25 min → ms), but that's a real chunk of the
+   slowness.  Modest win, very cheap, easy to validate.
+
+2. **Time-bound retention.**  Keep `monthly_seen` only for the
+   most recent N months; for months older than N, mark them
+   "frozen" — assume their summary cells don't change.  Pairs
+   naturally with the deep-prune plan in
+   "Web table retention" — the same frozen flag protects both
+   `web` (against re-import) and `monthly_seen` (against
+   re-population).  Caps storage to a known size at the cost
+   of no longer being able to retroactively rebuild old months.
+
+3. **HyperLogLog sketches per (month, country, orgtype).**
+   Fixed-size 16 KB blob per group, mergeable across months for
+   any window with ~2 % approximation error.  Tiny storage
+   (~50 MB total for all history).  No MySQL native HLL
+   support, so it'd live as opaque blobs with Python-side
+   merge.  Architecturally different and more complex; only
+   worth it if both #1 and #2 are insufficient.
+
+4. **Per-(month, country, orgtype) row counts only.**  Drop the
+   per-`(ip, host)` granularity entirely — store only an
+   integer count for each cell.  Tiny (~1 MB total), but you
+   lose cross-month dedup so wide-window periods over-count
+   visitors who appear in multiple months.  Accept the
+   inaccuracy or give up wide-window correctness.  Not
+   recommended.
+
 ### Scope
 
-About 1–2 focused weeks: schema migration, population helper,
-read-path rewrites, one-time backfill, parity tests, cut-over.
-This is also the same data structure the deep-prune plan needs
-(both site-wide and per-resource), so the engineering investment is
-reusable.  Easiest to implement after the `resid_match` flag (see
-"Web table retention") since it pre-computes the per-resource bucket
-each row belongs to.
+About 1–2 focused weeks for the full design: schema migration,
+population helper, read-path rewrites, one-time backfill, parity
+tests, cut-over.  This is also the same data structure the deep-prune
+plan needs (both site-wide and per-resource), so the engineering
+investment is reusable.  Easiest to implement after the `resid_match`
+flag (see "Web table retention") since it pre-computes the
+per-resource bucket each row belongs to.
+
+If size is a hard constraint, start with alternative #1 (period-14
+only `all_time_seen`) — it's a few days of work, captures the worst
+single-period speedup, and informs whether the full design is worth
+it.
 
 ## Bot detection improvements
 
