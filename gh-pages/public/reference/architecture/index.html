@@ -78,7 +78,14 @@
 <li class="toc__item toc__item--level-3"><a href="#analyze-per-month-idempotent">analyze (per-month, idempotent)</a></li>
 <li class="toc__item toc__item--level-3"><a href="#summarize-per-month-full-re-aggregation">summarize (per-month, full re-aggregation)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#scheduling-and-concurrency">Scheduling and concurrency</a></li>
-<li class="toc__item toc__item--level-2"><a href="#state-files">State files</a></li>
+<li class="toc__item toc__item--level-2"><a href="#catchup-orchestration-state-machine">Catchup orchestration (state machine)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#why-three-modes">Why three modes</a></li>
+<li class="toc__item toc__item--level-3"><a href="#the-per-month-decision-matrix">The per-month decision matrix</a></li>
+<li class="toc__item toc__item--level-3"><a href="#source-log-discovery">Source-log discovery</a></li>
+<li class="toc__item toc__item--level-3"><a href="#catching-up-manually">Catching up manually</a></li>
+<li class="toc__item toc__item--level-2"><a href="#state">State</a></li>
+<li class="toc__item toc__item--level-2"><a href="#self-bootstrap">Self-bootstrap</a></li>
+<li class="toc__item toc__item--level-2"><a href="#files-on-disk">Files on disk</a></li>
 <li class="toc__item toc__item--level-2"><a href="#cli-surface">CLI surface</a></li>
 <li class="toc__item toc__item--level-2"><a href="#where-the-code-lives">Where the code lives</a></li>
   </ul>
@@ -110,7 +117,7 @@
 </table>
 <p>For a hub named <code>foo</code>, these are <code>foo</code> and <code>foo_metrics</code>
 respectively.  Credentials are in
-<code>/etc/hubzero-metrics/access.cfg</code> (owned <code>root:apache</code>, mode 640).
+<code>/opt/hubzero/metrics/conf/access.cfg</code> (owned <code>root:apache</code>, mode 640).
 The config file uses a bare <code>$var = 'value';</code> syntax that is read by
 both the Python pipeline and the Perl scripts under
 <a href="../tests/legacy/"><code>tests/legacy/</code></a>.</p>
@@ -215,12 +222,44 @@ both the Python pipeline and the Perl scripts under
 <td>IP / URL / useragent / domain filter</td>
 <td>Operator (via a CMS-side migration; pipeline only reads)</td>
 </tr>
+<tr>
+<td><code>imported_sources</code></td>
+<td>Staged log file already imported</td>
+<td><code>import</code> (one row per file per <code>target_table</code>)</td>
+</tr>
+<tr>
+<td><code>pipeline_state</code></td>
+<td>Orchestrator KV store (mode, cursor, dirty months, …)</td>
+<td><code>cmd_run</code></td>
+</tr>
+<tr>
+<td><code>migrations</code></td>
+<td>Schema-migration ledger</td>
+<td><code>migrate --apply</code> / <code>_self_bootstrap</code></td>
+</tr>
 </tbody>
 </table>
 <p>Reference tables that are read-only at pipeline runtime
 (<code>domainclass</code>, <code>classes</code>, <code>continents</code>, <code>countries</code>,
 <code>country_continent</code>, <code>regions</code>) are populated by
 <code>hzmetrics.py setup-db</code> and used during enrichment.</p>
+<p><strong>Storage engine.</strong>  All hot tables (<code>web</code>, <code>websessions</code>,
+<code>userlogin</code>, <code>webhits</code>, <code>toolstart</code>, <code>imported_sources</code>,
+<code>pipeline_state</code>, <code>migrations</code>, and the four <code>summary_*_vals</code>) are
+InnoDB.  Migrations #38 / #41 converted <code>web</code> and <code>websessions</code> from
+the original MyISAM, eliminating table-level write locks during
+analyze and unlocking row-level concurrency between
+<code>logfix-session</code>'s update phase and any read query.  The reference
+tables stay MyISAM — they're tiny, never written at runtime, and
+the engine choice doesn't matter operationally.</p>
+<p><code>imported_sources</code> is the crash-recovery key: each per-file import
+runs <code>INSERT IGNORE</code> against <code>(filename, target_table)</code>, then
+streams data, then <code>UPDATE</code>s the row with the inserted PK range,
+all inside one transaction.  A crash before COMMIT rolls back
+both halves; a crash between COMMIT and the file move leaves the
+marker as the no-op signal for the retry.  See
+<a href="../../operations/operations/#crash-recovery-forget-import">operations.md → Crash recovery: forget-import</a>
+for the operator-facing API.</p>
 <h3 id="summary-tables">Summary tables</h3>
 <p>The five output tables that drive the usage reporting UI.  All have
 the same shape:</p>
@@ -263,6 +302,21 @@ import-webhits → webhits (hourly aggregate)
 identify-bots → bot_useragents (table of known bot UAs)
 archive       → gzip and move daily logs into imported/
 </code></pre>
+<p><code>fetch</code> runs a disk-space pre-flight against <code>HZ_METRICS_STAGING</code>
+(<code>/var/log/hubzero/metrics/</code>) before concatenating: it sums the
+compressed input sizes, multiplies by a 6× decompressed-estimate
+factor, and aborts if the result wouldn't fit on the staging
+filesystem.  This catches the historical failure mode where a
+multi-day backlog filled <code>/var/log</code> mid-import and left half-written
+staging files that took manual cleanup to recover from.</p>
+<p>Each per-file import is wrapped in a single <code>BEGIN … COMMIT</code>
+transaction guarded by <code>INSERT IGNORE</code> into <code>imported_sources</code>.  See
+the table description above and <code>operations.md</code> for the crash-
+recovery contract.</p>
+<p>Every major stage is wrapped in <code>_timed_stage(name)</code> — a context
+manager that logs entry, exit, and wall-clock duration to
+<code>manage.log</code>.  Grepping <code>_timed_stage</code> output is the fastest way to
+spot which phase is the slow one on a given tick.</p>
 <h3 id="analyze-per-month-idempotent">analyze (per-month, idempotent)</h3>
 <p>Enrichment runs for the rows imported into <code>web</code>, <code>websessions</code>,
 <code>toolstart</code> since the last analyze.  Each step is restartable; each
@@ -287,6 +341,33 @@ andmore-usage         → jos_resource_stats (per-resource counts)
 month forward and sets <code>web.dnload</code> from the URL pattern.
 <code>import-apache</code> sets <code>dnload</code> inline on new rows, so this is only
 needed once after the column was introduced.</p>
+<p><code>do_analyze(month, sessions=...)</code> has a <code>sessions</code> parameter that
+controls whether the session-bound sub-stages run:</p>
+<ul>
+<li>
+<p><code>sessions=True</code> (the default) — runs every step above, including
+<code>logfix-session</code> and the <code>clean-bots</code> / <code>fill-ipcountry</code> passes
+against <code>websessions</code>.  Used by catchup, rebuild, and month-close
+normal ticks, where the month's input set is stable.</p>
+</li>
+<li>
+<p><code>sessions=False</code> — skips <code>logfix-session</code> and the
+websessions-bound steps; row-level enrichment (DNS, domain,
+country, clean-bots on web, fill-user-info, fill-ipcountry on
+web/toolstart) still runs.  Used by normal-mode for the
+still-incomplete current month, because daily logfix-session
+creates a fresh sessionid boundary at every tick (rows already
+stamped on a prior tick are excluded from the next pass by the
+<code>sessionid IS NULL OR sessionid = '0'</code> predicate, so a session
+that genuinely spans the tick boundary gets split).</p>
+</li>
+</ul>
+<p>The completeness signal <code>is_month_complete(prev)</code> decides when a
+normal-mode tick fires the month-close <code>sessions=True</code> analyze on
+prev: it returns True when either prev's last-day log file is in
+<code>imported/</code>, OR <code>web</code> has at least one row dated in the month after
+prev (a data-driven signal that import time has crossed the
+boundary; replaces the legacy <code>days_in &gt; 5</code> calendar fallback).</p>
 <h3 id="summarize-per-month-full-re-aggregation">summarize (per-month, full re-aggregation)</h3>
 <pre><code>build_userlogin_lite       (DROP + recreate from userlogin)
 build_login_ips_table      (temp table indexing registered-user IPs)
@@ -333,60 +414,256 @@ of <code>fill-domain</code> and is documented in the
 <a href="../../operations/testing/"><code>testing.md</code></a> and the commit message for that fix.</p>
 <h2 id="scheduling-and-concurrency">Scheduling and concurrency</h2>
 <p>One cron entry:</p>
-<pre><code>*/5 * * * *  apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+<pre><code>*/5 * * * *  apache  python3 /opt/hubzero/metrics/bin/hzmetrics.py tick
 </code></pre>
 <p><code>tick</code> does:</p>
 <ol>
 <li>Always: refresh <code>whoisonline</code> (jos_session_geo + xml map).</li>
-<li>If the wall clock minute is in <code>{30..34}</code>: try to acquire
-<code>/var/run/hzmetrics/hzmetrics.pid</code>.  If acquired, run the metrics
-pipeline.  If another <code>tick</code> holds the lock, exit cleanly.</li>
+<li>If the wall clock minute is <code>30</code>: invoke <code>cmd_run</code>.
+<code>cmd_run</code> acquires <code>/opt/hubzero/metrics/state/hzmetrics.pid</code> via
+<code>fcntl.flock</code>; if another <code>tick</code> holds it, exit cleanly.</li>
 </ol>
-<p>Inside <code>run</code>:</p>
-<ol>
-<li>Read <code>hzmetrics.state</code> (last-daily-run timestamp).  If a daily run
-completed today, exit without doing anything.</li>
-<li>Find the oldest pending log day.  If none, mark daily complete and
-exit.</li>
-<li>Process at most one full month of backlog per <code>run</code> invocation.</li>
-<li>Update <code>hzmetrics.state</code> if a full daily cycle finished.</li>
-</ol>
-<p>This is the catch-up mechanism: a long-stalled host gradually drains
-the log queue at one month per hour without operator intervention,
-without holding the lock for hours, and without skipping any data.</p>
-<p><code>tests/ab/port_dryrun/</code> verifies that <code>--dry-run</code> mode on every
-mutating subcommand performs zero database writes.
-<code>tests/ab/port_idempotency/</code> verifies that re-running the pipeline on
-already-processed state produces byte-identical output.
-<code>tests/ab/port_determinism/</code> verifies that two fresh-DB runs produce
-identical output.  See <a href="../../operations/testing/">testing.md</a>.</p>
-<h2 id="state-files">State files</h2>
+<p>The lock is the only concurrency guard.  <code>flock</code> releases automatically
+on process death, so there is no stale-lock recovery to write.</p>
+<h2 id="catchup-orchestration-state-machine">Catchup orchestration (state machine)</h2>
+<p><code>cmd_run</code> is a three-mode state machine, not the &quot;one month per tick&quot;
+loop the section above used to describe.  The mode lives in the
+<code>pipeline_state</code> table (see <a href="#state">State</a> below) and decides what
+each tick does:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>What a tick does</th>
+<th>Transition to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>normal</code></td>
+<td>Import pending days for the current month; summarize the previous month when it's fully imported.</td>
+<td>→ <code>catchup</code> when any month strictly before today has either a pending source log or DB rows with incomplete summary.</td>
+</tr>
+<tr>
+<td><code>catchup</code></td>
+<td>Pick the oldest backlog month, apply the per-month decision matrix, summarize with <code>periods=(1,)</code>.</td>
+<td>→ <code>rebuild</code> when no backlog months remain.</td>
+</tr>
+<tr>
+<td><code>rebuild</code></td>
+<td>Walk forward from <code>rebuild_cursor</code> through prev-month, re-summarize each with all six periods.</td>
+<td>→ <code>normal</code> when cursor passes prev-month.</td>
+</tr>
+</tbody>
+</table>
+<p>Mode transitions are computed at the start of every tick from
+filesystem + DB state — not stored.  So the orchestrator self-corrects
+after manual intervention or external changes (e.g., someone drops a
+new log into <code>daily/2027/</code> mid-rebuild).</p>
+<h3 id="why-three-modes">Why three modes</h3>
+<p>The legacy &quot;one month per tick&quot; approach worked when backlog was small
+and recent.  It produces wrong long-window numbers when the backlog
+spans multiple years: a month summarized with all six periods writes
+its period-14 (all-time) cell from the rows present at that moment.
+Backfilling an earlier month later doesn't update those cells.</p>
+<p>Splitting catchup from rebuild fixes that.  Catchup ticks stay cheap
+because they only write period-1 (the month's own cells); the
+long-window cells stay deferred.  Once catchup is done, rebuild walks
+every affected month and re-summarizes with all six periods.  This
+gives correct period-14 / period-13 / period-12 numbers across the
+whole DB after a multi-year backfill.</p>
+<h3 id="the-per-month-decision-matrix">The per-month decision matrix</h3>
+<p>Catchup picks the oldest backlog month and routes it through one of
+five branches based on three Phase-C helpers (<code>month_has_source</code>,
+<code>month_has_data</code>, <code>is_month_fully_summarized</code>):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">source</th>
+<th style="text-align:center">data</th>
+<th style="text-align:left">summary</th>
+<th>action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">✓</td>
+<td style="text-align:center">✗</td>
+<td style="text-align:left">—</td>
+<td>fresh import + analyze + summarize-period-1</td>
+</tr>
+<tr>
+<td style="text-align:center">✓</td>
+<td style="text-align:center">✓</td>
+<td style="text-align:left">none/partial</td>
+<td>wipe + reimport + analyze + summarize-period-1</td>
+</tr>
+<tr>
+<td style="text-align:center">✗</td>
+<td style="text-align:center">✓</td>
+<td style="text-align:left">none/partial</td>
+<td>DB-only: analyze + summarize-period-1 (no import)</td>
+</tr>
+<tr>
+<td style="text-align:center">✗</td>
+<td style="text-align:center">✗</td>
+<td style="text-align:left">—</td>
+<td>skip (true gap — no source ever existed)</td>
+</tr>
+<tr>
+<td style="text-align:center">any</td>
+<td style="text-align:center">✓</td>
+<td style="text-align:left">full</td>
+<td>skip (already done)</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>source ✗ data ✓</code> branch is what catches the 2024-access case
+on geodynamics (rows exist in <code>web</code> because they were imported once,
+but the archived source files are gone and can't be re-derived).</p>
+<h3 id="source-log-discovery">Source-log discovery</h3>
+<p><code>enumerate_log_sources(kind)</code> returns sorted <code>[(YYYYMMDD, Path), ...]</code>
+unioning every place a source log may live, in priority order:</p>
 <ul>
-<li><code>/etc/hubzero-metrics/access.cfg</code> — DB credentials, paths.  Owned
-by root:apache, mode 640.</li>
-<li><code>/etc/hubzero-metrics/hzmetrics.conf</code> — <em>optional</em> runtime overrides
-(DNS nameserver, concurrency, timeout).  See
+<li><code>daily/&lt;site&gt;-access*log*</code> (current standard)</li>
+<li><code>daily/&lt;YYYY&gt;/&lt;site&gt;-access*log*</code> (sysadmin year-subdir layout)</li>
+<li><code>daily.holding/&lt;site&gt;-access*log*</code> (alternate logrotate target)</li>
+</ul>
+<p>Duplicate dates resolve toward the higher-priority location (a
+warning logs the conflict).  After <code>do_archive_logs</code> moves files
+into the canonical <code>imported/</code>, any <code>daily/YYYY/</code> or <code>daily.holding/</code>
+subdir that just became empty gets <code>rmdir</code>'d.  Subdirs are sysadmin
+convention, not pipeline policy — clean up as we drain them.</p>
+<h3 id="catching-up-manually">Catching up manually</h3>
+<p><code>hzmetrics status</code> shows the current mode, <code>catchup_started</code> anchor,
+and (in rebuild mode) cursor + remaining-month count.
+<code>hzmetrics rebuild-summaries --since YYYY-MM [--through YYYY-MM] [--periods 0,1,3,12,13,14] [--dry-run]</code> is a manual range
+resummarize; it does NOT touch <code>pipeline_state.mode</code>, so the
+state machine keeps running independently.</p>
+<p><code>tests/ab/port_cmd_run/</code> walks each row of the decision matrix and
+each mode transition; <code>tests/ab/port_periods_filter/</code> verifies that
+catchup's <code>periods=(1,)</code> actually skips long-window writes;
+<code>tests/ab/port_rebuild_correctness/</code> proves that a backfill changes
+period-14 cells for downstream months without disturbing period-1.</p>
+<h2 id="state">State</h2>
+<p>All pipeline state lives in the <code>pipeline_state</code> table in
+<code>&lt;hub&gt;_metrics</code>.  The only on-disk state is the flock-based PID lock
+under <code>/opt/hubzero/metrics/state/</code>.</p>
+<p><code>pipeline_state</code> is a tiny key/value table:</p>
+<table>
+<thead>
+<tr>
+<th>key</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>analyzed</code></td>
+<td><code>YYYY-MM-DD</code> — date a normal-mode tick last ran analyze</td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>normal</code> | <code>catchup</code> | <code>rebuild</code></td>
+</tr>
+<tr>
+<td><code>catchup_started</code></td>
+<td>earliest YYYY-MM that catchup touched (set on entry)</td>
+</tr>
+<tr>
+<td><code>rebuild_cursor</code></td>
+<td>next YYYY-MM that rebuild will resummarize</td>
+</tr>
+<tr>
+<td><code>dirty_months</code></td>
+<td>comma-separated YYYY-MM list flagged for rework</td>
+</tr>
+</tbody>
+</table>
+<p>Updates are single-statement <code>INSERT … ON DUPLICATE KEY UPDATE</code>, so
+multi-key writes are atomic from any concurrent reader's point of view.</p>
+<p>The flock-based lock stays on disk — kernel-managed dead-process
+release is hard to replicate cleanly in SQL.</p>
+<p><code>tests/ab/port_state/</code> covers DB read/write, multi-key atomicity,
+the dirty-months helpers, and the rebuild-from validation paths.</p>
+<h2 id="self-bootstrap">Self-bootstrap</h2>
+<p><code>cmd_run</code> and <code>cmd_tick</code> invoke <code>_self_bootstrap()</code> before any
+DB-touching work.  It's a no-op for any euid that doesn't map to
+<code>apache</code> or <code>www-data</code> — dev shells, root, and the A/B harness stay
+hands-off — but for the service user it does three things idempotently:</p>
+<ol>
+<li><strong>Site-name guard.</strong>  Aborts (<code>SystemExit(2)</code>) if
+<code>/etc/hubzero.conf</code> had no <code>site = &lt;hubname&gt;</code> line.  The site
+string is woven into every staged-log filename pattern
+(<code>${SITE}-access*log*</code>) and several DB-prefix conventions, so a
+silent &quot;hub&quot; fallback would collide on every multi-hub host.</li>
+<li><strong>Filesystem repair.</strong>  <code>mkdir -p</code> for every entry in
+<code>_expected_dirs()</code> (the 9-entry list defined alongside —
+<code>HZMETRICS_HOME/{bin,conf,state}</code>, the Apache <code>daily</code> /
+<code>imported</code> pair, the HUBzero <code>daily</code> / <code>imported</code> pair, plus the
+metrics-staging dir).  <code>PermissionError</code> becomes a fail-fast with
+&quot;run install-bootstrap once as root&quot; guidance.</li>
+<li><strong>Database repair.</strong>  Runs the baseline DDL (every statement is
+<code>CREATE TABLE IF NOT EXISTS</code>) which also brings the database
+itself into existence via <code>CREATE DATABASE IF NOT EXISTS</code>, then
+calls <code>_apply_pending_migrations()</code> so the schema lands at HEAD.</li>
+</ol>
+<p>The operator-driven counterparts are <code>hzmetrics.py init</code> (same
+machinery, no apache-uid gate) and <code>hzmetrics.py doctor [--fix]</code>
+(diagnostic-first; reports the four phases, optionally repeats the
+repair).  Tests live in <code>tests/ab/port_bootstrap/</code>.</p>
+<p>A common consequence: on a fresh hub, dropping a populated
+<code>access.cfg</code> in place and waiting one cron tick is enough to get a
+working pipeline.  Operators who prefer to drive the steps manually
+can run <code>init</code> once and skip cron's auto-repair (the cron call is
+still safe — it sees nothing to do).</p>
+<h2 id="files-on-disk">Files on disk</h2>
+<ul>
+<li><code>/opt/hubzero/metrics/bin/hzmetrics.py</code> — the pipeline binary.
+Owned <code>apache:apache</code>, mode 0755.</li>
+<li><code>/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh</code> — logrotate hook.</li>
+<li><code>/opt/hubzero/metrics/conf/access.cfg</code> — DB credentials, paths.
+Owned <code>apache:apache</code>, mode 0600.</li>
+<li><code>/opt/hubzero/metrics/conf/hzmetrics.conf</code> — <em>optional</em> runtime
+overrides (DNS nameserver, concurrency, timeout).  See
 <a href="../conf/hzmetrics.conf.sample"><code>conf/hzmetrics.conf.sample</code></a>.</li>
-<li><code>/var/run/hzmetrics/hzmetrics.pid</code> — PID lock, ensures one
-pipeline at a time.  Created at boot by <code>/etc/tmpfiles.d/hzmetrics.conf</code>.</li>
-<li><code>/var/run/hzmetrics/hzmetrics.state</code> — daily state (last completed
-daily-run timestamp).</li>
-<li><code>/var/log/hubzero/metrics/</code> — pipeline log directory.</li>
+<li><code>/opt/hubzero/metrics/conf/cron.apache</code> — crontab template; operator
+registers it via <code>sudo -u apache crontab …</code>.</li>
+<li><code>/opt/hubzero/metrics/state/hzmetrics.pid</code> — PID lock file.  One
+line, three space-separated fields: <code>&lt;pid&gt; &lt;init_start_epoch&gt; &lt;iso_acquired&gt;</code>.  The flock (not the file existence) is
+authoritative — but <code>init_start_epoch</code> (from <code>btime + /proc/1/stat starttime</code>) changes on host reboot AND container restart, so a
+retained file from a prior kernel/namespace shows the recycled-PID
+ambiguity immediately.  <code>acquire_lock()</code> creates the parent on
+first run; flock self-releases on process exit.</li>
+<li><code>/var/log/hubzero/metrics/manage.log</code> — pipeline log file (also
+routed to syslog LOG_LOCAL0 and stderr; see
+<a href="../../operations/operations/#logs-and-observability">operations.md</a>).  ISO 8601
+timestamps to ms precision with local-tz offset.</li>
 <li><code>/var/log/httpd/daily/</code>, <code>/var/log/hubzero/daily/</code> — incoming log
 files.  Pipeline reads, processes, and moves them to <code>imported/</code>.</li>
 </ul>
 <h2 id="cli-surface">CLI surface</h2>
 <p><code>hzmetrics.py --help</code> lists everything, but the major subcommands are:</p>
 <pre><code>tick                       cron entry point (whoisonline + metrics at :30)
-run [--dry-run]            autonomous metrics run (analyze/summarize)
+run [--dry-run]            autonomous metrics run — dispatches by pipeline_state.mode
 whoisonline                refresh whoisonline state
-status                     show pending vs imported log state
+status                     orchestrator mode + cursors + pending/imported counts
 process --next             process oldest pending month manually
 process --month YYYY-MM    process a specific month
 import / analyze / summarize  individual stages, --month YYYY-MM
+rebuild-summaries --since YYYY-MM [--through ...] [--periods 0,1,3,12,13,14]
+                           manual range resummarize (doesn't touch state.mode)
+rebuild-from YYYY-MM       atomic reset: sets mode=rebuild + rebuild_cursor
+mark-dirty YYYY-MM ...     flag months as needing rework after bulk web mutation
+clear-dirty [--all|YYYY-MM ...]  remove months from the dirty set
 fill-geo / backfill-dnload    one-shot backfill utilities
 migrate [--apply]          show or apply schema migrations
 setup-db [--dry-run]       create the metrics DB schema from scratch
+init                       one-shot install bootstrap: dirs + DB + migrate
+                           (operator-driven equivalent of _self_bootstrap)
+doctor [--fix]             diagnose install health; --fix attempts repair
+forget-import FILE TABLE   reverse an imported_sources marker and DELETE
+                           its tracked PK range (operator escape hatch)
 </code></pre>
 <p>Each mutating subcommand has <code>--dry-run</code>.  <code>--force</code> bypasses the
 daily-state-already-completed guard on <code>run</code> / <code>process</code> / <code>analyze</code> /
@@ -395,14 +672,11 @@ daily-state-already-completed guard on <code>run</code> / <code>process</code> /
 <ul>
 <li><strong><code>hzmetrics.py</code></strong> — the entire pipeline.  ~6000 lines of Python.</li>
 <li><strong><code>conf/hzmetrics.conf.sample</code></strong> — optional runtime overrides.</li>
-<li><strong><code>conf/hubzero-metrics.cron.apache</code></strong>, <strong><code>conf/hubzero-metrics.cron.d</code></strong> —
-cron entry templates (apache crontab format and /etc/cron.d format).</li>
+<li><strong><code>conf/hubzero-metrics.cron.apache</code></strong> — apache user crontab template.</li>
 <li><strong><code>conf/hzmetrics-logrotate-postrotate.sh</code></strong> — logrotate hook.</li>
-<li><strong><code>conf/hzmetrics.tmpfiles.conf</code></strong> — systemd-tmpfiles config to create
-<code>/var/run/hzmetrics/</code> at boot.</li>
 <li><strong><code>tests/legacy/</code></strong> — the original PHP/Perl/Bash pipeline preserved
 as the A/B parity reference.</li>
-<li><strong><code>tests/ab/</code></strong> — the A/B test harness (26 tests; see
+<li><strong><code>tests/ab/</code></strong> — the A/B test harness (35 ports; see
 <a href="../../operations/testing/">testing.md</a>).</li>
 <li><strong><code>README.txt</code></strong> — historical hub-installation notes (largely
 superseded by these docs).</li>

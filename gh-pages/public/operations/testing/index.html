@@ -103,7 +103,7 @@ cross-table invariants, and CLI error contracts.</li>
 <p>The A/B and golden modes produce the same pass/fail outcome on a
 current codebase.  CI runs golden plus defensive mode.</p>
 <h2 id="what-s-tested">What's tested</h2>
-<p>26 test directories under <code>tests/ab/port_*</code>:</p>
+<p>44 test directories under <code>tests/ab/port_*</code>:</p>
 <p><strong>Per-port A/B (16):</strong> <code>port_andmore_usage</code>, <code>port_clean_bots</code>,
 <code>port_fill_domain</code>, <code>port_fill_ipcountry</code>, <code>port_fill_user_info</code>,
 <code>port_gen_tool_stats</code>, <code>port_gen_tool_toplists</code>,
@@ -124,6 +124,43 @@ on the same DB), <code>port_dryrun</code> (every <code>--dry-run</code> writes z
 <code>port_empty_input</code> (each port no-ops cleanly on empty input),
 <code>port_determinism</code> (two fresh-DB runs are byte-identical),
 <code>port_cli_contracts</code> (invalid CLI/config paths exit non-zero).</p>
+<p><strong>Orchestration (5):</strong> <code>port_discovery</code> (source-log enumeration
+across <code>daily/</code>, <code>daily/YYYY/</code>, <code>daily.holding/</code>),
+<code>port_state</code> (DB-backed <code>pipeline_state</code> read/write + file→DB
+bootstrap), <code>port_decisions</code> (the three Phase-C decision helpers +
+every row of the catchup decision matrix), <code>port_cmd_run</code>
+(three-mode state machine: mode dispatch + transitions + per-month
+routing via monkey-patched DB), <code>port_rebuild_summaries</code>
+(the manual-range CLI + extended <code>status</code> output).</p>
+<p><strong>Catchup correctness (3):</strong> <code>port_wipe_scope</code> (<code>_wipe_month_data</code>
+deletes the target month from web/userlogin/webhits/websessions and
+all four summary_*_vals tables and leaves adjacent months
+untouched), <code>port_periods_filter</code> (<code>do_summarize(periods=(1,))</code>
+writes exactly the period-1 grid and zero rows in any other period;
+inverse pass with <code>periods=None</code> populates all six),
+<code>port_rebuild_correctness</code> (loads month M2 fully summarized; adds
+month M1 rows; resummarizes M2; asserts period-14 refreshed to
+include M1 while period-1 stays unchanged — the core promise of
+rebuild mode).</p>
+<p><strong>Install + crash recovery (4):</strong> <code>port_bootstrap</code> (<code>_self_bootstrap</code>
+identity gate + site-name guard + <code>_expected_dirs</code> contract + the
+<code>init</code> / <code>doctor</code> exit codes), <code>port_import_atomic</code> (per-file
+import is transactional and the <code>imported_sources</code> marker survives
+post-COMMIT crashes — <code>forget-import</code> reverses both halves cleanly),
+<code>port_lock</code> (PID-file format and <code>init_start_epoch</code> stale-PID
+detection across reboot / container restart), <code>port_month_complete</code>
+(data-driven month-closed check that gates <code>logfix-session</code> to month
+boundary).</p>
+<p><strong>Filter regression guards (4):</strong> <code>port_dnload_classify</code> (Python
+<code>_is_download_url</code> covers every download-extension and download-path
+shape), <code>port_dnload_backfill_regex</code> (SQL-side backfill-dnload regex
+correctly handles literal-dot vs any-char — pins the silent fix in
+db5d8ba), <code>port_referer_spam</code> (login/?return= and resources/browse?
+crawler-spam regex), <code>port_session_split</code> (1800-second session
+boundary).</p>
+<p><strong>Window-boundary semantics (1):</strong> <code>port_window_boundaries</code> (27
+assertions: period range arithmetic across month / quarter / year /
+fiscal-year boundaries, leap years, DST edges).</p>
 <h2 id="running">Running</h2>
 <h3 id="prerequisites">Prerequisites</h3>
 <ul>

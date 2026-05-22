@@ -69,17 +69,33 @@
   <p class="toc__heading">On this page</p>
   <ul class="toc__list">
 <li class="toc__item toc__item--level-2"><a href="#knobs-the-pipeline-honors">Knobs the pipeline honors</a></li>
+<li class="toc__item toc__item--level-2"><a href="#is-the-install-healthy">Is the install healthy?</a></li>
 <li class="toc__item toc__item--level-2"><a href="#pipeline-is-running-am-i-getting-fresh-data">Pipeline is running — am I getting fresh data?</a></li>
 <li class="toc__item toc__item--level-2"><a href="#catching-up-from-a-backlog">Catching up from a backlog</a></li>
+<li class="toc__item toc__item--level-3"><a href="#driving-rebuild-manually">Driving rebuild manually</a></li>
+<li class="toc__item toc__item--level-3"><a href="#re-entering-rebuild-after-a-code-or-data-fix">Re-entering rebuild after a code or data fix</a></li>
 <li class="toc__item toc__item--level-2"><a href="#my-log-files-aren-t-where-the-pipeline-looks">My log files aren&#x27;t where the pipeline looks</a></li>
 <li class="toc__item toc__item--level-2"><a href="#a-tick-says-still-running-but-nothing-s-progressing">A tick says &quot;still running&quot; but nothing&#x27;s progressing</a></li>
 <li class="toc__item toc__item--level-2"><a href="#dns-resolution-looks-slow">DNS resolution looks slow</a></li>
+<li class="toc__item toc__item--level-3"><a href="#rows-are-accumulating-in-web-host-websessions-host">&quot;?&quot; rows are accumulating in web.host / websessions.host</a></li>
 <li class="toc__item toc__item--level-2"><a href="#a-month-s-summary-numbers-look-wrong">A month&#x27;s summary numbers look wrong</a></li>
+<li class="toc__item toc__item--level-3"><a href="#download-cells-reading-zero-across-the-whole-history">Download cells reading zero across the whole history</a></li>
+<li class="toc__item toc__item--level-3"><a href="#current-month-summary-cells-look-truncated-mid-month">Current-month summary cells look truncated mid-month</a></li>
 <li class="toc__item toc__item--level-2"><a href="#a-bot-is-inflating-counts">A bot is inflating counts</a></li>
+<li class="toc__item toc__item--level-2"><a href="#mass-cleanup-of-accumulated-crawler-spam">Mass cleanup of accumulated crawler spam</a></li>
+<li class="toc__item toc__item--level-3"><a href="#how-to-spot-it">How to spot it</a></li>
+<li class="toc__item toc__item--level-3"><a href="#filter-at-import-time">Filter at import time</a></li>
+<li class="toc__item toc__item--level-3"><a href="#backfill-clean-the-chunked-delete-trap">Backfill clean: the chunked-DELETE trap</a></li>
+<li class="toc__item toc__item--level-3"><a href="#the-sessionid-landmine">The sessionid landmine</a></li>
+<li class="toc__item toc__item--level-3"><a href="#max-allowed-packet-on-bulk-insert">max_allowed_packet on bulk INSERT</a></li>
+<li class="toc__item toc__item--level-3"><a href="#make-resolve-dns-cheap-once-the-table-is-small">Make resolve-dns cheap once the table is small</a></li>
+<li class="toc__item toc__item--level-3"><a href="#verification-queries">Verification queries</a></li>
 <li class="toc__item toc__item--level-2"><a href="#whoisonline-map-is-stale">Whoisonline map is stale</a></li>
 <li class="toc__item toc__item--level-2"><a href="#re-running-everything-from-scratch-test-environments-only">Re-running everything from scratch (test environments only)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#crash-recovery-forget-import">Crash recovery: forget-import</a></li>
 <li class="toc__item toc__item--level-2"><a href="#logs-and-observability">Logs and observability</a></li>
 <li class="toc__item toc__item--level-2"><a href="#backup-and-restore">Backup and restore</a></li>
+<li class="toc__item toc__item--level-2"><a href="#periodic-maintenance-analyze-table">Periodic maintenance: ANALYZE TABLE</a></li>
 <li class="toc__item toc__item--level-2"><a href="#monitoring-and-alerting">Monitoring and alerting</a></li>
 <li class="toc__item toc__item--level-2"><a href="#when-to-escalate">When to escalate</a></li>
   </ul>
@@ -95,7 +111,7 @@ The mechanics are different now but the questions to ask are the
 same.</p>
 <h2 id="knobs-the-pipeline-honors">Knobs the pipeline honors</h2>
 <p>A few ops-relevant defaults are overridable without editing
-<code>/etc/hubzero-metrics/</code>:</p>
+<code>/opt/hubzero/metrics/conf/</code>:</p>
 <table>
 <thead>
 <tr>
@@ -113,7 +129,7 @@ same.</p>
 <tr>
 <td><code>HZMETRICS_ACCESS_CFG</code></td>
 <td>DB credentials cfg path</td>
-<td><code>/etc/hubzero-metrics/access.cfg</code></td>
+<td><code>/opt/hubzero/metrics/conf/access.cfg</code></td>
 </tr>
 <tr>
 <td><code>HZMETRICS_DNS_NAMESERVER</code></td>
@@ -138,9 +154,34 @@ same.</p>
 <code>cron</code> entry that's checking for success can rely on exit status; a
 non-zero exit indicates an operational error (missing cfg, missing
 hub_dir, mysql_exec failure, etc.).</p>
+<h2 id="is-the-install-healthy">Is the install healthy?</h2>
+<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
+</code></pre>
+<p>Walks four phases and reports each:</p>
+<ul>
+<li><code>/etc/hubzero.conf</code> resolved a <code>site = &lt;hubname&gt;</code> line</li>
+<li><code>conf/access.cfg</code> present, parseable, and naming a metrics DB</li>
+<li>every directory the pipeline writes into exists and is writable
+by the invoking user</li>
+<li>MySQL reachable, <code>&lt;hub&gt;_metrics</code> exists, every known migration
+applied</li>
+</ul>
+<p><code>doctor</code> is a pure diagnostic by default — it logs <code>OK</code> / <code>FAIL</code>
+lines and returns non-zero if anything failed.  Pass <code>--fix</code> to make
+it call the same <code>_self_bootstrap</code> repair helpers cron uses on
+startup: <code>mkdir -p</code> the missing dirs, <code>CREATE DATABASE IF NOT EXISTS</code>,
+and apply every pending migration.  Things <code>doctor</code> can't fix from
+its own privileges (missing <code>/etc/hubzero.conf</code> line, root-owned
+parent of <code>/opt/hubzero/metrics</code>, MySQL down, bad DB credentials) are
+reported but not attempted.</p>
+<p>The same machinery also runs automatically at the top of <code>cmd_tick</code>
+and <code>cmd_run</code> (gated on <code>os.geteuid()</code> mapping to <code>apache</code> /
+<code>www-data</code>), so a freshly-installed hub with <code>access.cfg</code> in place can
+go from cron-not-running to working pipeline on the next tick without
+any manual setup-db / migrate step.</p>
 <h2 id="pipeline-is-running-am-i-getting-fresh-data">Pipeline is running — am I getting fresh data?</h2>
 <pre><code class="language-bash"># What does the pipeline think the world looks like?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 </code></pre>
 <p>Outputs the most-recent imported day, the most-recent summarized
 month, and any pending log files in <code>daily/</code>.</p>
@@ -158,26 +199,107 @@ mysql -e &quot;
 tables, and a complete month's worth of summary rows for the most
 recent completed month.</p>
 <h2 id="catching-up-from-a-backlog">Catching up from a backlog</h2>
-<p>The pipeline is built to drain backlogs autonomously — once <code>tick</code>
-is running it processes one month per <code>:30</code> invocation.  A 12-month
-backlog drains in ~6 hours of unattended catch-up.</p>
-<p>But you can drive it manually if you want it to go faster:</p>
-<pre><code class="language-bash"># Process the oldest pending month, foreground:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
-
-# Repeat until status shows nothing pending.
+<p>The pipeline drains backlogs autonomously via the three-mode state
+machine in <code>cmd_run</code> (see
+<a href="../../reference/architecture/#catchup-orchestration-state-machine">architecture.md → Catchup orchestration</a>
+for the design).  Each <code>tick</code> checks <code>pipeline_state.mode</code> and
+dispatches one tick's worth of work.  No operator intervention is
+needed for routine backfill — just let the cron run.</p>
+<pre><code class="language-bash"># Where is the orchestrator?
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 </code></pre>
-<p><code>process --next</code> is a one-shot equivalent of one <code>tick</code> run — import,
-analyze, summarize one month.  Safe to interrupt; resumes from where
-it stopped on the next invocation.</p>
+<p><code>status</code> prints the mode (<code>normal</code> / <code>catchup</code> / <code>rebuild</code>), the
+<code>catchup_started</code> anchor, and (in rebuild mode) the cursor plus
+remaining-month count.  Example mid-catchup output:</p>
+<pre><code>=== orchestrator state ===
+  mode             : catchup
+  last analyzed    : 2026-05-19
+  catchup_started  : 2022-01
+=== pending import (all source dirs) ===
+  httpd access: 924  (20220501 .. 20260518)
+  cmsauth     : 1330 (20201030 .. 20260518)
+</code></pre>
+<p>Each tick processes one backlog month.  Drive ticks faster by
+invoking manually:</p>
+<pre><code class="language-bash"># One tick — process oldest backlog month, foreground:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
+
+# Time it to spot slow stages:
+time sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
+
+# Loop until catchup completes (state.mode flips to rebuild then normal):
+while :; do
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run || break
+    mode=$(mysql -BN -e &quot;SELECT v FROM &lt;hub&gt;_metrics.pipeline_state WHERE k='mode'&quot;)
+    [ &quot;$mode&quot; = &quot;normal&quot; ] &amp;&amp; break
+done
+</code></pre>
+<p><code>run</code> is the same code path <code>tick</code> invokes at <code>:30</code>; the orchestrator
+is idempotent and resumes from <code>pipeline_state</code> on the next call.</p>
+<h3 id="driving-rebuild-manually">Driving rebuild manually</h3>
+<p>Once catchup completes, <code>tick</code> automatically enters <code>rebuild</code> mode and
+re-summarizes one month per tick (all six periods).  To drive that
+range manually:</p>
+<pre><code class="language-bash"># Catchup wrote period=1 cells only.  Resummarize a range with all
+# six periods to fix long-window (0/3/12/13/14) cells:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2024-12
+
+# Or narrow to just specific periods (e.g. only the long ones):
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --periods 0,3,12,13,14
+
+# Dry-run first:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2022-03 --dry-run
+</code></pre>
+<p><code>rebuild-summaries</code> does NOT modify <code>pipeline_state.mode</code> — so it's
+safe to use alongside an in-flight rebuild.  Useful for batched
+operator-driven rebuilds when &quot;one month per tick&quot; is too slow.</p>
+<h3 id="re-entering-rebuild-after-a-code-or-data-fix">Re-entering rebuild after a code or data fix</h3>
+<p>When a code change (new summary formula, fixed bug) or a data fix
+(backfill of a missing column, mass cleanup) affects the inputs that
+summarize reads, the existing summary cells are stale.  Use
+<code>rebuild-from</code> to atomically reset both the cursor and the mode:</p>
+<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
+</code></pre>
+<p>Equivalent to editing <code>pipeline_state</code> by hand to set
+<code>mode='rebuild'</code> and <code>rebuild_cursor='2022-01'</code>, but validated
+(YYYY-MM format, refuses future months, warns if before
+<code>catchup_started</code>) and atomic (one UPDATE).  The next tick sees
+mode=rebuild and walks the cursor forward through prev_month with all
+6 periods per month.</p>
+<p>Typical sequence after a data fix:</p>
+<pre><code class="language-bash"># 1. Verify the fix went in (e.g., backfill-dnload after the dnload bug)
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
+# 2. Reset the cursor
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
+# 3. Let the orchestrator chew through it (one tick per month)
+# Or run manually:
+while true; do
+    mode=$(mysql ... -BN -e &quot;SELECT v FROM pipeline_state WHERE k='mode'&quot;)
+    [ &quot;$mode&quot; != &quot;rebuild&quot; ] &amp;&amp; break
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
+done
+</code></pre>
 <h2 id="my-log-files-aren-t-where-the-pipeline-looks">My log files aren't where the pipeline looks</h2>
-<p>Apache's own logrotate, if it's set up differently, may put logs
-straight in <code>/var/log/httpd/</code> as <code>access_log-YYYYMMDD.gz</code> instead of
-in <code>/var/log/httpd/daily/&lt;hub&gt;-access.log-YYYYMMDD</code>.  The pipeline
-only reads from <code>daily/</code>.</p>
-<pre><code class="language-bash"># Move them where the pipeline expects:
+<p>The discovery layer scans every place a source log may live, in this
+order:</p>
+<ul>
+<li><code>/var/log/httpd/daily/&lt;hub&gt;-access*log*</code> (current standard)</li>
+<li><code>/var/log/httpd/daily/&lt;YYYY&gt;/&lt;hub&gt;-access*log*</code> (sysadmin year-subdir)</li>
+<li><code>/var/log/httpd/daily.holding/&lt;hub&gt;-access*log*</code> (alternate logrotate target)</li>
+</ul>
+<p>Same three for cmsauth under <code>/var/log/hubzero/</code>.  If a log file lives
+anywhere else, the pipeline can't see it — move or symlink it into one
+of those.  Duplicates across locations resolve toward higher priority
+(daily/ wins over daily.holding/) with a warning.</p>
+<p>Year-subdirs and <code>daily.holding/</code> are sysadmin organizational
+conventions, not pipeline policy — the orchestrator cleans up empty
+ones after archiving the last file out.</p>
+<pre><code class="language-bash"># Apache's stock layout (access_log-YYYYMMDD.gz under /var/log/httpd/)
+# isn't a recognized source.  Move + rename:
 sudo mv /var/log/httpd/access_log-*.gz /var/log/httpd/daily/
-# Rename to the expected pattern:
 cd /var/log/httpd/daily
 for f in access_log-*.gz; do
     date=${f#access_log-}; date=${date%.gz}
@@ -185,18 +307,16 @@ for f in access_log-*.gz; do
 done
 </code></pre>
 <p><code>hzmetrics.py status</code> will then see them on the next invocation.</p>
-<p>CMS auth logs follow the same model — they should be in
-<code>/var/log/hubzero/daily/cmsauth.log-YYYYMMDD</code>.</p>
 <p>If the underlying logrotate is wrong (not putting files in <code>daily/</code>
 at all), check <code>/etc/logrotate.d/httpd</code> and <code>/etc/logrotate.d/hubzero</code>
 and compare against <code>conf/hzmetrics-logrotate-postrotate.sh</code>.</p>
 <h2 id="a-tick-says-still-running-but-nothing-s-progressing">A tick says &quot;still running&quot; but nothing's progressing</h2>
-<p>The lock is a <code>fcntl.flock</code> on <code>/var/run/hzmetrics/hzmetrics.pid</code> —
+<p>The lock is a <code>fcntl.flock</code> on <code>/opt/hubzero/metrics/state/hzmetrics.pid</code> —
 the file's contents are the holder's PID (purely diagnostic), but the
 lock itself is the kernel-managed flock, not the file's existence.</p>
 <pre><code class="language-bash"># Who holds it?
-cat /var/run/hzmetrics/hzmetrics.pid       # the holder's PID (diagnostic only)
-ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)   # is it alive?
+cat /opt/hubzero/metrics/state/hzmetrics.pid       # the holder's PID (diagnostic only)
+ps -p $(cat /opt/hubzero/metrics/state/hzmetrics.pid)   # is it alive?
 </code></pre>
 <p>If the process is alive: it's genuinely doing work (large catch-up
 import, slow DNS round) — give it time, or follow it with <code>tail -F</code>
@@ -226,16 +346,32 @@ sudo systemctl status unbound
 ss -tnlp | grep :53
 </code></pre>
 <p>If you've deployed local unbound, the <code>[dns]</code> block in
-<code>/etc/hubzero-metrics/hzmetrics.conf</code> should read:</p>
+<code>/opt/hubzero/metrics/conf/hzmetrics.conf</code> should read:</p>
 <pre><code>nameserver = 127.0.0.1
 concurrency = 500
 </code></pre>
 <p>Without unbound, leave the defaults — direct-to-system at
 concurrency=500 has been benchmarked unfavorably and regressed
 against Purdue's resolvers.</p>
+<h3 id="rows-are-accumulating-in-web-host-websessions-host">&quot;?&quot; rows are accumulating in web.host / websessions.host</h3>
+<p>The <code>?</code> value is the persisted sentinel for &quot;PTR lookup tried and
+returned NXDOMAIN / SERVFAIL / no answer.&quot;  It's intentional: the
+next <code>resolve-dns</code> run filters <code>WHERE host IS NULL OR host = ''</code>,
+so <code>?</code> rows are skipped instead of being re-queried every tick —
+which would beat up the resolver on IPs that have no PTR for
+infrastructural reasons (CDN backends, cellular NAT pools, hosts
+without reverse zones).  This matches the legacy Perl behavior.</p>
+<p>If you genuinely want to re-resolve some <code>?</code> rows (DNS was
+unavailable during the original pass, the resolver is now fixed):</p>
+<pre><code class="language-sql">-- Scope tightly — re-resolving every '?' on a busy hub is
+-- expensive and usually re-produces the same '?'.
+UPDATE web SET host = NULL
+  WHERE host = '?' AND datetime &gt;= '2025-08-01' AND datetime &lt; '2025-08-02';
+</code></pre>
+<p>then run <code>resolve-dns metrics web 2025-08-01</code>.</p>
 <h2 id="a-month-s-summary-numbers-look-wrong">A month's summary numbers look wrong</h2>
 <p>Each summary cell is <code>DELETE</code> + <code>INSERT</code> per <code>(datetime, period, rowid, colid)</code>, so re-running summarize is safe and idempotent:</p>
-<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py summarize --month 2025-03 --force
+<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py summarize --month 2025-03 --force
 </code></pre>
 <p><code>--force</code> bypasses the &quot;already summarized today&quot; guard.  This rewrites
 every cell for that month across all six period codes.</p>
@@ -246,9 +382,51 @@ check that <code>web.dnload</code> is populated:</p>
   WHERE datetime LIKE '2025-03%' GROUP BY dnload;&quot;
 </code></pre>
 <p>If <code>dnload IS NULL</code> for any rows, run <code>backfill-dnload</code>:</p>
-<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py backfill-dnload --start 2025-03
+<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py backfill-dnload --start 2025-03
 </code></pre>
 <p>Then re-summarize.</p>
+<h3 id="download-cells-reading-zero-across-the-whole-history">Download cells reading zero across the whole history</h3>
+<p>Specifically: if every month's &quot;downloaders&quot; and &quot;download-sessions&quot;
+cells in <code>summary_misc_vals</code> (and downstream) read zero, the
+<code>web.dnload</code> flag was never populated — neither the legacy importer
+nor the pre-1018cc2-shape port set it at insert.  Confirm with:</p>
+<pre><code class="language-sql">SELECT dnload, COUNT(*) FROM web GROUP BY dnload;
+</code></pre>
+<p>If you see only <code>dnload IS NULL</code> (or NULL plus a small <code>0</code> count
+from recent imports), this is the long-standing legacy bug.  Fix:</p>
+<pre><code class="language-bash"># 1. Confirm the import code now sets dnload at insert time —
+#    look in hzmetrics.py for `INSERT INTO web (..., dnload) VALUES`
+#    and `dnload = 1 if _is_download_url(url) else 0`.  If the
+#    import path doesn't include those, the importer is the old
+#    shape; do not skip this step.
+grep -F 'dnload = 1 if _is_download_url' /opt/hubzero/metrics/bin/hzmetrics.py
+
+# 2. Backfill historical rows.  Omit --start to walk every month
+#    that has NULL rows; pass it only to scope a partial run.
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py backfill-dnload
+
+# 3. Re-trigger a full rebuild so the download cells get rewritten:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
+# then run ticks until mode flips back to normal.
+</code></pre>
+<p><code>backfill-dnload</code> sets <code>dnload = IF(&lt;pattern&gt;, 1, 0)</code> so every NULL
+row in scope ends up as 0 or 1, never left NULL.  The 1's are real
+downloads; the 0's are page views.</p>
+<h3 id="current-month-summary-cells-look-truncated-mid-month">Current-month summary cells look truncated mid-month</h3>
+<p>That's by design.  Normal-mode ticks run <code>do_analyze(today_str, sessions=False)</code> for the current incomplete month: row-level
+enrichment (DNS, fill-domain, fill-ipcountry on web/toolstart,
+clean-bots on web) runs daily, but <code>logfix-session</code> and the
+websessions-bound steps are held back until month-close.  This
+eliminates the daily-tick session-slicing problem (logfix-session
+re-running over fresh imports would chop sessions that genuinely
+spanned a tick boundary).</p>
+<p>The current month's summary cells get written once, at month-close,
+when normal-mode sees <code>is_month_complete(prev)</code> flip to True.
+<code>is_month_complete</code> is the data-driven check that replaced the
+calendar-based <code>days_in &gt; 5</code> fallback: it returns True when either
+the last calendar day's log file is in <code>imported/</code>, OR <code>web</code> has
+at least one row dated in the <em>next</em> month (i.e., import time has
+demonstrably crossed the boundary).</p>
 <h2 id="a-bot-is-inflating-counts">A bot is inflating counts</h2>
 <p>This happens periodically — a crawler that retains the CMS session
 cookie is logged per-page-visit instead of once per visitor.
@@ -275,9 +453,226 @@ month isn't yet summarized, this catches it before it shows up in
 reports.</p>
 <p>For broader bot suppression, the <code>robots.txt</code> file and the firewall
 are the layers above this — out of scope for <code>hzmetrics.py</code>.</p>
+<h2 id="mass-cleanup-of-accumulated-crawler-spam">Mass cleanup of accumulated crawler spam</h2>
+<p>When a hub has been running months/years without effective bot
+suppression, <code>web</code> accumulates millions of crawler hits that don't
+look like bots (real browser User-Agent strings, varied IPs).  The
+geodynamics hub hit 13.2 M <code>web</code> rows by mid-2026 with 8 M of that
+being two specific crawl patterns — once cleaned, the table dropped to
+4.76 M (64 % reduction) and per-tick wallclocks fell from 18 + min
+to ~40 s.</p>
+<h3 id="how-to-spot-it">How to spot it</h3>
+<pre><code class="language-sql">-- Top URL prefixes for the worst month — anything that dwarfs the
+-- rest is a crawler signature:
+SELECT COUNT(*) AS n, SUBSTRING(content, 1, 40) AS prefix
+FROM web WHERE datetime &gt;= '&lt;YYYY-MM-01&gt;' AND datetime &lt; '&lt;next-month&gt;'
+GROUP BY prefix ORDER BY n DESC LIMIT 25;
+
+-- Then for each candidate pattern, check Referer presence — bots
+-- typically don't send a Referer header, real users have it set
+-- ~50 % of the time:
+SELECT
+  CASE WHEN referrer IS NULL OR referrer IN ('','-') THEN 'empty' ELSE 'has ref' END AS r,
+  COUNT(*) AS n
+FROM web WHERE datetime &gt;= '&lt;...&gt;' AND datetime &lt; '&lt;...&gt;'
+  AND content LIKE '&lt;pattern&gt;%'
+GROUP BY r;
+</code></pre>
+<p>A pattern with &gt;95 % empty Referer + browser UAs is almost certainly
+a distributed crawl.  On geodynamics the smoking guns were:</p>
+<ul>
+<li><code>/login?return=&lt;base64&gt;</code> — 99.9 % empty Referer.  Auth redirect
+targets, hit by crawlers that follow public links.  Regex covers
+the trailing-slash variant <code>/login/?return=…</code> too — the same
+crawler ran both shapes in the wild.</li>
+<li><code>/resources/browse?&lt;query&gt;</code> — 96-97 % empty Referer.  Catalog
+pagination spam, every tag combination visited.  Also covers
+<code>/resources/browse/?…</code>.</li>
+</ul>
+<p>Together: 93 % of one month's rows.</p>
+<p>Two additional categories also land in <code>_is_excluded_url</code> and
+<code>_is_referer_spam</code> and are filtered at import time without operator
+action:</p>
+<ul>
+<li><strong>Self-identifying crawler User-Agents</strong> — <code>Scrapy</code>, <code>PRTG</code>,
+<code>PycURL</code>, <code>Yeti</code> and similar fixed strings, kept in the
+<code>bot_useragents</code> table and matched exact-case to skip the slower
+substring scan over the full UA filter list.</li>
+<li><strong><code>/pipermail/</code></strong> (mailman archive web view) — never a metrics
+signal; consumes thousands of rows per crawl.</li>
+<li><strong><code>/cron/tick/...</code></strong> — the hub's own scheduled-task self-hits.
+Looked like real traffic in the legacy code; filtered out so they
+don't inflate hit counts.</li>
+</ul>
+<h3 id="filter-at-import-time">Filter at import time</h3>
+<p>Add a URL+Referer pattern to the import filter in
+<code>hzmetrics.py:_is_referer_spam</code>.  Stay narrow — match only the
+specific URL patterns you measured, not every empty-Referer hit.
+Real users have empty Referer plenty of the time (bookmark, direct
+nav, HTTPS→HTTP, privacy browsers).</p>
+<p>This is a deliberate A/B divergence from the legacy
+<code>xlogimport_apache.php</code>, which doesn't see the Referer column at
+all.  Update <code>tests/ab/port_import_apache/run.sh</code> <code>filter_keepers</code>
+to drop the new patterns from both sides of the diff.</p>
+<h3 id="backfill-clean-the-chunked-delete-trap">Backfill clean: the chunked-DELETE trap</h3>
+<p>The naive approach (chunked DELETE with <code>LIMIT 50000</code>) is <strong>much</strong>
+slower than it looks.  Each chunk re-walks the same secondary index
+from the start to find 50k matching rows, and each candidate row also
+has to fetch the heap to check the un-indexed <code>referrer</code> column.  At
+~150 s per 50 k chunk we measured ~3 hours per million rows.</p>
+<p>Use a temp PK table instead — one scan, then delete by PK range:</p>
+<pre><code class="language-sql">SET SESSION wait_timeout=86400;
+DROP TABLE IF EXISTS _spam_pks;
+CREATE TABLE _spam_pks (id BIGINT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO _spam_pks (id)
+SELECT id FROM web
+WHERE (referrer IS NULL OR referrer IN ('','-'))
+  AND (content LIKE '/login?return=%' OR content LIKE '/resources/browse?%');
+</code></pre>
+<p>Then loop PK windows and delete by JOIN — this hits the PK directly,
+so each chunk is a constant ~25 s for 100 k rows regardless of how
+many have already been deleted:</p>
+<pre><code class="language-bash">range_size=100000
+range_start=$(mysql ... -BN -e &quot;SELECT MIN(id) FROM _spam_pks&quot;)
+range_top=$(mysql   ... -BN -e &quot;SELECT MAX(id) FROM _spam_pks&quot;)
+while [ &quot;$range_start&quot; -le &quot;$range_top&quot; ]; do
+    range_end=$((range_start + range_size))
+    mysql ... -e &quot;DELETE w FROM web w
+        JOIN _spam_pks s ON s.id = w.id
+        WHERE s.id &gt;= $range_start AND s.id &lt; $range_end;&quot;
+    range_start=$range_end
+done
+</code></pre>
+<p>6.24 M rows in 67 min vs an estimated 3 + hours for the naive
+approach.</p>
+<h3 id="the-sessionid-landmine">The sessionid landmine</h3>
+<p><code>logfix-session</code> builds <code>websessions</code> from <code>web</code> rows where
+<code>sessionid IS NULL OR sessionid = '0'</code>.  After it runs, every event
+that landed in a session has <code>web.sessionid</code> set to point at the new
+session row.  This means:</p>
+<p><strong>Wiping <code>websessions</code> without resetting <code>web.sessionid</code> creates ghost
+stamps.</strong>  The next <code>logfix-session</code> skips those rows (they look
+already-stamped), so the months end up with vastly fewer sessions
+than the data warrants.  On geodynamics this surfaced as 2025-07
+emitting &quot;0 session(s), stamped 0 web event(s)&quot; for the first two
+weeks of the month even though <code>web</code> had ~200 k rows there.</p>
+<p>The orchestrator catches this two ways:</p>
+<ol>
+<li>
+<p><strong><code>mark-dirty</code> after surgery</strong> — operator-driven.  Tell the state
+machine which months need rework, then let it handle the rest:</p>
+<pre><code class="language-bash">sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py mark-dirty \
+    2024-09 2024-10 2024-11 2024-12 2025-01 2025-02 2025-03 \
+    2025-04 2025-05 2025-06 2025-07
+</code></pre>
+<p>The next catchup tick (auto-triggered if normal mode sees these in
+the backlog) processes each one through <code>_reset_month_for_resummarize</code>
+— chunked <code>UPDATE web SET sessionid = NULL</code>, <code>DELETE FROM websessions</code>, <code>DELETE FROM summary_*_vals</code> — then re-runs
+logfix-session + summarize.  The dirty marker auto-clears on
+success.</p>
+</li>
+<li>
+<p><strong><code>month_has_orphaned_stamps()</code> consistency check</strong> — runs in
+<code>_backlog_months</code> on every candidate month.  Detects any <code>web.sessionid</code>
+pointing at a non-existent <code>websessions.id</code> and forces the same reset
+path regardless of the dirty marker.  This is the safety net for
+ad-hoc DELETEs that bypassed <code>mark-dirty</code>.</p>
+</li>
+</ol>
+<p>So the cleanup sequence after deleting spam web rows is just:</p>
+<pre><code class="language-bash"># 1. Tell the orchestrator which months need rework:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py mark-dirty \
+    2024-09 2024-10 ... 2025-07
+
+# 2. Let it run.  The next tick (cron or manual) detects the dirty
+#    set, switches to catchup mode if needed, and processes one
+#    month per tick:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
+</code></pre>
+<p>If you do need to do it by hand (e.g. operating on a hub that hasn't
+been upgraded yet), the SQL equivalent of what the state machine
+does is:</p>
+<pre><code class="language-sql">-- 1. Reset sessionid for the affected date ranges, in chunks
+--    (1.4 M UPDATEs took 176 s on the test hub):
+UPDATE web SET sessionid = NULL
+  WHERE datetime &gt;= '&lt;start&gt;' AND datetime &lt; '&lt;end&gt;'
+    AND sessionid IS NOT NULL AND sessionid &lt;&gt; '0'
+  LIMIT 100000;
+-- repeat until ROW_COUNT() = 0
+
+-- 2. Wipe websessions for those months.
+DELETE FROM websessions
+  WHERE DATE_FORMAT(datetime,'%Y-%m-01') IN ('2024-09-01', ...);
+
+-- 3. Wipe summary cells for those months.  NOTE the date format:
+--    summary_*_vals.datetime uses YYYY-MM-00 (legacy convention),
+--    while websessions.datetime uses real datetime values.  Mixing
+--    the two formats silently wipes 0 rows.
+DELETE FROM summary_user_vals     WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_misc_vals     WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_simusage_vals WHERE datetime IN ('2024-09-00', ...);
+DELETE FROM summary_andmore_vals  WHERE datetime IN ('2024-09-00', ...);
+
+-- 4. Flip pipeline_state back to catchup so the orchestrator
+--    redrives the affected months on the next tick.
+UPDATE pipeline_state SET v='catchup' WHERE k='mode';
+DELETE FROM pipeline_state WHERE k='analyzed';
+</code></pre>
+<p><code>catchup</code> re-imports nothing (the rows are already in <code>web</code> cleanly)
+— it just walks forward through every backlog month running
+<code>logfix-session</code> + <code>summarize-month</code> with <code>periods=(1,)</code>.  When the
+backlog drains, the state machine flips itself to <code>rebuild</code>, which
+walks forward again refreshing every month's long-window summary
+cells (periods 0/3/12/13/14).  No manual intervention required.</p>
+<h3 id="max-allowed-packet-on-bulk-insert">max_allowed_packet on bulk INSERT</h3>
+<p><code>_ipgeo_lookup_batch</code> writes the ipinfo HTTPS results back into the
+hub-DB cache via a single <code>INSERT … VALUES (…), (…), …</code> with one
+tuple per resolved IP.  On a busy month (212 k new IPs on a single
+weekly websessions chunk) the SQL text alone exceeds 16 MB and
+MariaDB rejects the packet:</p>
+<pre><code>pymysql.err.OperationalError: (1153, &quot;Got a packet bigger than 'max_allowed_packet' bytes&quot;)
+</code></pre>
+<p>The pipeline now chunks that INSERT at 1000 rows per statement
+(<code>hzmetrics.py:4685</code>).  If you see this error on another hub it's the
+same issue — confirm by checking the server's <code>max_allowed_packet</code>
+and the number of new IPs in the failing chunk.</p>
+<h3 id="make-resolve-dns-cheap-once-the-table-is-small">Make resolve-dns cheap once the table is small</h3>
+<p>After mass cleanup the <code>web</code> table is much smaller but the resolve-
+dns scan still does the heavy lifting (<code>INSERT INTO _dns_tmp … SELECT DISTINCT ip FROM web WHERE datetime range …</code>).  A covering
+index helps:</p>
+<pre><code class="language-sql">CREATE INDEX web_dt_ip ON web (datetime, ip);
+</code></pre>
+<p>Lets InnoDB satisfy the scan from index pages without touching the
+8 GB+ heap.  ~700 MB index for a 12 M-row table; built in ~2.5 min on
+the geodynamics hub.</p>
+<p>After heavy churn the planner's row-count statistics may still pick
+a worse index — run <code>ANALYZE TABLE web</code> to refresh stats.  If the
+planner stubbornly picks the wrong index, a <code>FORCE INDEX (web_dt_ip)</code>
+hint in the resolve-dns query is the fallback.</p>
+<h3 id="verification-queries">Verification queries</h3>
+<p>After the cleanup ticks finish, sanity-check the result:</p>
+<pre><code class="language-sql">-- Should be 0:
+SELECT COUNT(*) FROM web
+  WHERE (referrer IS NULL OR referrer IN ('','-'))
+    AND (content LIKE '/login?return=%' OR content LIKE '/resources/browse?%');
+
+-- Should be 0 for the affected month range:
+SELECT COUNT(*) FROM web
+  WHERE datetime &gt;= '&lt;affected-start&gt;' AND datetime &lt; '&lt;affected-end&gt;'
+    AND sessionid IS NOT NULL AND sessionid &lt;&gt; '0'
+    AND sessionid NOT IN (SELECT id FROM websessions);
+
+-- Should show all 6 periods (1, 0, 3, 12, 13, 14) per month after
+-- the rebuild phase finishes:
+SELECT DATE_FORMAT(datetime,'%Y-%m') AS m,
+       GROUP_CONCAT(DISTINCT period ORDER BY period) AS periods
+FROM summary_user_vals
+WHERE datetime &gt;= '&lt;start&gt;-00'
+GROUP BY m ORDER BY m;
+</code></pre>
 <h2 id="whoisonline-map-is-stale">Whoisonline map is stale</h2>
 <pre><code class="language-bash"># Force a refresh:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py whoisonline
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py whoisonline
 
 # Where does the XML live?
 ls -la /var/www/&lt;hub&gt;/app/site/stats/maps/whoisonline.xml
@@ -293,24 +688,76 @@ path, the metrics-at-<code>:30</code> step won't run either, so this is worth
 checking first.</li>
 </ul>
 <h2 id="re-running-everything-from-scratch-test-environments-only">Re-running everything from scratch (test environments only)</h2>
-<pre><code class="language-bash"># Drop and recreate the test DB schema:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
-
-# Apply all migrations:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
+<pre><code class="language-bash"># init covers setup-db + migrate in one shot:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 
 # Re-process the entire pending log set:
-while sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status \
+while sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status \
       | grep -q &quot;pending&quot;; do
-    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py process --next
 done
 </code></pre>
 <p>Never do this on a production hub without backing up <code>&lt;hub&gt;_metrics</code>
 first.</p>
-<h2 id="logs-and-observability">Logs and observability</h2>
-<p>Single log file:</p>
-<pre><code>/var/log/hubzero/metrics/manage.log
+<h2 id="crash-recovery-forget-import">Crash recovery: forget-import</h2>
+<p>Each per-file import is wrapped in a single transaction guarded by an
+<code>INSERT IGNORE</code> into <code>metrics.imported_sources</code> (<code>filename</code>,
+<code>target_table</code>, <code>pk_start</code>, <code>pk_end</code>, <code>row_count</code>, <code>imported_at</code>).
+The flow is:</p>
+<ol>
+<li><code>BEGIN</code></li>
+<li><code>INSERT IGNORE INTO imported_sources …</code> — <code>rowcount=0</code> means the
+file already imported; skip data INSERT and just retry the move.</li>
+<li>Stream data into <code>web</code> / <code>userlogin</code> / <code>webhits</code>, tracking
+<code>pk_start</code> / <code>pk_end</code> (single-writer lock guarantees the range
+is contiguous to this file).</li>
+<li><code>UPDATE imported_sources SET pk_start, pk_end, row_count</code>.</li>
+<li><code>COMMIT</code>.</li>
+<li>Move source file to <code>imported/</code>.</li>
+</ol>
+<p>Crash at any step before COMMIT → InnoDB rolls back the data INSERT
+<em>and</em> the <code>imported_sources</code> row; retry sees no marker and imports
+cleanly.  Crash between COMMIT and the move → marker exists, retry
+skips the data INSERT and just retries the move.</p>
+<p>To deliberately re-import a file (e.g. you discovered the parser
+mis-handled a corner case and need to reprocess the day):</p>
+<pre><code class="language-bash"># Reverse the imported_sources marker AND delete the rows it tracks:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py \
+    forget-import access.log-20260315.gz web
+
+# Move the file back from imported/ to daily/ (or pull a fresh copy):
+sudo -u apache mv /var/log/httpd/imported/access.log-20260315.gz \
+                   /var/log/httpd/daily/
 </code></pre>
+<p>The next import tick will pick it up.  PK-range DELETE is bounded by
+file size, not table size — works at nanoHUB scale (800 M+ rows).</p>
+<h2 id="logs-and-observability">Logs and observability</h2>
+<p>Three destinations, all populated simultaneously with ISO 8601
+timestamps to millisecond precision (<code>2026-05-21T14:05:49.123-04:00</code>):</p>
+<pre><code>/var/log/hubzero/metrics/manage.log     # DEBUG+ — authoritative file (HZMETRICS_LOG override)
+stderr                                  # INFO+  — picked up by cron / systemd
+syslog LOG_LOCAL0 facility              # INFO+  — routes wherever rsyslog/journald sends it
+</code></pre>
+<p>Quick views:</p>
+<pre><code class="language-bash"># File (tail-and-grep friendly, full DEBUG):
+sudo tail -f /var/log/hubzero/metrics/manage.log
+sudo grep -E '(FAIL|ERROR)' /var/log/hubzero/metrics/manage.log
+
+# systemd journal (tagged hzmetrics):
+sudo journalctl -t hzmetrics --since '1 hour ago'
+sudo journalctl -t hzmetrics -f       # live tail
+
+# /var/log/messages or hub-specific file (depends on rsyslog rules):
+sudo grep hzmetrics /var/log/messages
+</code></pre>
+<p>To route the syslog facility to a dedicated file, add to your
+rsyslog config (e.g. <code>/etc/rsyslog.d/30-hzmetrics.conf</code>):</p>
+<pre><code>local0.*    /var/log/hubzero/metrics/hzmetrics-syslog.log
+&amp; stop
+</code></pre>
+<p>Then <code>systemctl restart rsyslog</code>.  This is optional — the local
+manage.log already captures everything; the syslog handler is the
+hook for centralized logging or cross-host log aggregation.</p>
 <p>Each pipeline stage prints <code>[&lt;stage&gt;] start</code> and <code>[&lt;stage&gt;] done</code>
 markers.  Searching for <code>FAIL</code>, <code>ERROR</code>, or <code>unrecognized</code> surfaces
 recoverable problems (e.g., a malformed log line that didn't match
@@ -350,6 +797,40 @@ order:</p>
 <li>Re-run <code>analyze --month</code> if the underlying enriched data was lost
 (will require the original Apache logs from <code>/var/log/httpd/imported/</code>).</li>
 </ol>
+<h2 id="periodic-maintenance-analyze-table">Periodic maintenance: ANALYZE TABLE</h2>
+<p>InnoDB has <code>innodb_stats_auto_recalc=ON</code> by default — index statistics
+get refreshed when ~10% of a table's rows change.  That's fine in
+steady state, but after a big one-shot change the trigger threshold
+may not fire and stale stats can steer the query planner onto bad
+index paths.</p>
+<p>Trigger an explicit refresh after any of:</p>
+<ul>
+<li>Bulk import (catchup processing several backfilled months at once).</li>
+<li>A migration that DELETEs or rewrites a large fraction of a table
+(e.g. migration #4's userlogin purge: 93 M → 4 K rows).</li>
+<li>An engine conversion (<code>ALTER … ENGINE=InnoDB</code> on a large MyISAM
+table — the conversion rebuilds but doesn't re-sample stats).</li>
+</ul>
+<pre><code class="language-bash">mysql -u &lt;user&gt; -p&lt;pass&gt; &lt;hub&gt;_metrics &lt;&lt;'SQL'
+ANALYZE TABLE web;
+ANALYZE TABLE websessions;
+ANALYZE TABLE userlogin;
+ANALYZE TABLE summary_user_vals;
+ANALYZE TABLE summary_misc_vals;
+ANALYZE TABLE summary_simusage_vals;
+ANALYZE TABLE summary_andmore_vals;
+ANALYZE TABLE webhits;
+SQL
+</code></pre>
+<p>ANALYZE TABLE on InnoDB samples 20 pages by default and runs in
+sub-second per table — safe to run while the pipeline is active.</p>
+<p>Don't run <code>OPTIMIZE TABLE</code> on these — for InnoDB it rebuilds the
+entire .ibd file (same cost as <code>ALTER … ENGINE=InnoDB</code>) and only
+helps if the table has accumulated significant deleted-but-not-
+reclaimed space.  After a recent ENGINE conversion the .ibd is
+already fresh, so OPTIMIZE is a no-op cost.  ANALYZE is the
+lightweight alternative that fixes the stats-staleness symptom
+without rewriting data.</p>
 <h2 id="monitoring-and-alerting">Monitoring and alerting</h2>
 <p>The pipeline doesn't ship its own monitoring stack — observability
 is via log file, status command, and what you wire up around it.
@@ -380,7 +861,7 @@ Useful signals to put behind alerts:</p>
 </tr>
 <tr>
 <td>Lock held abnormally long</td>
-<td><code>cat /var/run/hzmetrics/hzmetrics.pid</code> then check the PID's elapsed time with <code>ps -o etime= -p &lt;pid&gt;</code></td>
+<td><code>cat /opt/hubzero/metrics/state/hzmetrics.pid</code> then check the PID's elapsed time with <code>ps -o etime= -p &lt;pid&gt;</code></td>
 <td>lock held &gt;2 hours by a live PID (catch-up usually completes within minutes; multi-hour holds suggest a wedge)</td>
 </tr>
 <tr>
@@ -442,7 +923,7 @@ if <code>webhits</code> ≈ previous month but <code>web</code> is 10× higher, 
 scraped).</li>
 <li>DNS resolves but <code>fill-ipcountry</code> errors out → the
 <code>help.hubzero.org/ipinfo/v1</code> service may be unreachable.  Check
-<code>/etc/hubzero-metrics/hzmetrics.conf</code> for the IP-country service
+<code>/opt/hubzero/metrics/conf/hzmetrics.conf</code> for the IP-country service
 URL.</li>
 </ul>
 

@@ -127,62 +127,74 @@ in via the cron.d / spool drop-in, exactly as above.  <code>pyproject.toml</code
 is purely a dev / CI convenience so <code>pip install</code> resolves the dep
 set instead of relying on system packages being present.</p>
 <h2 id="file-layout-post-install">File layout (post-install)</h2>
-<pre><code>/opt/hubzero/bin/hzmetrics.py                  the pipeline
-/opt/hubzero/bin/hzmetrics-postrotate.sh       logrotate hook
-/etc/hubzero-metrics/access.cfg                DB credentials (640, root:apache)
-/etc/hubzero-metrics/hzmetrics.conf            optional runtime overrides
-/etc/tmpfiles.d/hzmetrics.conf                 systemd-tmpfiles, creates /var/run/hzmetrics/
-/var/spool/cron/apache                         the cron entry (single line)
-/var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
-/var/run/hzmetrics/hzmetrics.state             daily state (created at runtime)
-/var/log/hubzero/metrics/manage.log         pipeline log
+<p>Everything lives under <code>/opt/hubzero/metrics/</code>, a self-contained tree
+owned by the apache user.  Only the operator-facing log file lives
+outside, at the conventional <code>/var/log/</code> location:</p>
+<pre><code>/opt/hubzero/metrics/bin/hzmetrics.py            the pipeline
+/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh logrotate hook
+/opt/hubzero/metrics/conf/access.cfg             DB credentials (mode 600, apache)
+/opt/hubzero/metrics/conf/hzmetrics.conf         optional runtime overrides
+/opt/hubzero/metrics/conf/cron.apache            crontab template (apache crontab)
+/opt/hubzero/metrics/conf/hzmetrics.conf.sample  reference config
+/opt/hubzero/metrics/state/hzmetrics.pid         PID lock (created at runtime)
+/var/log/hubzero/metrics/manage.log              pipeline log (apache-writable)
 </code></pre>
+<p>Tree is owned <code>apache:apache</code>, mode 0750 — only the apache user (and
+root) can see inside.  No files in <code>/etc/</code>, no <code>/var/run/</code> tmpfiles
+dance, no <code>/var/spool/cron/</code> writing.  Orchestrator state lives in
+the <code>pipeline_state</code> DB table; the only on-disk state is the lock
+file.</p>
 <p>The legacy reference scripts under <code>tests/legacy/</code> are <strong>not</strong>
 installed on a production host.  They live in this repo only as the
 A/B-test parity reference.</p>
 <h2 id="install-via-makefile">Install via Makefile</h2>
 <p>From a checkout of this repo:</p>
-<pre><code>sudo make install                    # uses /etc/cron.d/ form (default)
-sudo make install CRON_STYLE=spool   # uses /var/spool/cron/apache form instead
-sudo make uninstall                  # removes everything `install` put on the host
-make help                            # list all targets (lint, test, test-ab, ...)
+<pre><code># One-time, on a fresh host (the only root step):
+sudo make install-bootstrap
+
+# Now and forever after, no root needed:
+sudo -u apache make install
+sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+sudo make uninstall            # removes /opt/hubzero/metrics tree
+make help                      # list targets (lint, test, test-ab, …)
 </code></pre>
-<p>What <code>install</code> copies:</p>
+<p><code>install-bootstrap</code> creates <code>/opt/hubzero/metrics/{bin,conf,state}</code>
+and <code>/var/log/hubzero/metrics/</code> owned <code>apache:apache</code> mode 0750 —
+the only root-required step in the install, and only once per host.
+Subsequent installs and upgrades are pure <code>sudo -u apache make install</code>
+identity-switches; no actual root needed.</p>
+<p>What <code>install</code> copies (all owned <code>apache:apache</code>):</p>
 <ul>
-<li><code>hzmetrics.py</code> → <code>/opt/hubzero/bin/hzmetrics.py</code> (mode 755, owner apache)</li>
-<li><code>conf/hzmetrics-logrotate-postrotate.sh</code> → <code>/opt/hubzero/bin/hzmetrics-postrotate.sh</code></li>
-<li><code>conf/hzmetrics.tmpfiles.conf</code> → <code>/etc/tmpfiles.d/hzmetrics.conf</code></li>
-<li>Exactly ONE of:
-<ul>
-<li><code>conf/hubzero-metrics.cron.d</code> → <code>/etc/cron.d/hubzero-metrics</code>  <em>(default; <code>CRON_STYLE=dropin</code>)</em></li>
-<li><code>conf/hubzero-metrics.cron.apache</code> → <code>/var/spool/cron/apache</code>  <em>(<code>CRON_STYLE=spool</code>)</em></li>
+<li><code>hzmetrics.py</code> → <code>/opt/hubzero/metrics/bin/hzmetrics.py</code> (mode 755)</li>
+<li><code>conf/hzmetrics-logrotate-postrotate.sh</code> → <code>/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh</code> (mode 755)</li>
+<li><code>conf/hubzero-metrics.cron.apache</code> → <code>/opt/hubzero/metrics/conf/cron.apache</code> (mode 644)</li>
+<li><code>conf/hzmetrics.conf.sample</code> → <code>/opt/hubzero/metrics/conf/hzmetrics.conf.sample</code> (mode 644)</li>
 </ul>
-</li>
-</ul>
-<p><code>install</code> deliberately does NOT touch <code>/etc/hubzero-metrics/access.cfg</code>
-— that's an operator-supplied secret.  After <code>make install</code>, the
-Makefile prints the remaining manual steps (the tmpfiles <code>--create</code>,
-the access.cfg drop, <code>setup-db</code>, <code>migrate --apply</code>).</p>
-<p>Overrides: <code>PREFIX</code>, <code>SYSCONFDIR</code>, <code>TMPFILESDIR</code>, <code>CRONDDIR</code>,
-<code>SPOOLCRONDIR</code>, <code>INSTALL_OWNER</code>, and the standard <code>DESTDIR</code> for
-staged installs (<code>make install DESTDIR=/tmp/stage INSTALL_OWNER=root</code>
-for a package-build scratch dir).</p>
-<p>The cron entry is a single line, every five minutes:</p>
-<pre><code>*/5 * * * * apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+<p><code>install</code> deliberately does NOT drop <code>access.cfg</code> — it's an operator-
+supplied secret.  After <code>make install</code>, the Makefile prints the
+remaining manual steps (the access.cfg copy, the <code>crontab</code>
+registration; <code>setup-db</code> and <code>migrate --apply</code> are now folded into
+<code>hzmetrics.py init</code> or the auto-bootstrap on cron's first tick —
+see <a href="#first-time-install">the First-time install section</a> below).</p>
+<p>Cron-style default is <code>spool</code> — the install registers the apache
+user's crontab directly via <code>crontab(1)</code>, no <code>/etc/cron.d/</code>
+drop-in.  Override with <code>CRON_STYLE=dropin make install</code> if your
+hub's policy needs the global <code>/etc/cron.d/</code> flavor.</p>
+<p>Overrides: <code>HZMETRICS_HOME</code> (install root, default <code>/opt/hubzero/metrics</code>),
+<code>LOG_DIR</code> (default <code>/var/log/hubzero/metrics</code>), <code>INSTALL_OWNER</code> /
+<code>INSTALL_GROUP</code> (default <code>apache</code>), and <code>DESTDIR</code> for staged installs
+(<code>make install DESTDIR=/tmp/stage</code> for packaging dry-runs).</p>
+<p>The cron entry is a single line, every five minutes, in the apache
+user crontab:</p>
+<pre><code>*/5 * * * * /opt/hubzero/metrics/bin/hzmetrics.py tick
 </code></pre>
-<p>Pick the format that matches your host's cron conventions:</p>
-<ul>
-<li><code>/var/spool/cron/apache</code> — apache user crontab (no user column).</li>
-<li><code>/etc/cron.d/hubzero-metrics</code> — drop-in (<code>user</code> column is the
-3rd-to-last field).</li>
-</ul>
-<p>After install, kick <code>systemd-tmpfiles</code> so <code>/var/run/hzmetrics/</code>
-exists right now (it'll be recreated automatically on every reboot):</p>
-<pre><code>sudo systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
+<p>Register it via:</p>
+<pre><code>sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
 </code></pre>
+<p>cronie auto-detects the user-crontab change; no daemon restart needed.</p>
 <h2 id="access-cfg">access.cfg</h2>
 <p>The mandatory config file.  Bare <code>$var = 'value';</code> syntax (no
-<code>&lt;?php</code>).  Read by both <code>hzmetrics.py</code> and the legacy Perl scripts:</p>
+<code>&lt;?php</code>).  Read by <code>hzmetrics.py</code>:</p>
 <pre><code>$hub_dir    = '/var/www/&lt;hub&gt;';
 $hub_db     = '&lt;hub&gt;';
 $metrics_db = '&lt;hub&gt;_metrics';
@@ -191,8 +203,9 @@ $db_user    = '&lt;hub&gt;';
 $db_pass    = '&lt;secret&gt;';
 $db_prefix  = 'jos_';
 </code></pre>
-<pre><code>sudo install -d -o root -g apache -m 750 /etc/hubzero-metrics
-sudo install -o root -g apache -m 640 &lt;your-cfg&gt; /etc/hubzero-metrics/access.cfg
+<p>Drop it in place after the bootstrap step has created the conf dir:</p>
+<pre><code>sudo install -o apache -g apache -m 600 &lt;your-cfg&gt; \
+    /opt/hubzero/metrics/conf/access.cfg
 </code></pre>
 <p>The harness uses <code>HZMETRICS_ACCESS_CFG=&lt;path&gt;</code> to point at a test
 config — useful for one-off catch-up against a copy of production.</p>
@@ -210,32 +223,59 @@ timeout = 2.0
 <code>concurrency=100</code> against the system resolver is benchmarked clean
 against Purdue's resolvers and produces ~4 ms/IP cold.</p>
 <h2 id="first-time-install">First-time install</h2>
-<p>If <code>&lt;hub&gt;_metrics</code> doesn't exist yet:</p>
-<pre><code>sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
+<p>After <code>install-bootstrap</code> has seated <code>/opt/hubzero/metrics</code> and you've
+dropped a populated <code>conf/access.cfg</code> in place, the script can finish
+its own setup in one call:</p>
+<pre><code>sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 </code></pre>
-<p>Creates the metrics database, every table, and seeds the static
-reference tables (<code>continents</code>, <code>countries</code>, <code>domainclass</code>,
-<code>classes</code>, etc.).  Run with <code>--dry-run</code> first to see what statements
-will execute.</p>
+<p><code>init</code> is idempotent and does:</p>
+<ol>
+<li>Asserts <code>site = &lt;hubname&gt;</code> is set in <code>/etc/hubzero.conf</code>
+(refuses otherwise — the site name prefixes every staged-log
+filename and a few DB conventions, so a silent &quot;hub&quot; fallback
+would collide on every multi-hub host).</li>
+<li><code>mkdir -p</code> for every directory the pipeline writes to —
+<code>HZMETRICS_HOME/{bin,conf,state}</code>, <code>/var/log/hubzero/{daily, imported,metrics}</code>, and <code>/var/log/{httpd,apache2}/{daily, imported}</code>.</li>
+<li><code>CREATE DATABASE IF NOT EXISTS &lt;hub&gt;_metrics</code>, then runs the
+baseline DDL and applies every pending migration.</li>
+</ol>
+<p>The same machinery runs automatically on the first <code>cron</code> tick when
+the process is owned by <code>apache</code> / <code>www-data</code> (see
+<a href="../../reference/architecture/#self-bootstrap"><code>_self_bootstrap</code> in architecture.md</a>) — so
+operators who'd rather skip <code>init</code> and let cron handle it can do so,
+provided <code>access.cfg</code> is in place before cron fires.</p>
 <p>The CMS-side tables created by metrics
 (<code>jos_resource_stats_tools_topvals</code>, <code>jos_session_geo</code>, etc.) are
-created by the hub's own CMS migrations and shouldn't need
-anything from <code>hzmetrics.py</code>.  If they're missing, see the
-<code>exclude_list</code> schema work and check the hub's migration state.</p>
-<p>Apply any pending schema migrations:</p>
-<pre><code>sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
-</code></pre>
-<p><code>migrate</code> without <code>--apply</code> shows what would change.</p>
+created by the hub's own CMS migrations and shouldn't need anything
+from <code>hzmetrics.py</code>.  If they're missing, see the <code>exclude_list</code>
+schema work and check the hub's migration state.</p>
+<p>The two underlying commands <code>init</code> composes (<code>setup-db</code> and <code>migrate --apply</code>) are still individually invocable for the rare case where you
+want to run one without the other.</p>
 <h2 id="verifying-the-install">Verifying the install</h2>
-<pre><code># What's the pipeline see?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+<p><code>doctor</code> is the diagnostic entry point.  It walks the four phases
+self-bootstrap touches and reports each:</p>
+<pre><code># Full health check — reports every issue, fixes nothing:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
+
+# Same, but attempt to repair the fixable ones (mkdir, CREATE
+# DATABASE, run pending migrations) — same code paths self-bootstrap
+# uses on cron startup:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor --fix
+</code></pre>
+<p>Things <code>doctor</code> cannot fix from its own privileges (missing
+<code>/etc/hubzero.conf</code> <code>site</code> line, root-owned parent dirs, MySQL down,
+bad <code>access.cfg</code> credentials) are reported clearly so the operator
+knows the next step.</p>
+<p>The traditional smoke-tests still work after <code>init</code>:</p>
+<pre><code># What does the pipeline see?
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 
 # Does DNS work?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py resolve-dns \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py resolve-dns \
     metrics web --dry-run 2025-07
 
 # Does the daily run actually do anything?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run --force
 </code></pre>
 <p>Watch <code>/var/log/hubzero/metrics/manage.log</code> while the run is in
 progress.  Each pipeline phase prints <code>[&lt;phase&gt;] …</code> start and end
@@ -253,21 +293,26 @@ restarting (it reopens on the next <code>tick</code>):</p>
     notifempty
     create 640 apache apache
     postrotate
-        /opt/hubzero/bin/hzmetrics-postrotate.sh
+        /opt/hubzero/metrics/bin/hzmetrics-postrotate.sh
     endscript
 }
 </code></pre>
 <h2 id="catch-up-after-a-stalled-host">Catch-up after a stalled host</h2>
-<p>The pipeline is built to drain log backlogs on its own.  Once the
-cron entry is running:</p>
-<pre><code># What's pending?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+<p><code>cmd_run</code> is a three-mode state machine (see
+<a href="../../reference/architecture/#catchup-orchestration-state-machine">architecture.md → Catchup orchestration</a>):
+when it detects a backlog it flips itself into <code>catchup</code> mode, drains
+one month per tick using the per-month decision matrix, then enters
+<code>rebuild</code> mode to refresh long-window summary cells.  All autonomous.</p>
+<pre><code># Where is the orchestrator?  status shows mode + cursors:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 
-# Either wait — `tick` will process one month per hourly :30 tick.
-# 12 months of backlog → about 6 hours of unattended catch-up.
+# Drive ticks manually if `tick` cadence is too slow:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 
-# Or do it explicitly, one month at a time, in the foreground:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
+# Resummarize a range without touching state.mode
+# (useful for a one-shot rebuild after a data fix):
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
+    --since 2022-01 --through 2024-12
 </code></pre>
 <p>See <a href="../operations/">operations.md</a> for the runbook on common
 catch-up scenarios.</p>

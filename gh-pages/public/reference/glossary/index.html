@@ -86,7 +86,14 @@
 <li class="toc__item toc__item--level-3"><a href="#login-ips-login-ips-tmp">Login IPs / login_ips_tmp</a></li>
 <li class="toc__item toc__item--level-3"><a href="#whoisonline">whoisonline</a></li>
 <li class="toc__item toc__item--level-3"><a href="#tick">Tick</a></li>
+<li class="toc__item toc__item--level-3"><a href="#orchestrator-mode">Orchestrator mode</a></li>
+<li class="toc__item toc__item--level-3"><a href="#backlog-month">Backlog month</a></li>
+<li class="toc__item toc__item--level-3"><a href="#decision-matrix-catchup">Decision matrix (catchup)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#pipeline-state">`pipeline_state`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#migration-schema">Migration (schema)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#imported-sources">`imported_sources`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#self-bootstrap">Self-bootstrap</a></li>
+<li class="toc__item toc__item--level-3"><a href="#dirty-month">Dirty month</a></li>
 <li class="toc__item toc__item--level-3"><a href="#access-cfg">`access.cfg`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#exclude-list">exclude_list</a></li>
 <li class="toc__item toc__item--level-3"><a href="#a-b-parity-bug-for-bug-parity">A/B parity / bug-for-bug parity</a></li>
@@ -304,13 +311,81 @@ concern from the daily metrics pipeline.</p>
 <h3 id="tick">Tick</h3>
 <p>The cron entry point — <code>hzmetrics.py tick</code> — that runs every 5
 minutes.  Always refreshes whoisonline; at <code>:30</code> past the hour, also
-tries to run the metrics pipeline (under PID-lock guard).</p>
+invokes <code>cmd_run</code> (which acquires the flock and dispatches by mode).</p>
+<h3 id="orchestrator-mode">Orchestrator mode</h3>
+<p>The string in <code>pipeline_state.mode</code> that controls what each <code>tick</code>
+does.  One of:</p>
+<ul>
+<li><code>normal</code>: steady-state.  Import today's pending logs; summarize the
+previous month when it's fully imported.</li>
+<li><code>catchup</code>: process one backlog month per tick, applying the
+per-month decision matrix.  Summarize with <code>periods=(1,)</code> only.</li>
+<li><code>rebuild</code>: walk <code>rebuild_cursor</code> through prev-month, re-summarizing
+each with all six periods to fix long-window cells that catchup
+left stale.</li>
+</ul>
+<p>Transitions are computed at the start of every tick from filesystem</p>
+<ul>
+<li>DB state, not stored across ticks.  See
+<a href="../architecture/#catchup-orchestration-state-machine">architecture.md → Catchup orchestration</a>.</li>
+</ul>
+<h3 id="backlog-month">Backlog month</h3>
+<p>A month strictly before the current calendar month that either has a
+pending source log or has DB rows with an incomplete summary.  The
+orchestrator picks the oldest backlog month at each catchup tick.</p>
+<h3 id="decision-matrix-catchup">Decision matrix (catchup)</h3>
+<p>Three-helper test used to route a backlog month into one of five
+branches: <code>month_has_source(m)</code>, <code>month_has_data(m)</code>,
+<code>is_month_fully_summarized(m)</code>.  The table is documented in
+<a href="../architecture/#the-per-month-decision-matrix">architecture.md → The per-month decision matrix</a>.
+The unusual cell — <code>source ✗ data ✓</code> — is what handles months whose
+DB rows survived an old import but whose source files are gone.</p>
+<h3 id="pipeline-state"><code>pipeline_state</code></h3>
+<p>Key/value table in the metrics DB that stores orchestrator state:
+<code>analyzed</code>, <code>mode</code>, <code>catchup_started</code>, <code>rebuild_cursor</code>, <code>dirty_months</code>.
+Replaces the pre-2026 <code>/var/run/hzmetrics/hzmetrics.state</code> file that
+sat on tmpfs and was lost on every reboot.  Multi-key writes are
+atomic via single <code>INSERT … ON DUPLICATE KEY UPDATE</code>.</p>
 <h3 id="migration-schema">Migration (schema)</h3>
 <p>A row in <code>&lt;hub&gt;_metrics.migrations</code> recording an applied schema
 delta.  <code>hzmetrics.py migrate --apply</code> walks the unapplied migrations
 in order and runs them.  Standard schema-migration pattern.</p>
+<p>Each migration carries a <code>check_sql</code> against <code>information_schema</code> (or
+data state) that lets it auto-detect &quot;already applied&quot; — important
+because the DDL in <code>setup-db</code> now bakes in the post-migration state,
+so a fresh install marks every migration applied without re-running
+them.</p>
+<h3 id="imported-sources"><code>imported_sources</code></h3>
+<p>Crash-recovery table in the metrics DB.  One row per source file per
+target table, populated as <code>INSERT IGNORE</code> inside the import
+transaction; the row carries <code>pk_start</code> / <code>pk_end</code> after the data
+INSERT commits.  A retry sees <code>rowcount = 0</code> on the IGNORE and skips
+the data INSERT.  <code>forget-import &lt;file&gt; &lt;table&gt;</code> reverses the marker
+and <code>DELETE</code>s the tracked PK range — works at nanoHUB scale because
+the range scan is bounded by file size, not table size.</p>
+<h3 id="self-bootstrap">Self-bootstrap</h3>
+<p>The repair routine <code>_self_bootstrap()</code> runs at the top of
+<code>cmd_run</code> / <code>cmd_tick</code>, gated on <code>os.geteuid()</code> mapping to <code>apache</code> /
+<code>www-data</code>.  Asserts <code>site = …</code> is set in <code>/etc/hubzero.conf</code>,
+<code>mkdir -p</code>s the expected directory tree, then <code>CREATE DATABASE IF NOT EXISTS</code> + baseline DDL + <code>migrate --apply</code>.  All steps idempotent.</p>
+<p>The two operator-facing equivalents:</p>
+<ul>
+<li><code>init</code> — same machinery, no apache-uid gate (operator-driven first
+install).</li>
+<li><code>doctor [--fix]</code> — diagnostic: reports the four phases'
+health; <code>--fix</code> re-runs the bootstrap helpers and re-checks.</li>
+</ul>
+<h3 id="dirty-month">Dirty month</h3>
+<p>A YYYY-MM entry in <code>pipeline_state.dirty_months</code>.  The catchup loop
+processes dirty months with a special <code>_reset_month_for_resummarize</code>
+prelude (clear <code>web.sessionid</code> + wipe <code>websessions</code> + delete summary
+rows) before the standard analyze + summarize.  Operators set this
+with <code>mark-dirty YYYY-MM …</code> after a bulk cleanup of <code>web</code> (so any
+stale <code>websessions</code> rows pointing into the wiped data get
+rebuilt); the orchestrator auto-clears each entry once that month's
+reset+resummarize finishes.</p>
 <h3 id="access-cfg"><code>access.cfg</code></h3>
-<p><code>/etc/hubzero-metrics/access.cfg</code>.  Bare <code>$var = 'value';</code> PHP-style
+<p><code>/opt/hubzero/metrics/conf/access.cfg</code>.  Bare <code>$var = 'value';</code> PHP-style
 file with DB credentials.  Owned <code>root:apache</code> mode 640.  Read by
 <code>hzmetrics.py</code>, the legacy Perl scripts, and the test harness (via
 <code>HZMETRICS_ACCESS_CFG</code> env var).</p>
