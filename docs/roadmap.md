@@ -369,14 +369,15 @@ days, mostly testing.
 
 ## Cron install
 
-`/etc/cron.d/hubzero-metrics` (or `/var/spool/cron/apache`) installs
-the every-5-min `hzmetrics.py tick` cron entry via `make install`,
-but on geodynamics this has been deliberately left disabled — manual
-ticks during catch-up.  Once the rebuild is complete and steady-state
-is verified, install the cron and let it drive.
+The every-5-min `hzmetrics.py tick` entry is installed into the
+apache user's crontab via `sudo -u apache crontab
+/opt/hubzero/metrics/conf/cron.apache` — on geodynamics this has
+been deliberately left un-registered during the audit so all ticks
+are manual.  Once steady-state is verified, register the crontab
+and let it drive.
 
-No code work; just `sudo make install CRON_STYLE=spool` (or the
-cron.d form) and then `sudo systemctl restart crond`.
+No code work; cronie auto-detects the user-crontab change without
+a daemon restart.
 
 ## Check nanoHUB's metrics fork for resource-merge ideas
 

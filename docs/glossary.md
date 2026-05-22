@@ -177,11 +177,10 @@ DB rows survived an old import but whose source files are gone.
 
 ### `pipeline_state`
 Key/value table in the metrics DB that stores orchestrator state:
-`analyzed`, `mode`, `catchup_started`, `rebuild_cursor`.  Replaces
-the legacy `/var/run/hzmetrics/hzmetrics.state` file (which was on
-tmpfs and lost on reboot).  Multi-key writes are atomic via single
-`INSERT … ON DUPLICATE KEY UPDATE`.  The file→DB bootstrap on first
-read of an upgraded install imports the legacy file once.
+`analyzed`, `mode`, `catchup_started`, `rebuild_cursor`, `dirty_months`.
+Replaces the pre-2026 `/var/run/hzmetrics/hzmetrics.state` file that
+sat on tmpfs and was lost on every reboot.  Multi-key writes are
+atomic via single `INSERT … ON DUPLICATE KEY UPDATE`.
 
 ### Migration (schema)
 A row in `<hub>_metrics.migrations` recording an applied schema
@@ -195,7 +194,7 @@ so a fresh install marks every migration applied without re-running
 them.
 
 ### `access.cfg`
-`/etc/hubzero-metrics/access.cfg`.  Bare `$var = 'value';` PHP-style
+`/opt/hubzero/metrics/conf/access.cfg`.  Bare `$var = 'value';` PHP-style
 file with DB credentials.  Owned `root:apache` mode 640.  Read by
 `hzmetrics.py`, the legacy Perl scripts, and the test harness (via
 `HZMETRICS_ACCESS_CFG` env var).

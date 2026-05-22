@@ -13,7 +13,7 @@ Every HUBzero hub has two MariaDB schemas, both named after the hub:
 
 For a hub named `foo`, these are `foo` and `foo_metrics`
 respectively.  Credentials are in
-`/etc/hubzero-metrics/access.cfg` (owned `root:apache`, mode 640).
+`/opt/hubzero/metrics/conf/access.cfg` (owned `root:apache`, mode 640).
 The config file uses a bare `$var = 'value';` syntax that is read by
 both the Python pipeline and the Perl scripts under
 [`tests/legacy/`](../tests/legacy/).
@@ -219,14 +219,14 @@ of `fill-domain` and is documented in the
 One cron entry:
 
 ```
-*/5 * * * *  apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+*/5 * * * *  apache  python3 /opt/hubzero/metrics/bin/hzmetrics.py tick
 ```
 
 `tick` does:
 
 1. Always: refresh `whoisonline` (jos_session_geo + xml map).
 2. If the wall clock minute is `30`: invoke `cmd_run`.
-   `cmd_run` acquires `/var/run/hzmetrics/hzmetrics.pid` via
+   `cmd_run` acquires `/opt/hubzero/metrics/state/hzmetrics.pid` via
    `fcntl.flock`; if another `tick` holds it, exit cleanly.
 
 The lock is the only concurrency guard.  `flock` releases automatically
@@ -315,10 +315,11 @@ period-14 cells for downstream months without disturbing period-1.
 
 ## State
 
-Most pipeline state lives in the DB now.  `/var/run/hzmetrics/` is
-only the runtime lockfile.
+All pipeline state lives in the `pipeline_state` table in
+`<hub>_metrics`.  The only on-disk state is the flock-based PID lock
+under `/opt/hubzero/metrics/state/`.
 
-`pipeline_state` is a tiny key/value table in `<hub>_metrics`:
+`pipeline_state` is a tiny key/value table:
 
 | key                | meaning                                                       |
 |--------------------|---------------------------------------------------------------|
@@ -326,6 +327,7 @@ only the runtime lockfile.
 | `mode`             | `normal` \| `catchup` \| `rebuild`                            |
 | `catchup_started`  | earliest YYYY-MM that catchup touched (set on entry)          |
 | `rebuild_cursor`   | next YYYY-MM that rebuild will resummarize                    |
+| `dirty_months`     | comma-separated YYYY-MM list flagged for rework               |
 
 Updates are single-statement `INSERT … ON DUPLICATE KEY UPDATE`, so
 multi-key writes are atomic from any concurrent reader's point of view.
@@ -333,29 +335,27 @@ multi-key writes are atomic from any concurrent reader's point of view.
 The flock-based lock stays on disk — kernel-managed dead-process
 release is hard to replicate cleanly in SQL.
 
-**Bootstrap:** on first read after upgrade, if `pipeline_state` is
-empty AND `/var/run/hzmetrics/hzmetrics.state` exists (the legacy
-file format), its keys are imported into the table once.  The file
-is left in place — harmless and useful for operators who grep
-`/var/run` first.
-
 `tests/ab/port_state/` covers DB read/write, multi-key atomicity,
-and the file→DB bootstrap (empty / skip-when-table-nonempty /
-malformed-lines / latch-after-first-call / unreadable-file).
+the dirty-months helpers, and the rebuild-from validation paths.
 
 ## Files on disk
 
-- `/etc/hubzero-metrics/access.cfg` — DB credentials, paths.  Owned
-  by root:apache, mode 640.
-- `/etc/hubzero-metrics/hzmetrics.conf` — *optional* runtime overrides
-  (DNS nameserver, concurrency, timeout).  See
+- `/opt/hubzero/metrics/bin/hzmetrics.py` — the pipeline binary.
+  Owned `apache:apache`, mode 0755.
+- `/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh` — logrotate hook.
+- `/opt/hubzero/metrics/conf/access.cfg` — DB credentials, paths.
+  Owned `apache:apache`, mode 0600.
+- `/opt/hubzero/metrics/conf/hzmetrics.conf` — *optional* runtime
+  overrides (DNS nameserver, concurrency, timeout).  See
   [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample).
-- `/var/run/hzmetrics/hzmetrics.pid` — PID lock, ensures one
-  pipeline at a time.  Created at boot by `/etc/tmpfiles.d/hzmetrics.conf`.
-- `/var/run/hzmetrics/hzmetrics.state` — legacy state file.  Only
-  read at first-run bootstrap into `pipeline_state`; not updated
-  by current code.  Safe to delete after the bootstrap.
-- `/var/log/hubzero/metrics/` — pipeline log directory.
+- `/opt/hubzero/metrics/conf/cron.apache` — crontab template; operator
+  registers it via `sudo -u apache crontab …`.
+- `/opt/hubzero/metrics/state/hzmetrics.pid` — PID lock, ensures one
+  pipeline runs at a time.  Auto-created by `acquire_lock()` on first
+  run; flock self-releases on process exit.
+- `/var/log/hubzero/metrics/manage.log` — pipeline log file (also
+  routed to syslog LOG_LOCAL0 and stderr; see
+  [operations.md](operations.md#logs-and-observability)).
 - `/var/log/httpd/daily/`, `/var/log/hubzero/daily/` — incoming log
   files.  Pipeline reads, processes, and moves them to `imported/`.
 
@@ -389,11 +389,8 @@ daily-state-already-completed guard on `run` / `process` / `analyze` /
 
 - **`hzmetrics.py`** — the entire pipeline.  ~6000 lines of Python.
 - **`conf/hzmetrics.conf.sample`** — optional runtime overrides.
-- **`conf/hubzero-metrics.cron.apache`**, **`conf/hubzero-metrics.cron.d`** —
-  cron entry templates (apache crontab format and /etc/cron.d format).
+- **`conf/hubzero-metrics.cron.apache`** — apache user crontab template.
 - **`conf/hzmetrics-logrotate-postrotate.sh`** — logrotate hook.
-- **`conf/hzmetrics.tmpfiles.conf`** — systemd-tmpfiles config to create
-  `/var/run/hzmetrics/` at boot.
 - **`tests/legacy/`** — the original PHP/Perl/Bash pipeline preserved
   as the A/B parity reference.
 - **`tests/ab/`** — the A/B test harness (35 ports; see

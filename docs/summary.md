@@ -45,7 +45,7 @@ decoder.
 One cron entry, every 5 minutes:
 
 ```
-*/5 * * * *  apache  python3 /opt/hubzero/bin/hzmetrics.py tick
+*/5 * * * *  apache  python3 /opt/hubzero/metrics/bin/hzmetrics.py tick
 ```
 
 `tick` updates the whoisonline map on every invocation.  At `:30` past

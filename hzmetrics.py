@@ -43,7 +43,7 @@ import sys
 # match-case / typing features at the 3.10+ level, but Rocky/RHEL 8 ships
 # /usr/bin/python3 as 3.6.  If the current interpreter is too old, re-exec
 # under the first available newer python found on PATH.  Cron / wrappers can
-# safely invoke `python3 /opt/hubzero/bin/hzmetrics.py` regardless.
+# safely invoke `python3 /opt/hubzero/metrics/bin/hzmetrics.py` regardless.
 # ---------------------------------------------------------------------------
 
 _MIN_PYTHON = (3, 10)
@@ -162,12 +162,23 @@ HZ_METRICS_STAGING = _PIPELINE_PATHS["metrics_log_dir"]
 STAGED_APACHE      = HZ_METRICS_STAGING / "_hub_apache.log"
 STAGED_AUTH        = HZ_METRICS_STAGING / "_hub_auth.log"
 
+# Install root — everything except the human-facing log file lives
+# under HZMETRICS_HOME, a self-contained tree owned by the service user.
+# Defaults to /opt/hubzero/metrics; can be relocated entirely via the
+# HZMETRICS_HOME env var (used by tests + dev installs).  See
+# docs/deployment.md for the rationale and the migration sequence
+# from the pre-2026 split layout (/etc/hubzero-metrics, /var/run/hzmetrics).
+HZMETRICS_HOME = Path(os.environ.get("HZMETRICS_HOME", "/opt/hubzero/metrics"))
+
 # `manage.log` is a historic name from the manage.py-era pre-rename;
 # kept for path-stability so operators' logrotate / monitoring configs
-# don't break.  Override with HZMETRICS_LOG (see setup_logging).
+# don't break.  Lives under /var/log/hubzero/metrics so operators find
+# it where Unix convention says to look — the rest of the install can
+# move under HZMETRICS_HOME but logs stay sysadmin-discoverable.
+# Override with HZMETRICS_LOG (see setup_logging).
 LOG         = HZ_METRICS_STAGING / "manage.log"
-LOCK_FILE   = Path("/var/run/hzmetrics/hzmetrics.pid")
-STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
+
+LOCK_FILE   = HZMETRICS_HOME / "state" / "hzmetrics.pid"
 
 
 # ---------------------------------------------------------------------------
@@ -703,18 +714,20 @@ def acquire_lock() -> bool:
     kernel rather than by a check-then-write that has a TOCTOU window.
 
     The file's contents are the holder's PID — purely diagnostic
-    (`cat /var/run/hzmetrics/hzmetrics.pid` to see who holds it); the lock
-    itself is the flock, not the file existence.
+    (`cat $HZMETRICS_HOME/state/hzmetrics.pid` to see who holds it); the
+    lock itself is the flock, not the file existence.
 
-    /var/run/hzmetrics/ must be pre-created and owned by the service user:
-      install: echo 'd /var/run/hzmetrics 0755 apache apache -' > /etc/tmpfiles.d/hzmetrics.conf
-               systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
+    LOCK_FILE.parent is created on demand if the service-user can write
+    to HZMETRICS_HOME (the install is self-contained under that tree).
     """
     global _lock_fd
-    if not LOCK_FILE.parent.exists():
-        log.error(f"{LOCK_FILE.parent} does not exist.")
-        log.error(f"  Run once as root:  mkdir -p {LOCK_FILE.parent} && chown apache:apache {LOCK_FILE.parent}")
-        raise SystemExit(1)
+    try:
+        LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        log.error(f"cannot create {LOCK_FILE.parent} — permission denied.")
+        log.error(f"  Run once as root: install -d -o apache -g apache -m 0750 "
+                  f"{HZMETRICS_HOME} {LOCK_FILE.parent}")
+        raise SystemExit(1) from None
 
     import fcntl
     fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
@@ -779,8 +792,6 @@ def release_lock() -> None:
 #   catchup_started=YYYY-MM
 #   rebuild_cursor=YYYY-MM
 
-_state_bootstrapped: bool = False  # one-shot file → DB migration latch
-
 def _state_table(metrics_db: str) -> str:
     return f"{metrics_db}.pipeline_state"
 
@@ -798,52 +809,10 @@ def _ensure_state_table(metrics_db: str) -> None:
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;"
     )
 
-def _bootstrap_state_from_file(metrics_db: str) -> None:
-    """One-shot file → DB migration.  If pipeline_state is empty AND the
-    legacy STATE_FILE has content, import each k=v line into the table.
-    The file is left in place (don't delete — operators may still grep
-    /var/run for it).  Cached after the first attempt so the cost is paid
-    once per process."""
-    global _state_bootstrapped
-    if _state_bootstrapped:
-        return
-    _state_bootstrapped = True  # latch even on failure — don't retry on every read
-
-    count = mysql_scalar(f"SELECT COUNT(*) FROM {_state_table(metrics_db)};")
-    if count is None or count > 0:
-        return
-    if not STATE_FILE.exists():
-        return
-    try:
-        body = STATE_FILE.read_text()
-    except (PermissionError, OSError) as e:
-        log.debug(f"[state] bootstrap: could not read {STATE_FILE}: {e}")
-        return
-    pairs = [(k.strip(), v.strip())
-             for line in body.splitlines() if "=" in line
-             for k, v in [line.split("=", 1)]
-             if k.strip()]
-    if not pairs:
-        return
-    values = ", ".join(["(%s, %s)"] * len(pairs))
-    params: list = [x for pair in pairs for x in pair]
-    rc = mysql_exec(
-        f"INSERT INTO {_state_table(metrics_db)} (k, v) VALUES {values} "
-        f"ON DUPLICATE KEY UPDATE v=VALUES(v);",
-        tuple(params),
-    )
-    if rc == 0:
-        log.info(f"[state] bootstrapped {len(pairs)} key(s) from {STATE_FILE}")
-
 def read_state() -> dict[str, str]:
-    """Return the {key: value} dict from pipeline_state.
-
-    On first call after an upgrade, if the table is empty and the legacy
-    /var/run/hzmetrics/hzmetrics.state file exists, its keys are imported
-    into the table; the file is left in place."""
+    """Return the {key: value} dict from pipeline_state."""
     _, _, _, metrics_db = db_credentials()
     _ensure_state_table(metrics_db)
-    _bootstrap_state_from_file(metrics_db)
     return {k: v for k, v in mysql_query(
         f"SELECT k, v FROM {_state_table(metrics_db)};"
     )}
@@ -2322,17 +2291,16 @@ def cmd_process(args):
 # fill-geo
 # ---------------------------------------------------------------------------
 
-ACCESS_CFG = Path("/etc/hubzero-metrics/access.cfg")
+ACCESS_CFG = HZMETRICS_HOME / "conf" / "access.cfg"
 
 def db_config() -> dict[str, str]:
     """Parse every $name = '…'; assignment in the access.cfg PHP file
     into a dict.  Defined variables typically include hub_dir, hub_db,
     metrics_db, db_host, db_user, db_pass, db_prefix.
 
-    The cfg path defaults to /etc/hubzero-metrics/access.cfg but can be
-    overridden via the HZMETRICS_ACCESS_CFG environment variable — used
-    by the A/B test harness to point at a cfg that names the test DBs.
-    """
+    The cfg path defaults to {HZMETRICS_HOME}/conf/access.cfg.  Override
+    via the HZMETRICS_ACCESS_CFG environment variable — used by the
+    A/B test harness to point at a cfg that names the test DBs."""
     cfg_path = Path(os.environ.get("HZMETRICS_ACCESS_CFG", str(ACCESS_CFG)))
     text = cfg_path.read_text()
     return {m.group(1): m.group(2)
@@ -2832,7 +2800,7 @@ def cmd_tick(args):
 #               + xlogfix_dns_worker.php fan-out)
 # ---------------------------------------------------------------------------
 
-# Built-in defaults.  Overridable by /etc/hubzero-metrics/hzmetrics.conf
+# Built-in defaults.  Overridable by HZMETRICS_HOME/conf/hzmetrics.conf
 # (INI format, [dns] section), then by env vars HZMETRICS_DNS_NAMESERVER /
 # HZMETRICS_DNS_CONCURRENCY / HZMETRICS_DNS_TIMEOUT, then by CLI flags.
 #
@@ -2849,15 +2817,15 @@ _DEFAULT_DNS_NAMESERVER  = "system"
 _DEFAULT_DNS_CONCURRENCY = 100
 _DEFAULT_DNS_TIMEOUT     = 2.0
 
-HZMETRICS_CONF = Path("/etc/hubzero-metrics/hzmetrics.conf")
+HZMETRICS_CONF = HZMETRICS_HOME / "conf" / "hzmetrics.conf"
+
 
 def _read_dns_config():
     """Resolve DNS-related settings from config file → env vars → defaults.
 
     Tolerant of an unreadable config: PermissionError / FileNotFoundError
     silently fall through to env vars and built-in defaults (so the script
-    keeps working when invoked by a user without /etc/hubzero-metrics
-    access)."""
+    keeps working when invoked by a user without conf-dir access)."""
     ns          = _DEFAULT_DNS_NAMESERVER
     concurrency = _DEFAULT_DNS_CONCURRENCY
     timeout     = _DEFAULT_DNS_TIMEOUT

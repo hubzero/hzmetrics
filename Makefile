@@ -1,9 +1,8 @@
 # Build / install for hzmetrics.
 #
 # Production install (run on the target HUBzero host):
-#   sudo make install                       # install everything; cron form = spool (apache user crontab)
-#   sudo make install CRON_STYLE=dropin     # use /etc/cron.d/hubzero-metrics instead
-#   sudo make uninstall                     # remove what `install` put on the host
+#   sudo make install                       # install under /opt/hubzero/metrics, no root needed beyond bootstrap
+#   sudo make uninstall                     # remove /opt/hubzero/metrics tree
 #
 # Dev / CI:
 #   make help                               # list targets
@@ -12,63 +11,66 @@
 #   make test-ab                            # full A/B suite (needs legacy + bind9-host + MariaDB)
 #
 # Honors DESTDIR for staged installs (packaging):
-#   make install DESTDIR=/tmp/stage INSTALL_OWNER=root
+#   make install DESTDIR=/tmp/stage
 #
-# `install` does NOT chmod /etc/hubzero-metrics or drop access.cfg in
-# place — those are operator-supplied secrets.  The install target
-# prints the remaining manual steps at the end.
+# `install` does NOT touch the conf/access.cfg secret or register the
+# crontab — those are operator-supplied / operator-actioned.  The
+# install target prints the remaining manual steps at the end.
 
 DESTDIR        ?=
-PREFIX         ?= /opt/hubzero/bin
-SYSCONFDIR     ?= /etc
-CRONDDIR       ?= $(SYSCONFDIR)/cron.d
-SPOOLCRONDIR   ?= /var/spool/cron
-TMPFILESDIR    ?= $(SYSCONFDIR)/tmpfiles.d
+HZMETRICS_HOME ?= /opt/hubzero/metrics
+LOG_DIR        ?= /var/log/hubzero/metrics
 INSTALL_OWNER  ?= apache
-# `spool` -> /var/spool/cron/apache (apache user crontab — default) ;
-# `dropin` -> /etc/cron.d/hubzero-metrics (system-wide cron drop-in)
-CRON_STYLE     ?= spool
+INSTALL_GROUP  ?= apache
 
-SCRIPT         := hzmetrics.py
-SCRIPT_DST     := $(DESTDIR)$(PREFIX)/hzmetrics.py
-POSTROTATE_DST := $(DESTDIR)$(PREFIX)/hzmetrics-postrotate.sh
-TMPFILES_DST   := $(DESTDIR)$(TMPFILESDIR)/hzmetrics.conf
-CRONDROP_DST   := $(DESTDIR)$(CRONDDIR)/hubzero-metrics
-CRONSPOOL_DST  := $(DESTDIR)$(SPOOLCRONDIR)/apache
+SCRIPT             := hzmetrics.py
+BIN_DST            := $(DESTDIR)$(HZMETRICS_HOME)/bin
+CONF_DST           := $(DESTDIR)$(HZMETRICS_HOME)/conf
+STATE_DST          := $(DESTDIR)$(HZMETRICS_HOME)/state
+LOG_DST            := $(DESTDIR)$(LOG_DIR)
+SCRIPT_DST         := $(BIN_DST)/hzmetrics.py
+POSTROTATE_DST     := $(BIN_DST)/hzmetrics-postrotate.sh
+CRON_TEMPLATE_DST  := $(CONF_DST)/cron.apache
+CONF_SAMPLE_DST    := $(CONF_DST)/hzmetrics.conf.sample
 
-.PHONY: help install uninstall test test-ab lint \
-        install-script install-tmpfiles install-logrotate \
-        install-cron-dropin install-cron-spool
+.PHONY: help install install-bootstrap uninstall test test-ab lint \
+        install-script install-logrotate install-cron-template install-conf-sample
 
 help:  ## List all targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z][a-zA-Z0-9_-]*:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: install-script install-tmpfiles install-logrotate install-cron-$(CRON_STYLE)  ## Install everything (CRON_STYLE: dropin | spool)
+install-bootstrap:  ## One-time root step: create HZMETRICS_HOME owned by INSTALL_OWNER
+	install -d -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0750 \
+	    $(DESTDIR)$(HZMETRICS_HOME) \
+	    $(BIN_DST) $(CONF_DST) $(STATE_DST) $(LOG_DST)
+
+install: install-script install-logrotate install-cron-template install-conf-sample  ## Install everything (run as INSTALL_OWNER once bootstrap is done)
 	@echo
-	@echo "Installed.  Remaining manual steps:"
-	@echo "  sudo systemd-tmpfiles --create $(TMPFILESDIR)/hzmetrics.conf"
-	@echo "  sudo install -d -o root -g apache -m 750 /etc/hubzero-metrics"
-	@echo "  sudo install -o root -g apache -m 640 <your access.cfg> /etc/hubzero-metrics/access.cfg"
-	@echo "  sudo -u apache python3 $(PREFIX)/hzmetrics.py setup-db        # first-time DB only"
-	@echo "  sudo -u apache python3 $(PREFIX)/hzmetrics.py migrate --apply"
+	@echo "Installed under $(HZMETRICS_HOME)/.  Remaining manual steps:"
+	@echo "  # if first install, run the one-time root bootstrap once per host:"
+	@echo "  #   sudo make install-bootstrap"
+	@echo "  install -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0600 <your access.cfg> $(HZMETRICS_HOME)/conf/access.cfg"
+	@echo "  sudo -u $(INSTALL_OWNER) crontab $(HZMETRICS_HOME)/conf/cron.apache"
+	@echo "  sudo -u $(INSTALL_OWNER) $(HZMETRICS_HOME)/bin/hzmetrics.py setup-db        # first-time DB only"
+	@echo "  sudo -u $(INSTALL_OWNER) $(HZMETRICS_HOME)/bin/hzmetrics.py migrate --apply"
 
-install-script:  ## Install hzmetrics.py to PREFIX
-	install -D -o $(INSTALL_OWNER) -m 755 $(SCRIPT) $(SCRIPT_DST)
-
-install-tmpfiles:  ## Install systemd-tmpfiles config
-	install -D -m 644 conf/hzmetrics.tmpfiles.conf $(TMPFILES_DST)
+install-script:  ## Install hzmetrics.py to $(HZMETRICS_HOME)/bin/
+	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 755 $(SCRIPT) $(SCRIPT_DST)
 
 install-logrotate:  ## Install logrotate postrotate hook script
-	install -D -m 755 conf/hzmetrics-logrotate-postrotate.sh $(POSTROTATE_DST)
+	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 755 \
+	    conf/hzmetrics-logrotate-postrotate.sh $(POSTROTATE_DST)
 
-install-cron-dropin:  ## Install /etc/cron.d/hubzero-metrics form of the cron entry
-	install -D -m 644 conf/hubzero-metrics.cron.d $(CRONDROP_DST)
+install-cron-template:  ## Install the cron template (operator registers it via `crontab`)
+	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 \
+	    conf/hubzero-metrics.cron.apache $(CRON_TEMPLATE_DST)
 
-install-cron-spool:  ## Install /var/spool/cron/apache form (apache user crontab)
-	install -D -o $(INSTALL_OWNER) -m 600 conf/hubzero-metrics.cron.apache $(CRONSPOOL_DST)
+install-conf-sample:  ## Install the hzmetrics.conf.sample reference
+	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 \
+	    conf/hzmetrics.conf.sample $(CONF_SAMPLE_DST)
 
-uninstall:  ## Remove everything `install` puts on a host
-	rm -f $(SCRIPT_DST) $(POSTROTATE_DST) $(TMPFILES_DST) $(CRONDROP_DST) $(CRONSPOOL_DST)
+uninstall:  ## Remove the install tree (leaves $(LOG_DIR) intact for postmortems)
+	rm -rf $(DESTDIR)$(HZMETRICS_HOME)
 
 test:  ## Run the defensive A/B suite (no legacy required)
 	./tests/ab/run-defensive.sh

@@ -55,18 +55,26 @@ set instead of relying on system packages being present.
 
 ## File layout (post-install)
 
+Everything lives under `/opt/hubzero/metrics/`, a self-contained tree
+owned by the apache user.  Only the operator-facing log file lives
+outside, at the conventional `/var/log/` location:
+
 ```
-/opt/hubzero/bin/hzmetrics.py                  the pipeline
-/opt/hubzero/bin/hzmetrics-postrotate.sh       logrotate hook
-/etc/hubzero-metrics/access.cfg                DB credentials (640, root:apache)
-/etc/hubzero-metrics/hzmetrics.conf            optional runtime overrides
-/etc/tmpfiles.d/hzmetrics.conf                 systemd-tmpfiles, creates /var/run/hzmetrics/
-/var/spool/cron/apache                         the cron entry (single line)
-/var/run/hzmetrics/hzmetrics.pid               PID lock (created at runtime)
-/var/run/hzmetrics/hzmetrics.state             legacy state file — bootstrap-only
-                                               (orchestrator state lives in DB now)
-/var/log/hubzero/metrics/manage.log         pipeline log
+/opt/hubzero/metrics/bin/hzmetrics.py            the pipeline
+/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh logrotate hook
+/opt/hubzero/metrics/conf/access.cfg             DB credentials (mode 600, apache)
+/opt/hubzero/metrics/conf/hzmetrics.conf         optional runtime overrides
+/opt/hubzero/metrics/conf/cron.apache            crontab template (apache crontab)
+/opt/hubzero/metrics/conf/hzmetrics.conf.sample  reference config
+/opt/hubzero/metrics/state/hzmetrics.pid         PID lock (created at runtime)
+/var/log/hubzero/metrics/manage.log              pipeline log (apache-writable)
 ```
+
+Tree is owned `apache:apache`, mode 0750 — only the apache user (and
+root) can see inside.  No files in `/etc/`, no `/var/run/` tmpfiles
+dance, no `/var/spool/cron/` writing.  Orchestrator state lives in
+the `pipeline_state` DB table; the only on-disk state is the lock
+file.
 
 The legacy reference scripts under `tests/legacy/` are **not**
 installed on a production host.  They live in this repo only as the
@@ -77,54 +85,58 @@ A/B-test parity reference.
 From a checkout of this repo:
 
 ```
-sudo make install                    # uses /var/spool/cron/apache (apache user crontab — default)
-sudo make install CRON_STYLE=dropin  # uses /etc/cron.d/hubzero-metrics instead
-sudo make uninstall                  # removes everything `install` put on the host
-make help                            # list all targets (lint, test, test-ab, ...)
+# One-time, on a fresh host (the only root step):
+sudo make install-bootstrap
+
+# Now and forever after, no root needed:
+sudo -u apache make install
+sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+sudo make uninstall            # removes /opt/hubzero/metrics tree
+make help                      # list targets (lint, test, test-ab, …)
 ```
 
-What `install` copies:
+`install-bootstrap` creates `/opt/hubzero/metrics/{bin,conf,state}`
+and `/var/log/hubzero/metrics/` owned `apache:apache` mode 0750 —
+the only root-required step in the install, and only once per host.
+Subsequent installs and upgrades are pure `sudo -u apache make install`
+identity-switches; no actual root needed.
 
-- `hzmetrics.py` → `/opt/hubzero/bin/hzmetrics.py` (mode 755, owner apache)
-- `conf/hzmetrics-logrotate-postrotate.sh` → `/opt/hubzero/bin/hzmetrics-postrotate.sh`
-- `conf/hzmetrics.tmpfiles.conf` → `/etc/tmpfiles.d/hzmetrics.conf`
-- Exactly ONE of:
-  - `conf/hubzero-metrics.cron.apache` → `/var/spool/cron/apache`  *(default; `CRON_STYLE=spool`)*
-  - `conf/hubzero-metrics.cron.d` → `/etc/cron.d/hubzero-metrics`  *(`CRON_STYLE=dropin`)*
+What `install` copies (all owned `apache:apache`):
 
-`install` deliberately does NOT touch `/etc/hubzero-metrics/access.cfg`
-— that's an operator-supplied secret.  After `make install`, the
-Makefile prints the remaining manual steps (the tmpfiles `--create`,
-the access.cfg drop, `setup-db`, `migrate --apply`).
+- `hzmetrics.py` → `/opt/hubzero/metrics/bin/hzmetrics.py` (mode 755)
+- `conf/hzmetrics-logrotate-postrotate.sh` → `/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh` (mode 755)
+- `conf/hubzero-metrics.cron.apache` → `/opt/hubzero/metrics/conf/cron.apache` (mode 644)
+- `conf/hzmetrics.conf.sample` → `/opt/hubzero/metrics/conf/hzmetrics.conf.sample` (mode 644)
 
-Overrides: `PREFIX`, `SYSCONFDIR`, `TMPFILESDIR`, `CRONDDIR`,
-`SPOOLCRONDIR`, `INSTALL_OWNER`, and the standard `DESTDIR` for
-staged installs (`make install DESTDIR=/tmp/stage INSTALL_OWNER=root`
-for a package-build scratch dir).
+`install` deliberately does NOT drop `access.cfg` — it's an operator-
+supplied secret.  After `make install`, the Makefile prints the
+remaining manual steps (the access.cfg copy, the `crontab` registration,
+`setup-db`, `migrate --apply`).
 
-The cron entry is a single line, every five minutes:
+Overrides: `HZMETRICS_HOME` (install root, default `/opt/hubzero/metrics`),
+`LOG_DIR` (default `/var/log/hubzero/metrics`), `INSTALL_OWNER` /
+`INSTALL_GROUP` (default `apache`), and `DESTDIR` for staged installs
+(`make install DESTDIR=/tmp/stage` for packaging dry-runs).
 
-```
-*/5 * * * * apache  python3 /opt/hubzero/bin/hzmetrics.py tick
-```
-
-Pick the format that matches your host's cron conventions:
-
-- `/var/spool/cron/apache` — apache user crontab (no user column).
-- `/etc/cron.d/hubzero-metrics` — drop-in (`user` column is the
-  3rd-to-last field).
-
-After install, kick `systemd-tmpfiles` so `/var/run/hzmetrics/`
-exists right now (it'll be recreated automatically on every reboot):
+The cron entry is a single line, every five minutes, in the apache
+user crontab:
 
 ```
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/hzmetrics.conf
+*/5 * * * * /opt/hubzero/metrics/bin/hzmetrics.py tick
 ```
+
+Register it via:
+
+```
+sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+```
+
+cronie auto-detects the user-crontab change; no daemon restart needed.
 
 ## access.cfg
 
 The mandatory config file.  Bare `$var = 'value';` syntax (no
-`<?php`).  Read by both `hzmetrics.py` and the legacy Perl scripts:
+`<?php`).  Read by `hzmetrics.py`:
 
 ```
 $hub_dir    = '/var/www/<hub>';
@@ -136,9 +148,11 @@ $db_pass    = '<secret>';
 $db_prefix  = 'jos_';
 ```
 
+Drop it in place after the bootstrap step has created the conf dir:
+
 ```
-sudo install -d -o root -g apache -m 750 /etc/hubzero-metrics
-sudo install -o root -g apache -m 640 <your-cfg> /etc/hubzero-metrics/access.cfg
+sudo install -o apache -g apache -m 600 <your-cfg> \
+    /opt/hubzero/metrics/conf/access.cfg
 ```
 
 The harness uses `HZMETRICS_ACCESS_CFG=<path>` to point at a test
@@ -168,7 +182,7 @@ against Purdue's resolvers and produces ~4 ms/IP cold.
 If `<hub>_metrics` doesn't exist yet:
 
 ```
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py setup-db
 ```
 
 Creates the metrics database, every table, and seeds the static
@@ -185,7 +199,7 @@ anything from `hzmetrics.py`.  If they're missing, see the
 Apply any pending schema migrations:
 
 ```
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py migrate --apply
 ```
 
 `migrate` without `--apply` shows what would change.
@@ -194,14 +208,14 @@ sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
 
 ```
 # What's the pipeline see?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 
 # Does DNS work?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py resolve-dns \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py resolve-dns \
     metrics web --dry-run 2025-07
 
 # Does the daily run actually do anything?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run --force
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run --force
 ```
 
 Watch `/var/log/hubzero/metrics/manage.log` while the run is in
@@ -224,7 +238,7 @@ restarting (it reopens on the next `tick`):
     notifempty
     create 640 apache apache
     postrotate
-        /opt/hubzero/bin/hzmetrics-postrotate.sh
+        /opt/hubzero/metrics/bin/hzmetrics-postrotate.sh
     endscript
 }
 ```
@@ -239,14 +253,14 @@ one month per tick using the per-month decision matrix, then enters
 
 ```
 # Where is the orchestrator?  status shows mode + cursors:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 
 # Drive ticks manually if `tick` cadence is too slow:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 
 # Resummarize a range without touching state.mode
 # (useful for a one-shot rebuild after a data fix):
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
     --since 2022-01 --through 2024-12
 ```
 

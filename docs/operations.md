@@ -13,12 +13,12 @@ same.
 ## Knobs the pipeline honors
 
 A few ops-relevant defaults are overridable without editing
-`/etc/hubzero-metrics/`:
+`/opt/hubzero/metrics/conf/`:
 
 | Env var | What it overrides | Default |
 |---|---|---|
 | `HZMETRICS_LOG` | Pipeline log file path | `/var/log/hubzero/metrics/manage.log` |
-| `HZMETRICS_ACCESS_CFG` | DB credentials cfg path | `/etc/hubzero-metrics/access.cfg` |
+| `HZMETRICS_ACCESS_CFG` | DB credentials cfg path | `/opt/hubzero/metrics/conf/access.cfg` |
 | `HZMETRICS_DNS_NAMESERVER` | resolve-dns nameserver | from `[dns]` section of hzmetrics.conf, then `system` |
 | `HZMETRICS_DNS_CONCURRENCY` | aiodns concurrency | 100 |
 | `HZMETRICS_DNS_TIMEOUT` | aiodns per-IP timeout (seconds) | 2.0 |
@@ -35,7 +35,7 @@ hub_dir, mysql_exec failure, etc.).
 
 ```bash
 # What does the pipeline think the world looks like?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 ```
 
 Outputs the most-recent imported day, the most-recent summarized
@@ -68,7 +68,7 @@ needed for routine backfill — just let the cron run.
 
 ```bash
 # Where is the orchestrator?
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 ```
 
 `status` prints the mode (`normal` / `catchup` / `rebuild`), the
@@ -90,14 +90,14 @@ invoking manually:
 
 ```bash
 # One tick — process oldest backlog month, foreground:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 
 # Time it to spot slow stages:
-time sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+time sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 
 # Loop until catchup completes (state.mode flips to rebuild then normal):
 while :; do
-    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run || break
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run || break
     mode=$(mysql -BN -e "SELECT v FROM <hub>_metrics.pipeline_state WHERE k='mode'")
     [ "$mode" = "normal" ] && break
 done
@@ -115,15 +115,15 @@ range manually:
 ```bash
 # Catchup wrote period=1 cells only.  Resummarize a range with all
 # six periods to fix long-window (0/3/12/13/14) cells:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
     --since 2022-01 --through 2024-12
 
 # Or narrow to just specific periods (e.g. only the long ones):
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
     --since 2022-01 --periods 0,3,12,13,14
 
 # Dry-run first:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-summaries \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-summaries \
     --since 2022-01 --through 2022-03 --dry-run
 ```
 
@@ -139,7 +139,7 @@ summarize reads, the existing summary cells are stale.  Use
 `rebuild-from` to atomically reset both the cursor and the mode:
 
 ```bash
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
 ```
 
 Equivalent to editing `pipeline_state` by hand to set
@@ -153,15 +153,15 @@ Typical sequence after a data fix:
 
 ```bash
 # 1. Verify the fix went in (e.g., backfill-dnload after the dnload bug)
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 # 2. Reset the cursor
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
 # 3. Let the orchestrator chew through it (one tick per month)
 # Or run manually:
 while true; do
     mode=$(mysql ... -BN -e "SELECT v FROM pipeline_state WHERE k='mode'")
     [ "$mode" != "rebuild" ] && break
-    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 done
 ```
 
@@ -202,14 +202,14 @@ and compare against `conf/hzmetrics-logrotate-postrotate.sh`.
 
 ## A tick says "still running" but nothing's progressing
 
-The lock is a `fcntl.flock` on `/var/run/hzmetrics/hzmetrics.pid` —
+The lock is a `fcntl.flock` on `/opt/hubzero/metrics/state/hzmetrics.pid` —
 the file's contents are the holder's PID (purely diagnostic), but the
 lock itself is the kernel-managed flock, not the file's existence.
 
 ```bash
 # Who holds it?
-cat /var/run/hzmetrics/hzmetrics.pid       # the holder's PID (diagnostic only)
-ps -p $(cat /var/run/hzmetrics/hzmetrics.pid)   # is it alive?
+cat /opt/hubzero/metrics/state/hzmetrics.pid       # the holder's PID (diagnostic only)
+ps -p $(cat /opt/hubzero/metrics/state/hzmetrics.pid)   # is it alive?
 ```
 
 If the process is alive: it's genuinely doing work (large catch-up
@@ -250,7 +250,7 @@ ss -tnlp | grep :53
 ```
 
 If you've deployed local unbound, the `[dns]` block in
-`/etc/hubzero-metrics/hzmetrics.conf` should read:
+`/opt/hubzero/metrics/conf/hzmetrics.conf` should read:
 
 ```
 nameserver = 127.0.0.1
@@ -267,7 +267,7 @@ Each summary cell is `DELETE` + `INSERT` per `(datetime, period,
 rowid, colid)`, so re-running summarize is safe and idempotent:
 
 ```bash
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py summarize --month 2025-03 --force
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py summarize --month 2025-03 --force
 ```
 
 `--force` bypasses the "already summarized today" guard.  This rewrites
@@ -285,7 +285,7 @@ mysql -e "
 If `dnload IS NULL` for any rows, run `backfill-dnload`:
 
 ```bash
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py backfill-dnload --start 2025-03
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py backfill-dnload --start 2025-03
 ```
 
 Then re-summarize.
@@ -310,14 +310,14 @@ from recent imports), this is the long-standing legacy bug.  Fix:
 #    and `dnload = 1 if _is_download_url(url) else 0`.  If the
 #    import path doesn't include those, the importer is the old
 #    shape; do not skip this step.
-grep -F 'dnload = 1 if _is_download_url' /opt/hubzero/bin/hzmetrics.py
+grep -F 'dnload = 1 if _is_download_url' /opt/hubzero/metrics/bin/hzmetrics.py
 
 # 2. Backfill historical rows.  Omit --start to walk every month
 #    that has NULL rows; pass it only to scope a partial run.
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py backfill-dnload
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py backfill-dnload
 
 # 3. Re-trigger a full rebuild so the download cells get rewritten:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py rebuild-from 2022-01
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py rebuild-from 2022-01
 # then run ticks until mode flips back to normal.
 ```
 
@@ -489,7 +489,7 @@ The orchestrator catches this two ways:
    machine which months need rework, then let it handle the rest:
 
    ```bash
-   sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py mark-dirty \
+   sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py mark-dirty \
        2024-09 2024-10 2024-11 2024-12 2025-01 2025-02 2025-03 \
        2025-04 2025-05 2025-06 2025-07
    ```
@@ -511,13 +511,13 @@ So the cleanup sequence after deleting spam web rows is just:
 
 ```bash
 # 1. Tell the orchestrator which months need rework:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py mark-dirty \
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py mark-dirty \
     2024-09 2024-10 ... 2025-07
 
 # 2. Let it run.  The next tick (cron or manual) detects the dirty
 #    set, switches to catchup mode if needed, and processes one
 #    month per tick:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py run
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py run
 ```
 
 If you do need to do it by hand (e.g. operating on a hub that hasn't
@@ -625,7 +625,7 @@ GROUP BY m ORDER BY m;
 
 ```bash
 # Force a refresh:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py whoisonline
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py whoisonline
 
 # Where does the XML live?
 ls -la /var/www/<hub>/app/site/stats/maps/whoisonline.xml
@@ -647,15 +647,15 @@ checking first.
 
 ```bash
 # Drop and recreate the test DB schema:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py setup-db
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py setup-db
 
 # Apply all migrations:
-sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py migrate --apply
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py migrate --apply
 
 # Re-process the entire pending log set:
-while sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py status \
+while sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status \
       | grep -q "pending"; do
-    sudo -u apache python3 /opt/hubzero/bin/hzmetrics.py process --next
+    sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py process --next
 done
 ```
 
@@ -799,7 +799,7 @@ Useful signals to put behind alerts:
 | Pipeline is behind | `hzmetrics.py status` shows pending days | >3 pending days (autonomous catch-up should resolve within hours; sustained backlog means something is wedged) |
 | Daily run is failing | grep `ERROR` / `FAIL` in `/var/log/hubzero/metrics/manage.log` since midnight | any new occurrence |
 | Cron `tick` is failing | non-zero exit status from the cron entry (`main()` propagates the handler's return code) | any new occurrence; cron emails the captured stderr to `MAILTO=` |
-| Lock held abnormally long | `cat /var/run/hzmetrics/hzmetrics.pid` then check the PID's elapsed time with `ps -o etime= -p <pid>` | lock held >2 hours by a live PID (catch-up usually completes within minutes; multi-hour holds suggest a wedge) |
+| Lock held abnormally long | `cat /opt/hubzero/metrics/state/hzmetrics.pid` then check the PID's elapsed time with `ps -o etime= -p <pid>` | lock held >2 hours by a live PID (catch-up usually completes within minutes; multi-hour holds suggest a wedge) |
 | Logrotate failing | New file in `/var/log/httpd/daily/` is not appearing | no new `<hub>-access.log-YYYYMMDD` after midnight |
 | `web` row count anomaly | Compare today's `web` row count to a 7-day rolling average | row count is >3× the average (bot inflation event) |
 | `webhits / web` ratio anomaly | `SELECT SUM(hits) FROM webhits` ÷ `COUNT(*) FROM web` for the same window | ratio drops below ~0.1 or above ~10 (suggests one of the two imports has stopped) |
@@ -833,5 +833,5 @@ of one such Grafana setup against a hub's metrics database.)
   scraped).
 - DNS resolves but `fill-ipcountry` errors out → the
   `help.hubzero.org/ipinfo/v1` service may be unreachable.  Check
-  `/etc/hubzero-metrics/hzmetrics.conf` for the IP-country service
+  `/opt/hubzero/metrics/conf/hzmetrics.conf` for the IP-country service
   URL.

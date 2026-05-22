@@ -12,7 +12,7 @@ state-management semantics:
 Anything else the test asks of mysql_exec raises AssertionError so we
 never accidentally let unmocked SQL through.
 """
-import os, sys, tempfile, unittest, re
+import sys, unittest, re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
@@ -69,17 +69,9 @@ class StateTests(unittest.TestCase):
 
     def setUp(self) -> None:
         import importlib, hzmetrics
-        # Fresh module per test so the _state_bootstrapped latch resets.
         self.hz = importlib.reload(hzmetrics)
         self.fake = FakeDB()
         install_fake_db(self.hz, self.fake)
-        # Point STATE_FILE at a tempfile we control.
-        self.tmp = tempfile.TemporaryDirectory()
-        self.state_file = Path(self.tmp.name) / "hzmetrics.state"
-        self.hz.STATE_FILE = self.state_file
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
 
     # ------------------------------------------------------------------
     # empty / round-trip
@@ -135,61 +127,6 @@ class StateTests(unittest.TestCase):
         self.assertIn("INSERT INTO", last)
         # Three (%s, %s) pairs in the VALUES clause.
         self.assertEqual(last.count("(%s, %s)"), 3)
-
-    # ------------------------------------------------------------------
-    # file → DB bootstrap (the upgrade path)
-    # ------------------------------------------------------------------
-
-    def test_bootstrap_imports_legacy_file(self):
-        # Operator upgraded but pipeline_state is empty; old file has values.
-        self.state_file.write_text("analyzed=2026-04-15\nmode=normal\n")
-        st = self.hz.read_state()
-        self.assertEqual(st, {"analyzed": "2026-04-15", "mode": "normal"})
-
-    def test_bootstrap_skips_when_table_not_empty(self):
-        # DB already has state — file is ignored even if present.
-        self.fake.table = {"analyzed": "2026-05-19"}
-        self.state_file.write_text("analyzed=1999-12-31\nmode=catchup\n")
-        st = self.hz.read_state()
-        self.assertEqual(st, {"analyzed": "2026-05-19"})
-
-    def test_bootstrap_skips_when_file_absent(self):
-        # Fresh install: empty table, no file → empty result, no error.
-        self.assertFalse(self.state_file.exists())
-        self.assertEqual(self.hz.read_state(), {})
-
-    def test_bootstrap_ignores_blank_and_malformed_lines(self):
-        # The parser splits on "=" only, with no escape / comment syntax —
-        # mirrors the legacy file format.  Blanks and lines lacking "=" are
-        # skipped; lines whose key (left of first "=") is empty are skipped.
-        self.state_file.write_text(
-            "\n"
-            "nope-no-separator-here\n"
-            "analyzed=2026-05-19\n"
-            "=missing-key\n"
-            "\n"
-        )
-        st = self.hz.read_state()
-        self.assertEqual(st, {"analyzed": "2026-05-19"})
-
-    def test_bootstrap_runs_only_once_per_process(self):
-        # First read imports.  Subsequent reads don't re-touch the file
-        # even if it changes — the latch prevents repeated work.
-        self.state_file.write_text("analyzed=2026-05-19\n")
-        self.assertEqual(self.hz.read_state(), {"analyzed": "2026-05-19"})
-
-        # Mutate file: a second read should NOT pick up the new value.
-        self.state_file.write_text("analyzed=2099-01-01\n")
-        self.assertEqual(self.hz.read_state(), {"analyzed": "2026-05-19"})
-
-    def test_bootstrap_handles_unreadable_file(self):
-        # File exists but permission-denied: bootstrap silently skips.
-        self.state_file.write_text("analyzed=2026-05-19\n")
-        os.chmod(self.state_file, 0o000)
-        try:
-            self.assertEqual(self.hz.read_state(), {})
-        finally:
-            os.chmod(self.state_file, 0o600)
 
     # ------------------------------------------------------------------
     # dirty_months: comma-separated list, deduped + sorted on write,
