@@ -12,6 +12,7 @@ tests=(
     port_cmd_run
     port_decisions
     port_discovery
+    port_dnload_backfill_regex
     port_dnload_classify
     port_dryrun
     port_empty_input
