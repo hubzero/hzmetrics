@@ -44,6 +44,13 @@ import sys
 # /usr/bin/python3 as 3.6.  If the current interpreter is too old, re-exec
 # under the first available newer python found on PATH.  Cron / wrappers can
 # safely invoke `python3 /opt/hubzero/metrics/bin/hzmetrics.py` regardless.
+#
+# Only fires when invoked as a script (`__name__ == "__main__"`).  When a
+# test does `import hzmetrics` under an older interpreter the relaunch would
+# os.execv() the test runner itself with the wrong argv (`python3 -m unittest
+# …` collapses unhelpfully through execv), so importers stay on whatever
+# interpreter loaded them and the test author is responsible for using a
+# 3.10+ python.
 # ---------------------------------------------------------------------------
 
 _MIN_PYTHON = (3, 10)
@@ -104,7 +111,8 @@ def _relaunch_if_needed():
         f"Newer python3.X on PATH: {versions}."
     )
 
-_relaunch_if_needed()
+if __name__ == "__main__":
+    _relaunch_if_needed()
 
 
 import argparse

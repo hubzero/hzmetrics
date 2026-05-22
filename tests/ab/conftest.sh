@@ -52,8 +52,38 @@ DB_USER=$(cfg_value db_user)
 HUB_DB=$(cfg_value hub_db)
 METRICS_DB=$(cfg_value metrics_db)
 
-# Python that has pymysql / aiodns / aiohttp installed.
-PY="${HZMETRICS_PY:-python3}"
+# Python that has pymysql / aiodns / aiohttp installed.  Tests run the
+# script-under-test in two ways:
+#   1. Subprocess via run_new(): `$PY hzmetrics.py …`.  In this mode
+#      hzmetrics.py self-relaunches if $PY is too old, so any python3.X
+#      that exists on PATH would work.
+#   2. Direct `import hzmetrics` inside a test process.  Self-relaunch
+#      is gated on `__name__ == "__main__"` (relaunching the test
+#      runner would execv it with the wrong argv), so we need an
+#      interpreter that can actually import the module — i.e. one that
+#      satisfies hzmetrics's runtime floor of Python 3.10+.
+#
+# Resolve in priority order: $HZMETRICS_PY > `python3` if ≥ 3.10 > the
+# first python3.10+/python3.11+/… found on PATH.
+_modern_py() {
+    local cand
+    if [ -n "${HZMETRICS_PY:-}" ]; then
+        echo "$HZMETRICS_PY"; return 0
+    fi
+    if command -v python3 >/dev/null 2>&1 \
+       && python3 -c "import sys; sys.exit(sys.version_info < (3, 10))" 2>/dev/null
+    then
+        echo python3; return 0
+    fi
+    # Prefer newest; iterate high→low so a future python3.14 wins over 3.10.
+    for cand in python3.14 python3.13 python3.12 python3.11 python3.10; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            echo "$cand"; return 0
+        fi
+    done
+    echo python3   # fall through; tests will fail with a clear ImportError
+}
+PY="$(_modern_py)"
 
 export HZMETRICS_ACCESS_CFG="$ACCESS_CFG"
 export HZMETRICS_LOG="${HZMETRICS_LOG:-/tmp/hzmetrics-ab.log}"
