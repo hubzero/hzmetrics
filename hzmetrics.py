@@ -174,13 +174,33 @@ STATE_FILE  = Path("/var/run/hzmetrics/hzmetrics.state")
 # helpers
 # ---------------------------------------------------------------------------
 
-def setup_logging() -> None:
-    """Configure the `hzmetrics` logger with a timestamped format on both
-    stderr (for cron-emailed output) and the persistent pipeline log file.
+class _IsoFormatter(logging.Formatter):
+    """Logger output uses ISO 8601 with the `T` date/time separator and a
+    local-timezone offset suffix: `2026-05-21T14:05:49-04:00`.  Single
+    machine-parseable form across stderr, file, and syslog handlers;
+    unambiguous regardless of the operator's timezone or how their
+    downstream tooling parses timestamps."""
 
-    Log file path defaults to LOG and may be overridden via the
-    HZMETRICS_LOG env var — used by the A/B test harness (running as the
-    developer's UID, not apache) to write to a path it actually owns.
+    _LOCAL_TZ = datetime.now().astimezone().tzinfo
+
+    def formatTime(self, record, datefmt=None):  # noqa: ARG002
+        dt = datetime.fromtimestamp(record.created, tz=self._LOCAL_TZ)
+        return dt.isoformat(timespec="seconds")
+
+
+def setup_logging() -> None:
+    """Configure the `hzmetrics` logger with ISO 8601 timestamps on three
+    handlers:
+
+      - stderr (INFO+) — picked up by cron's MAILTO or systemd journal
+        when run from a unit / timer.
+      - syslog (INFO+) via /dev/log on LOG_LOCAL0 facility — operators
+        configure rsyslog / syslog-ng / journald rules to route from
+        there.  Failures (no /dev/log, daemon down) are non-fatal:
+        we fall back to the other two handlers.
+      - file (DEBUG+) at HZMETRICS_LOG (defaults to LOG) — the
+        authoritative grep-able audit log.  HZMETRICS_LOG override
+        used by the A/B test harness (developer UID, not apache).
 
     Idempotent: re-invocation replaces any previously installed handlers
     so test setups can call it more than once."""
@@ -188,15 +208,31 @@ def setup_logging() -> None:
     for h in list(log.handlers):
         log.removeHandler(h)
 
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-5s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    fmt = _IsoFormatter("%(asctime)s %(levelname)-5s %(message)s")
 
     stream = logging.StreamHandler()
     stream.setLevel(logging.INFO)
     stream.setFormatter(fmt)
     log.addHandler(stream)
+
+    # Syslog — INFO+ to LOG_LOCAL0 via the local Unix socket.  Operators
+    # route this to a hub-specific file or central logger via rsyslog
+    # rules.  We embed our own ISO timestamp in the message body so the
+    # application clock is preserved even if rsyslog reformats its own
+    # header timestamp.
+    try:
+        from logging.handlers import SysLogHandler
+        syslog = SysLogHandler(address="/dev/log",
+                               facility=SysLogHandler.LOG_LOCAL0)
+        syslog.ident = "hzmetrics: "
+        syslog.setLevel(logging.INFO)
+        syslog.setFormatter(fmt)
+        log.addHandler(syslog)
+    except (OSError, ImportError) as e:
+        # /dev/log missing or syslog daemon down — log to the other
+        # handlers and continue.  The stderr + file handlers above are
+        # still in place by this point, so the warning is captured.
+        log.warning("syslog handler not available: %s", e)
 
     log_path = Path(os.environ.get("HZMETRICS_LOG", str(LOG)))
     try:

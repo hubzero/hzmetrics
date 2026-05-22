@@ -664,11 +664,41 @@ first.
 
 ## Logs and observability
 
-Single log file:
+Three destinations, all populated simultaneously with ISO 8601
+timestamps (`2026-05-21T14:05:49-04:00`):
 
 ```
-/var/log/hubzero/metrics/manage.log
+/var/log/hubzero/metrics/manage.log     # DEBUG+ — authoritative file (HZMETRICS_LOG override)
+stderr                                  # INFO+  — picked up by cron / systemd
+syslog LOG_LOCAL0 facility              # INFO+  — routes wherever rsyslog/journald sends it
 ```
+
+Quick views:
+
+```bash
+# File (tail-and-grep friendly, full DEBUG):
+sudo tail -f /var/log/hubzero/metrics/manage.log
+sudo grep -E '(FAIL|ERROR)' /var/log/hubzero/metrics/manage.log
+
+# systemd journal (tagged hzmetrics):
+sudo journalctl -t hzmetrics --since '1 hour ago'
+sudo journalctl -t hzmetrics -f       # live tail
+
+# /var/log/messages or hub-specific file (depends on rsyslog rules):
+sudo grep hzmetrics /var/log/messages
+```
+
+To route the syslog facility to a dedicated file, add to your
+rsyslog config (e.g. `/etc/rsyslog.d/30-hzmetrics.conf`):
+
+```
+local0.*    /var/log/hubzero/metrics/hzmetrics-syslog.log
+& stop
+```
+
+Then `systemctl restart rsyslog`.  This is optional — the local
+manage.log already captures everything; the syslog handler is the
+hook for centralized logging or cross-host log aggregation.
 
 Each pipeline stage prints `[<stage>] start` and `[<stage>] done`
 markers.  Searching for `FAIL`, `ERROR`, or `unrecognized` surfaces
