@@ -1,8 +1,8 @@
 # Build / install for hzmetrics.
 #
 # Production install (run on the target HUBzero host):
-#   sudo make install                       # install everything; cron form = dropin
-#   sudo make install CRON_STYLE=spool      # use /var/spool/cron/apache instead
+#   sudo make install                       # install everything; cron form = spool (apache user crontab)
+#   sudo make install CRON_STYLE=dropin     # use /etc/cron.d/hubzero-metrics instead
 #   sudo make uninstall                     # remove what `install` put on the host
 #
 # Dev / CI:
@@ -25,8 +25,9 @@ CRONDDIR       ?= $(SYSCONFDIR)/cron.d
 SPOOLCRONDIR   ?= /var/spool/cron
 TMPFILESDIR    ?= $(SYSCONFDIR)/tmpfiles.d
 INSTALL_OWNER  ?= apache
-# `dropin` -> /etc/cron.d/hubzero-metrics ; `spool` -> /var/spool/cron/apache
-CRON_STYLE     ?= dropin
+# `spool` -> /var/spool/cron/apache (apache user crontab — default) ;
+# `dropin` -> /etc/cron.d/hubzero-metrics (system-wide cron drop-in)
+CRON_STYLE     ?= spool
 
 SCRIPT         := hzmetrics.py
 SCRIPT_DST     := $(DESTDIR)$(PREFIX)/hzmetrics.py

@@ -77,8 +77,8 @@ A/B-test parity reference.
 From a checkout of this repo:
 
 ```
-sudo make install                    # uses /etc/cron.d/ form (default)
-sudo make install CRON_STYLE=spool   # uses /var/spool/cron/apache form instead
+sudo make install                    # uses /var/spool/cron/apache (apache user crontab — default)
+sudo make install CRON_STYLE=dropin  # uses /etc/cron.d/hubzero-metrics instead
 sudo make uninstall                  # removes everything `install` put on the host
 make help                            # list all targets (lint, test, test-ab, ...)
 ```
@@ -89,8 +89,8 @@ What `install` copies:
 - `conf/hzmetrics-logrotate-postrotate.sh` → `/opt/hubzero/bin/hzmetrics-postrotate.sh`
 - `conf/hzmetrics.tmpfiles.conf` → `/etc/tmpfiles.d/hzmetrics.conf`
 - Exactly ONE of:
-  - `conf/hubzero-metrics.cron.d` → `/etc/cron.d/hubzero-metrics`  *(default; `CRON_STYLE=dropin`)*
-  - `conf/hubzero-metrics.cron.apache` → `/var/spool/cron/apache`  *(`CRON_STYLE=spool`)*
+  - `conf/hubzero-metrics.cron.apache` → `/var/spool/cron/apache`  *(default; `CRON_STYLE=spool`)*
+  - `conf/hubzero-metrics.cron.d` → `/etc/cron.d/hubzero-metrics`  *(`CRON_STYLE=dropin`)*
 
 `install` deliberately does NOT touch `/etc/hubzero-metrics/access.cfg`
 — that's an operator-supplied secret.  After `make install`, the
