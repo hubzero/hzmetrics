@@ -57,6 +57,16 @@ Reference tables that are read-only at pipeline runtime
 `country_continent`, `regions`) are populated by
 `hzmetrics.py setup-db` and used during enrichment.
 
+**Storage engine.**  All hot tables (`web`, `websessions`,
+`userlogin`, `webhits`, `toolstart`, `imported_sources`,
+`pipeline_state`, `migrations`, and the four `summary_*_vals`) are
+InnoDB.  Migrations #38 / #41 converted `web` and `websessions` from
+the original MyISAM, eliminating table-level write locks during
+analyze and unlocking row-level concurrency between
+`logfix-session`'s update phase and any read query.  The reference
+tables stay MyISAM — they're tiny, never written at runtime, and
+the engine choice doesn't matter operationally.
+
 `imported_sources` is the crash-recovery key: each per-file import
 runs `INSERT IGNORE` against `(filename, target_table)`, then
 streams data, then `UPDATE`s the row with the inserted PK range,
@@ -119,6 +129,24 @@ import-webhits → webhits (hourly aggregate)
 identify-bots → bot_useragents (table of known bot UAs)
 archive       → gzip and move daily logs into imported/
 ```
+
+`fetch` runs a disk-space pre-flight against `HZ_METRICS_STAGING`
+(`/var/log/hubzero/metrics/`) before concatenating: it sums the
+compressed input sizes, multiplies by a 6× decompressed-estimate
+factor, and aborts if the result wouldn't fit on the staging
+filesystem.  This catches the historical failure mode where a
+multi-day backlog filled `/var/log` mid-import and left half-written
+staging files that took manual cleanup to recover from.
+
+Each per-file import is wrapped in a single `BEGIN … COMMIT`
+transaction guarded by `INSERT IGNORE` into `imported_sources`.  See
+the table description above and `operations.md` for the crash-
+recovery contract.
+
+Every major stage is wrapped in `_timed_stage(name)` — a context
+manager that logs entry, exit, and wall-clock duration to
+`manage.log`.  Grepping `_timed_stage` output is the fastest way to
+spot which phase is the slow one on a given tick.
 
 ### analyze (per-month, idempotent)
 

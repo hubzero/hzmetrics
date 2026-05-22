@@ -110,8 +110,15 @@ What `install` copies (all owned `apache:apache`):
 
 `install` deliberately does NOT drop `access.cfg` — it's an operator-
 supplied secret.  After `make install`, the Makefile prints the
-remaining manual steps (the access.cfg copy, the `crontab` registration,
-`setup-db`, `migrate --apply`).
+remaining manual steps (the access.cfg copy, the `crontab`
+registration; `setup-db` and `migrate --apply` are now folded into
+`hzmetrics.py init` or the auto-bootstrap on cron's first tick —
+see [the First-time install section](#first-time-install) below).
+
+Cron-style default is `spool` — the install registers the apache
+user's crontab directly via `crontab(1)`, no `/etc/cron.d/`
+drop-in.  Override with `CRON_STYLE=dropin make install` if your
+hub's policy needs the global `/etc/cron.d/` flavor.
 
 Overrides: `HZMETRICS_HOME` (install root, default `/opt/hubzero/metrics`),
 `LOG_DIR` (default `/var/log/hubzero/metrics`), `INSTALL_OWNER` /

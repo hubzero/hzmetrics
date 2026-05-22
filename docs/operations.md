@@ -291,6 +291,28 @@ Without unbound, leave the defaults — direct-to-system at
 concurrency=500 has been benchmarked unfavorably and regressed
 against Purdue's resolvers.
 
+### "?" rows are accumulating in web.host / websessions.host
+
+The `?` value is the persisted sentinel for "PTR lookup tried and
+returned NXDOMAIN / SERVFAIL / no answer."  It's intentional: the
+next `resolve-dns` run filters `WHERE host IS NULL OR host = ''`,
+so `?` rows are skipped instead of being re-queried every tick —
+which would beat up the resolver on IPs that have no PTR for
+infrastructural reasons (CDN backends, cellular NAT pools, hosts
+without reverse zones).  This matches the legacy Perl behavior.
+
+If you genuinely want to re-resolve some `?` rows (DNS was
+unavailable during the original pass, the resolver is now fixed):
+
+```sql
+-- Scope tightly — re-resolving every '?' on a busy hub is
+-- expensive and usually re-produces the same '?'.
+UPDATE web SET host = NULL
+  WHERE host = '?' AND datetime >= '2025-08-01' AND datetime < '2025-08-02';
+```
+
+then run `resolve-dns metrics web 2025-08-01`.
+
 ## A month's summary numbers look wrong
 
 Each summary cell is `DELETE` + `INSERT` per `(datetime, period,
@@ -440,11 +462,28 @@ A pattern with >95 % empty Referer + browser UAs is almost certainly
 a distributed crawl.  On geodynamics the smoking guns were:
 
 - `/login?return=<base64>` — 99.9 % empty Referer.  Auth redirect
-  targets, hit by crawlers that follow public links.
+  targets, hit by crawlers that follow public links.  Regex covers
+  the trailing-slash variant `/login/?return=…` too — the same
+  crawler ran both shapes in the wild.
 - `/resources/browse?<query>` — 96-97 % empty Referer.  Catalog
-  pagination spam, every tag combination visited.
+  pagination spam, every tag combination visited.  Also covers
+  `/resources/browse/?…`.
 
 Together: 93 % of one month's rows.
+
+Two additional categories also land in `_is_excluded_url` and
+`_is_referer_spam` and are filtered at import time without operator
+action:
+
+- **Self-identifying crawler User-Agents** — `Scrapy`, `PRTG`,
+  `PycURL`, `Yeti` and similar fixed strings, kept in the
+  `bot_useragents` table and matched exact-case to skip the slower
+  substring scan over the full UA filter list.
+- **`/pipermail/`** (mailman archive web view) — never a metrics
+  signal; consumes thousands of rows per crawl.
+- **`/cron/tick/...`** — the hub's own scheduled-task self-hits.
+  Looked like real traffic in the legacy code; filtered out so they
+  don't inflate hit counts.
 
 ### Filter at import time
 
