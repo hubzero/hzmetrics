@@ -31,6 +31,36 @@ Exit codes: `main()` propagates the handler's return code.  A daily
 non-zero exit indicates an operational error (missing cfg, missing
 hub_dir, mysql_exec failure, etc.).
 
+## Is the install healthy?
+
+```bash
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
+```
+
+Walks four phases and reports each:
+
+  - `/etc/hubzero.conf` resolved a `site = <hubname>` line
+  - `conf/access.cfg` present, parseable, and naming a metrics DB
+  - every directory the pipeline writes into exists and is writable
+    by the invoking user
+  - MySQL reachable, `<hub>_metrics` exists, every known migration
+    applied
+
+`doctor` is a pure diagnostic by default — it logs `OK` / `FAIL`
+lines and returns non-zero if anything failed.  Pass `--fix` to make
+it call the same `_self_bootstrap` repair helpers cron uses on
+startup: `mkdir -p` the missing dirs, `CREATE DATABASE IF NOT EXISTS`,
+and apply every pending migration.  Things `doctor` can't fix from
+its own privileges (missing `/etc/hubzero.conf` line, root-owned
+parent of `/opt/hubzero/metrics`, MySQL down, bad DB credentials) are
+reported but not attempted.
+
+The same machinery also runs automatically at the top of `cmd_tick`
+and `cmd_run` (gated on `os.geteuid()` mapping to `apache` /
+`www-data`), so a freshly-installed hub with `access.cfg` in place can
+go from cron-not-running to working pipeline on the next tick without
+any manual setup-db / migrate step.
+
 ## Pipeline is running — am I getting fresh data?
 
 ```bash
@@ -646,11 +676,8 @@ checking first.
 ## Re-running everything from scratch (test environments only)
 
 ```bash
-# Drop and recreate the test DB schema:
-sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py setup-db
-
-# Apply all migrations:
-sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py migrate --apply
+# init covers setup-db + migrate in one shot:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 
 # Re-process the entire pending log set:
 while sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status \
@@ -661,6 +688,44 @@ done
 
 Never do this on a production hub without backing up `<hub>_metrics`
 first.
+
+## Crash recovery: forget-import
+
+Each per-file import is wrapped in a single transaction guarded by an
+`INSERT IGNORE` into `metrics.imported_sources` (`filename`,
+`target_table`, `pk_start`, `pk_end`, `row_count`, `imported_at`).
+The flow is:
+
+  1. `BEGIN`
+  2. `INSERT IGNORE INTO imported_sources …` — `rowcount=0` means the
+     file already imported; skip data INSERT and just retry the move.
+  3. Stream data into `web` / `userlogin` / `webhits`, tracking
+     `pk_start` / `pk_end` (single-writer lock guarantees the range
+     is contiguous to this file).
+  4. `UPDATE imported_sources SET pk_start, pk_end, row_count`.
+  5. `COMMIT`.
+  6. Move source file to `imported/`.
+
+Crash at any step before COMMIT → InnoDB rolls back the data INSERT
+*and* the `imported_sources` row; retry sees no marker and imports
+cleanly.  Crash between COMMIT and the move → marker exists, retry
+skips the data INSERT and just retries the move.
+
+To deliberately re-import a file (e.g. you discovered the parser
+mis-handled a corner case and need to reprocess the day):
+
+```bash
+# Reverse the imported_sources marker AND delete the rows it tracks:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py \
+    forget-import access.log-20260315.gz web
+
+# Move the file back from imported/ to daily/ (or pull a fresh copy):
+sudo -u apache mv /var/log/httpd/imported/access.log-20260315.gz \
+                   /var/log/httpd/daily/
+```
+
+The next import tick will pick it up.  PK-range DELETE is bounded by
+file size, not table size — works at nanoHUB scale (800 M+ rows).
 
 ## Logs and observability
 

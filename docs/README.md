@@ -23,7 +23,7 @@ Read in roughly this order if new to the project:
    logrotate, schema bootstrap, optional unbound.
 8. **[operations.md](operations.md)** — runbook for ops tasks
    (catch-up, stuck lock, bot inflation, DNS issues).
-9. **[testing.md](testing.md)** — A/B + golden test modes, 26 ports.
+9. **[testing.md](testing.md)** — A/B + golden test modes, 44 ports.
 10. **[glossary.md](glossary.md)** — short definitions for everything
     above (hub, period code, dnload, domain class, rowid/colid, etc.).
 

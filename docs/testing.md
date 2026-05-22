@@ -28,7 +28,7 @@ current codebase.  CI runs golden plus defensive mode.
 
 ## What's tested
 
-35 test directories under `tests/ab/port_*`:
+44 test directories under `tests/ab/port_*`:
 
 **Per-port A/B (16):** `port_andmore_usage`, `port_clean_bots`,
 `port_fill_domain`, `port_fill_ipcountry`, `port_fill_user_info`,
@@ -73,6 +73,28 @@ inverse pass with `periods=None` populates all six),
 month M1 rows; resummarizes M2; asserts period-14 refreshed to
 include M1 while period-1 stays unchanged — the core promise of
 rebuild mode).
+
+**Install + crash recovery (4):** `port_bootstrap` (`_self_bootstrap`
+identity gate + site-name guard + `_expected_dirs` contract + the
+`init` / `doctor` exit codes), `port_import_atomic` (per-file
+import is transactional and the `imported_sources` marker survives
+post-COMMIT crashes — `forget-import` reverses both halves cleanly),
+`port_lock` (PID-file format and `init_start_epoch` stale-PID
+detection across reboot / container restart), `port_month_complete`
+(data-driven month-closed check that gates `logfix-session` to month
+boundary).
+
+**Filter regression guards (4):** `port_dnload_classify` (Python
+`_is_download_url` covers every download-extension and download-path
+shape), `port_dnload_backfill_regex` (SQL-side backfill-dnload regex
+correctly handles literal-dot vs any-char — pins the silent fix in
+db5d8ba), `port_referer_spam` (login/?return= and resources/browse?
+crawler-spam regex), `port_session_split` (1800-second session
+boundary).
+
+**Window-boundary semantics (1):** `port_window_boundaries` (27
+assertions: period range arithmetic across month / quarter / year /
+fiscal-year boundaries, leap years, DST edges).
 
 ## Running
 

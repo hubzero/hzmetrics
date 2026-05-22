@@ -179,35 +179,67 @@ against Purdue's resolvers and produces ~4 ms/IP cold.
 
 ## First-time install
 
-If `<hub>_metrics` doesn't exist yet:
+After `install-bootstrap` has seated `/opt/hubzero/metrics` and you've
+dropped a populated `conf/access.cfg` in place, the script can finish
+its own setup in one call:
 
 ```
-sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py setup-db
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 ```
 
-Creates the metrics database, every table, and seeds the static
-reference tables (`continents`, `countries`, `domainclass`,
-`classes`, etc.).  Run with `--dry-run` first to see what statements
-will execute.
+`init` is idempotent and does:
+
+  1. Asserts `site = <hubname>` is set in `/etc/hubzero.conf`
+     (refuses otherwise — the site name prefixes every staged-log
+     filename and a few DB conventions, so a silent "hub" fallback
+     would collide on every multi-hub host).
+  2. `mkdir -p` for every directory the pipeline writes to —
+     `HZMETRICS_HOME/{bin,conf,state}`, `/var/log/hubzero/{daily,
+     imported,metrics}`, and `/var/log/{httpd,apache2}/{daily,
+     imported}`.
+  3. `CREATE DATABASE IF NOT EXISTS <hub>_metrics`, then runs the
+     baseline DDL and applies every pending migration.
+
+The same machinery runs automatically on the first `cron` tick when
+the process is owned by `apache` / `www-data` (see
+[`_self_bootstrap` in architecture.md](architecture.md#self-bootstrap)) — so
+operators who'd rather skip `init` and let cron handle it can do so,
+provided `access.cfg` is in place before cron fires.
 
 The CMS-side tables created by metrics
 (`jos_resource_stats_tools_topvals`, `jos_session_geo`, etc.) are
-created by the hub's own CMS migrations and shouldn't need
-anything from `hzmetrics.py`.  If they're missing, see the
-`exclude_list` schema work and check the hub's migration state.
+created by the hub's own CMS migrations and shouldn't need anything
+from `hzmetrics.py`.  If they're missing, see the `exclude_list`
+schema work and check the hub's migration state.
 
-Apply any pending schema migrations:
-
-```
-sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py migrate --apply
-```
-
-`migrate` without `--apply` shows what would change.
+The two underlying commands `init` composes (`setup-db` and `migrate
+--apply`) are still individually invocable for the rare case where you
+want to run one without the other.
 
 ## Verifying the install
 
+`doctor` is the diagnostic entry point.  It walks the four phases
+self-bootstrap touches and reports each:
+
 ```
-# What's the pipeline see?
+# Full health check — reports every issue, fixes nothing:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
+
+# Same, but attempt to repair the fixable ones (mkdir, CREATE
+# DATABASE, run pending migrations) — same code paths self-bootstrap
+# uses on cron startup:
+sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor --fix
+```
+
+Things `doctor` cannot fix from its own privileges (missing
+`/etc/hubzero.conf` `site` line, root-owned parent dirs, MySQL down,
+bad `access.cfg` credentials) are reported clearly so the operator
+knows the next step.
+
+The traditional smoke-tests still work after `init`:
+
+```
+# What does the pipeline see?
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py status
 
 # Does DNS work?

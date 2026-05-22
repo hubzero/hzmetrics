@@ -48,11 +48,23 @@ Pipeline-owned.  The big ones:
 | `jos_xprofiles_metrics` | User profile snapshot | `import-hub-data` (full rebuild from `<hub>.jos_xprofiles`) |
 | `bot_useragents` | Known-bot user agent | `identify-bots` |
 | `exclude_list` | IP / URL / useragent / domain filter | Operator (via a CMS-side migration; pipeline only reads) |
+| `imported_sources` | Staged log file already imported | `import` (one row per file per `target_table`) |
+| `pipeline_state` | Orchestrator KV store (mode, cursor, dirty months, …) | `cmd_run` |
+| `migrations` | Schema-migration ledger | `migrate --apply` / `_self_bootstrap` |
 
 Reference tables that are read-only at pipeline runtime
 (`domainclass`, `classes`, `continents`, `countries`,
 `country_continent`, `regions`) are populated by
 `hzmetrics.py setup-db` and used during enrichment.
+
+`imported_sources` is the crash-recovery key: each per-file import
+runs `INSERT IGNORE` against `(filename, target_table)`, then
+streams data, then `UPDATE`s the row with the inserted PK range,
+all inside one transaction.  A crash before COMMIT rolls back
+both halves; a crash between COMMIT and the file move leaves the
+marker as the no-op signal for the retry.  See
+[operations.md → Crash recovery: forget-import](operations.md#crash-recovery-forget-import)
+for the operator-facing API.
 
 ### Summary tables
 
@@ -338,6 +350,40 @@ release is hard to replicate cleanly in SQL.
 `tests/ab/port_state/` covers DB read/write, multi-key atomicity,
 the dirty-months helpers, and the rebuild-from validation paths.
 
+## Self-bootstrap
+
+`cmd_run` and `cmd_tick` invoke `_self_bootstrap()` before any
+DB-touching work.  It's a no-op for any euid that doesn't map to
+`apache` or `www-data` — dev shells, root, and the A/B harness stay
+hands-off — but for the service user it does three things idempotently:
+
+  1. **Site-name guard.**  Aborts (`SystemExit(2)`) if
+     `/etc/hubzero.conf` had no `site = <hubname>` line.  The site
+     string is woven into every staged-log filename pattern
+     (`${SITE}-access*log*`) and several DB-prefix conventions, so a
+     silent "hub" fallback would collide on every multi-hub host.
+  2. **Filesystem repair.**  `mkdir -p` for every entry in
+     `_expected_dirs()` (the 9-entry list defined alongside —
+     `HZMETRICS_HOME/{bin,conf,state}`, the Apache `daily` /
+     `imported` pair, the HUBzero `daily` / `imported` pair, plus the
+     metrics-staging dir).  `PermissionError` becomes a fail-fast with
+     "run install-bootstrap once as root" guidance.
+  3. **Database repair.**  Runs the baseline DDL (every statement is
+     `CREATE TABLE IF NOT EXISTS`) which also brings the database
+     itself into existence via `CREATE DATABASE IF NOT EXISTS`, then
+     calls `_apply_pending_migrations()` so the schema lands at HEAD.
+
+The operator-driven counterparts are `hzmetrics.py init` (same
+machinery, no apache-uid gate) and `hzmetrics.py doctor [--fix]`
+(diagnostic-first; reports the four phases, optionally repeats the
+repair).  Tests live in `tests/ab/port_bootstrap/`.
+
+A common consequence: on a fresh hub, dropping a populated
+`access.cfg` in place and waiting one cron tick is enough to get a
+working pipeline.  Operators who prefer to drive the steps manually
+can run `init` once and skip cron's auto-repair (the cron call is
+still safe — it sees nothing to do).
+
 ## Files on disk
 
 - `/opt/hubzero/metrics/bin/hzmetrics.py` — the pipeline binary.
@@ -350,12 +396,18 @@ the dirty-months helpers, and the rebuild-from validation paths.
   [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample).
 - `/opt/hubzero/metrics/conf/cron.apache` — crontab template; operator
   registers it via `sudo -u apache crontab …`.
-- `/opt/hubzero/metrics/state/hzmetrics.pid` — PID lock, ensures one
-  pipeline runs at a time.  Auto-created by `acquire_lock()` on first
-  run; flock self-releases on process exit.
+- `/opt/hubzero/metrics/state/hzmetrics.pid` — PID lock file.  One
+  line, three space-separated fields: `<pid> <init_start_epoch>
+  <iso_acquired>`.  The flock (not the file existence) is
+  authoritative — but `init_start_epoch` (from `btime + /proc/1/stat
+  starttime`) changes on host reboot AND container restart, so a
+  retained file from a prior kernel/namespace shows the recycled-PID
+  ambiguity immediately.  `acquire_lock()` creates the parent on
+  first run; flock self-releases on process exit.
 - `/var/log/hubzero/metrics/manage.log` — pipeline log file (also
   routed to syslog LOG_LOCAL0 and stderr; see
-  [operations.md](operations.md#logs-and-observability)).
+  [operations.md](operations.md#logs-and-observability)).  ISO 8601
+  timestamps to ms precision with local-tz offset.
 - `/var/log/httpd/daily/`, `/var/log/hubzero/daily/` — incoming log
   files.  Pipeline reads, processes, and moves them to `imported/`.
 
@@ -379,6 +431,11 @@ clear-dirty [--all|YYYY-MM ...]  remove months from the dirty set
 fill-geo / backfill-dnload    one-shot backfill utilities
 migrate [--apply]          show or apply schema migrations
 setup-db [--dry-run]       create the metrics DB schema from scratch
+init                       one-shot install bootstrap: dirs + DB + migrate
+                           (operator-driven equivalent of _self_bootstrap)
+doctor [--fix]             diagnose install health; --fix attempts repair
+forget-import FILE TABLE   reverse an imported_sources marker and DELETE
+                           its tracked PK range (operator escape hatch)
 ```
 
 Each mutating subcommand has `--dry-run`.  `--force` bypasses the

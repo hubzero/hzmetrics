@@ -193,6 +193,39 @@ because the DDL in `setup-db` now bakes in the post-migration state,
 so a fresh install marks every migration applied without re-running
 them.
 
+### `imported_sources`
+Crash-recovery table in the metrics DB.  One row per source file per
+target table, populated as `INSERT IGNORE` inside the import
+transaction; the row carries `pk_start` / `pk_end` after the data
+INSERT commits.  A retry sees `rowcount = 0` on the IGNORE and skips
+the data INSERT.  `forget-import <file> <table>` reverses the marker
+and `DELETE`s the tracked PK range — works at nanoHUB scale because
+the range scan is bounded by file size, not table size.
+
+### Self-bootstrap
+The repair routine `_self_bootstrap()` runs at the top of
+`cmd_run` / `cmd_tick`, gated on `os.geteuid()` mapping to `apache` /
+`www-data`.  Asserts `site = …` is set in `/etc/hubzero.conf`,
+`mkdir -p`s the expected directory tree, then `CREATE DATABASE IF NOT
+EXISTS` + baseline DDL + `migrate --apply`.  All steps idempotent.
+
+The two operator-facing equivalents:
+
+- `init` — same machinery, no apache-uid gate (operator-driven first
+  install).
+- `doctor [--fix]` — diagnostic: reports the four phases'
+  health; `--fix` re-runs the bootstrap helpers and re-checks.
+
+### Dirty month
+A YYYY-MM entry in `pipeline_state.dirty_months`.  The catchup loop
+processes dirty months with a special `_reset_month_for_resummarize`
+prelude (clear `web.sessionid` + wipe `websessions` + delete summary
+rows) before the standard analyze + summarize.  Operators set this
+with `mark-dirty YYYY-MM …` after a bulk cleanup of `web` (so any
+stale `websessions` rows pointing into the wiped data get
+rebuilt); the orchestrator auto-clears each entry once that month's
+reset+resummarize finishes.
+
 ### `access.cfg`
 `/opt/hubzero/metrics/conf/access.cfg`.  Bare `$var = 'value';` PHP-style
 file with DB credentials.  Owned `root:apache` mode 640.  Read by
