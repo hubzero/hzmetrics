@@ -8013,6 +8013,14 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
     — those cells were computed when 2022 / 2023 weren't yet in `web`,
     so their windows are now stale.
 
+    Months that are already fully summarized, not dirty-flagged, and free
+    of orphaned sessionid stamps are skipped — the cursor fast-forwards
+    over them in a single tick without re-running analyze + summarize.
+    This makes rebuild cheap on hubs where catchup only resummarized a
+    handful of historically-incomplete months: the long-window cells in
+    intact downstream months are still correct because no new historical
+    data was imported.
+
     Returns True when the cursor has passed prev_month (caller transitions
     back to normal)."""
     cursor = state.get("rebuild_cursor") or state.get("catchup_started")
