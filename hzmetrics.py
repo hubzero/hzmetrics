@@ -625,6 +625,22 @@ def month_has_source(month_str: str) -> bool:
     return bool(pending_days_for_month(month_str))
 
 
+def _kinds_with_source(month_str: str) -> set[str]:
+    """Set of source-log kinds with pending files for `month_str` —
+    a subset of {"access", "auth"}.  Used by the catchup decision matrix
+    to scope reimport-wipes to only the tables whose data we're about to
+    replace: apache files repopulate web/webhits/websessions, cmsauth
+    files repopulate userlogin.  Wiping userlogin when only apache files
+    are pending would destroy irreplaceable data — keep the wipe surgical."""
+    kinds: set[str] = set()
+    for kind in ("access", "auth"):
+        for d, _ in enumerate_log_sources(kind):
+            if d[:4] + "-" + d[4:6] == month_str:
+                kinds.add(kind)
+                break
+    return kinds
+
+
 # Base tables that hold per-row activity for a single month.  Used to
 # detect "this month was already imported at some point" even when the
 # source log has been archived off the host (which happened to all the
@@ -681,12 +697,32 @@ def month_has_orphaned_stamps(month_str: str) -> bool:
     ))
 
 
-def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
-    """DELETE all rows for `month_str` from the base time-series tables
-    and the summary_*_vals tables.  Used by the catchup decision matrix
-    when both source ✓ and data ✓: prior import / summarize state for
-    this month is suspect (partial), so we wipe it and reimport from the
+# Map source-log kind → base tables it (re)populates.  Used to scope
+# _wipe_month_data so a recovery that re-adds only apache files doesn't
+# also destroy correct userlogin data that has no apache replacement.
+_TABLES_BY_KIND = {
+    "access": ("web", "webhits", "websessions"),  # websessions = derived from web
+    "auth":   ("userlogin",),
+}
+
+
+def _wipe_month_data(month_str: str, dry_run: bool = False,
+                     kinds: set[str] | None = None) -> None:
+    """DELETE rows for `month_str` from the base time-series tables and
+    the summary_*_vals tables.  Used by the catchup decision matrix when
+    both source ✓ and data ✓: prior import / summarize state for this
+    month is suspect (partial), so we wipe it and reimport from the
     archived source files for a clean slate.
+
+    `kinds` scopes which base tables get wiped.  None means "wipe every
+    base table" (the conservative all-or-nothing default for direct
+    callers).  A set like {"access"} restricts the wipe to apache-derived
+    tables (web/webhits/websessions), leaving auth-derived tables alone
+    — the catchup branch passes this to avoid destroying userlogin when
+    only apache files are being recovered.  Summary tables are always
+    wiped (they're derived from every base table; leaving them stale
+    after a partial wipe is worse than letting the analyze+summarize
+    that follows redo them).
 
     Never call this on a month whose source logs are gone — that data is
     irreplaceable.  Callers must check month_has_source() first."""
@@ -696,9 +732,18 @@ def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
     end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
     dt_summary = f"{month_str}-00"  # '-00' = whole-month marker
 
-    log.info(f"[wipe] {month_str}: clearing base + summary rows")
+    if kinds is None:
+        tables_to_wipe = _BASE_DATA_TABLES
+        scope = "all"
+    else:
+        tables_to_wipe = tuple(
+            t for k in sorted(kinds) for t in _TABLES_BY_KIND.get(k, ())
+        )
+        scope = "+".join(sorted(kinds)) or "none"
+
+    log.info(f"[wipe] {month_str}: clearing base ({scope}) + summary rows")
     if dry_run:
-        for table in _BASE_DATA_TABLES:
+        for table in tables_to_wipe:
             log.info(f"  [dry-run] DELETE FROM {table} "
                      f"WHERE datetime >= '{start}' AND datetime < '{end}';")
         for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
@@ -706,7 +751,7 @@ def _wipe_month_data(month_str: str, dry_run: bool = False) -> None:
                      f"WHERE datetime = '{dt_summary}';")
         return
 
-    for table in _BASE_DATA_TABLES:
+    for table in tables_to_wipe:
         mysql_exec(
             f"DELETE FROM {metrics_db}.{table} "
             f"WHERE datetime >= %s AND datetime < %s;",
@@ -7888,11 +7933,13 @@ def _backlog_months(today_str: str) -> list[str]:
     months with `mark-dirty` (or the consistency check finds the
     drift on its own) and the next ticks redrive them."""
     months = set()
+    months_with_source: set[str] = set()  # pending source files override the fully-summ filter
     # Auth-only months count too — see _enumerate_all_pending_days.
     for d in _enumerate_all_pending_days():
         m = f"{d[:4]}-{d[4:6]}"
         if m < today_str:
             months.add(m)
+            months_with_source.add(m)
     # Also include months whose data is in the DB but summary is incomplete —
     # the 2024 access months + 2025-07 fit this shape.
     _, _, _, metrics_db = db_credentials()
@@ -7912,11 +7959,13 @@ def _backlog_months(today_str: str) -> list[str]:
     # specifically to override that signal.
     dirty = get_dirty_months()
     months.update(m for m in dirty if m < today_str)
-    # Filter out months that are both fully summarized AND look
-    # consistent (no orphaned stamps).  Cheap LIMIT-1 probes — fine
-    # to run per backlog candidate.
+    # Months with pending source files always need attention (even if
+    # they look fully summarized — the new files may contain rows the
+    # summary doesn't reflect, as happens in the apache-log gzip-bug
+    # recovery flow).  Dirty + orphaned-stamps also override fully-summ.
     return sorted(m for m in months
-                  if m in dirty
+                  if m in months_with_source
+                  or m in dirty
                   or month_has_orphaned_stamps(m)
                   or not is_month_fully_summarized(m))
 
@@ -7964,13 +8013,15 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     orphans     = month_has_orphaned_stamps(target) if has_data else False
     needs_reset = is_dirty or orphans  # post-bulk-edit invalidation
 
-    if fully_summ and not needs_reset:
+    if fully_summ and not needs_reset and not has_source:
         log.info(f"[catchup] {target} already fully summarized — skipping")
         return False  # let next tick advance past it
 
     if has_source and has_data:
-        log.info(f"[catchup] {target}: source ✓ data ✓ — wiping stale rows + reimport")
-        _wipe_month_data(target, dry_run=dry_run)
+        kinds = _kinds_with_source(target)
+        log.info(f"[catchup] {target}: source ✓ data ✓ — "
+                 f"wiping {'+'.join(sorted(kinds))} rows + reimport")
+        _wipe_month_data(target, dry_run=dry_run, kinds=kinds)
         _import_month(target, dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
