@@ -1,4 +1,7 @@
 # HUBzero metrics pipeline
-# NOTE: Do not specify 'apache' user here, it's implicit
-# Every 5 min: updates whoisonline map; at :30 past each hour also runs the metrics pipeline.
-*/5 * * * * python3 /opt/hubzero/bin/hzmetrics.py tick
+# NOTE: this is the apache user crontab — do not specify the user field here.
+# Every 5 min: updates whoisonline map; at :30 past each hour also runs the
+# metrics pipeline under flock.  The script reads $HZMETRICS_HOME/conf/access.cfg
+# by default; override with HZMETRICS_ACCESS_CFG if the cfg lives elsewhere
+# (e.g. operators migrating from the pre-2026 /etc/hubzero-metrics/ layout).
+*/5 * * * * python3 /opt/hubzero/metrics/bin/hzmetrics.py tick
