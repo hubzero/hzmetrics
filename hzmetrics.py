@@ -2536,9 +2536,20 @@ def _move_to_imported(src_path: Path, imported_dir: Path) -> None:
     rename is atomic; cross-filesystem falls back to copy+unlink via
     shutil.move (rare but not catastrophic — if it fails after the
     transaction committed, the imported_sources row makes the next
-    tick's retry skip the data INSERT and just retry the move)."""
+    tick's retry skip the data INSERT and just retry the move).
+
+    Hardlink edge case: if src and dst refer to the same inode (e.g., an
+    operator hardlinked imported/X.gz into daily.holding/X.gz to drive a
+    re-import without consuming disk), POSIX rename() is defined as a
+    no-op and shutil.move follows suit — leaving src in place.  That
+    would make the orchestrator re-pick the same file on every tick,
+    looping forever.  Detect this and unlink src instead."""
     imported_dir.mkdir(parents=True, exist_ok=True)
     dst = imported_dir / src_path.name
+    if dst.exists() and src_path.stat().st_ino == dst.stat().st_ino:
+        src_path.unlink()
+        log.info(f"  -> {dst} (src was hardlink to dst; unlinked src)")
+        return
     shutil.move(str(src_path), str(dst))
     log.info(f"  -> {dst}")
 
