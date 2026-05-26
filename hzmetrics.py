@@ -2426,7 +2426,14 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
         _stream_decompress(src_path, out)
     log.info(f"[import-apache-atomic] staged {filename} -> {STAGED_APACHE}")
 
-    conn = _open_db()
+    # do_import_apache + do_identify_bots + do_import_webhits all rely
+    # on the connection's default schema for unqualified table refs
+    # (`exclude_list`, `bot_useragents`, `INSERT INTO web …`).  Without
+    # database= here, MariaDB returns "(1046) No database selected" on
+    # the first SELECT and the entire transaction rolls back without
+    # importing the file or writing an imported_sources marker.
+    _, _, _, metrics_db = db_credentials()
+    conn = _open_db(metrics_db)
     try:
         conn.begin()
         with conn.cursor() as cur:
@@ -2494,7 +2501,10 @@ def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> None:
         _stream_decompress(src_path, out)
     log.info(f"[import-auth-atomic] staged {filename} -> {STAGED_AUTH}")
 
-    conn = _open_db()
+    # Match the same default-schema requirement as the apache helper —
+    # do_import_auth's SELECTs and INSERTs are unqualified.
+    _, _, _, metrics_db = db_credentials()
+    conn = _open_db(metrics_db)
     try:
         conn.begin()
         with conn.cursor() as cur:

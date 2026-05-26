@@ -323,7 +323,11 @@ class AtomicHelperOrchestrationTests(unittest.TestCase):
             def close(self):    self.closed = True
 
         self.fake_conn = FakeConn()
-        self.hz._open_db = lambda *a, **kw: self.fake_conn
+        self.open_db_calls: list = []
+        def _capture_open_db(*a, **kw):
+            self.open_db_calls.append((a, kw))
+            return self.fake_conn
+        self.hz._open_db = _capture_open_db
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -382,6 +386,49 @@ class AtomicHelperOrchestrationTests(unittest.TestCase):
         # File NOT moved (the txn rolled back; we never reached the move)
         self.assertTrue(src.exists())
         self.assertFalse((self.hz.HTTPD_IMPORTED / src.name).exists())
+
+    # ------------------------------------------------------------------
+    # Pin the default-schema bug fix.  do_import_apache, do_identify_bots,
+    # do_import_webhits, and do_import_auth all run unqualified queries
+    # like `SELECT FROM exclude_list` and `INSERT INTO web …` — they
+    # rely on the caller-owned conn having a default schema selected.
+    # If the atomic helper opens its conn via `_open_db()` (no database
+    # arg), MariaDB returns "(1046) No database selected" on the first
+    # SELECT and rolls back the whole transaction.  This was a latent
+    # bug from 2026-05-21 until 2026-05-25, silently failing every cron
+    # import for days.
+    #
+    # The fix is to pass metrics_db; these tests assert that the call
+    # happened, so a future revert to bare `_open_db()` fails loudly.
+    # ------------------------------------------------------------------
+
+    def test_apache_opens_conn_with_metrics_db_as_default_schema(self):
+        src = Path(self.tmp.name) / "geodynamics-access.log-20260521.gz"
+        src.write_bytes(b"")
+        self.hz._import_apache_file_atomic(src, dry_run=False)
+        self.assertTrue(self.open_db_calls,
+                        "expected _open_db to be called from the atomic helper")
+        args, kwargs = self.open_db_calls[0]
+        db = (args[0] if args else kwargs.get("database"))
+        self.assertEqual(
+            db, "mdb",
+            f"_import_apache_file_atomic must pass metrics_db to _open_db so "
+            f"unqualified `SELECT FROM exclude_list` / `INSERT INTO web` work; "
+            f"actual call = (args={args!r}, kwargs={kwargs!r})")
+
+    def test_auth_opens_conn_with_metrics_db_as_default_schema(self):
+        self.hz.HZ_IMPORTED = Path(self.tmp.name) / "auth_imported"
+        src = Path(self.tmp.name) / "cmsauth-20260521.log.gz"
+        src.write_bytes(b"")
+        self.hz._import_auth_file_atomic(src, dry_run=False)
+        self.assertTrue(self.open_db_calls,
+                        "expected _open_db to be called from the atomic helper")
+        args, kwargs = self.open_db_calls[0]
+        db = (args[0] if args else kwargs.get("database"))
+        self.assertEqual(
+            db, "mdb",
+            f"_import_auth_file_atomic must pass metrics_db to _open_db; "
+            f"actual call = (args={args!r}, kwargs={kwargs!r})")
 
 
 if __name__ == "__main__":
