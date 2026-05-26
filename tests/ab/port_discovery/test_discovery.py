@@ -179,6 +179,48 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(self.hz.pending_days_for_month("2025-08"), [])
 
     # ------------------------------------------------------------------
+    # Auth-only days must surface to the orchestrator.  Before 2026-05
+    # the discovery layer enumerated only `"access"` logs, so cmsauth
+    # files for days without a matching apache log were invisible to
+    # pending_days_for_month, oldest_pending_month, and _backlog_months.
+    # On the geodynamics hub that left 428 pre-2022 cmsauth files
+    # sitting in /var/log/hubzero/daily/ unimported indefinitely.
+    # ------------------------------------------------------------------
+
+    def test_auth_only_day_surfaces_via_pending_days(self):
+        # An auth log with NO matching apache log — common shape for
+        # pre-2022 hubs where access logs were rotated off-disk but
+        # the cmsauth files were retained.
+        _make_tree(self.root, {
+            f"hubzero/daily/cmsauth.log-20211201": None,
+            f"hubzero/daily/cmsauth.log-20211215": None,
+        })
+        self.assertEqual(self.hz.pending_days_for_month("2021-12"),
+                         ["20211201", "20211215"])
+
+    def test_auth_only_day_drives_oldest_pending_month(self):
+        # If the earliest pending source is an auth log, that month
+        # must win — otherwise the catchup loop never visits it and
+        # the files accumulate indefinitely.
+        _make_tree(self.root, {
+            f"httpd/daily/{TEST_SITE}-access.log-20260518.gz": None,
+            f"hubzero/daily/cmsauth.log-20211201":             None,
+        })
+        self.assertEqual(self.hz.oldest_pending_month(), "2021-12")
+
+    def test_access_and_auth_days_are_unioned(self):
+        # Same month, access on some days, auth on others — both sets
+        # should appear in pending_days_for_month, deduped.
+        _make_tree(self.root, {
+            f"httpd/daily/{TEST_SITE}-access.log-20211201.gz": None,
+            f"httpd/daily/{TEST_SITE}-access.log-20211202.gz": None,
+            f"hubzero/daily/cmsauth.log-20211202":             None,
+            f"hubzero/daily/cmsauth.log-20211203":             None,
+        })
+        self.assertEqual(self.hz.pending_days_for_month("2021-12"),
+                         ["20211201", "20211202", "20211203"])
+
+    # ------------------------------------------------------------------
     # _rmdir_if_empty
     # ------------------------------------------------------------------
 

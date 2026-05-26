@@ -349,19 +349,41 @@ def enumerate_log_sources(kind: str) -> list[tuple[str, Path]]:
             seen[date_str] = path
     return sorted(seen.items())
 
+# Both apache and cmsauth pending logs surface the same date as work to
+# do — do_import_day handles each kind independently, so the orchestrator
+# only needs the union of date strings.  Auth-only days are real on hubs
+# where apache logs were rotated away or never existed (the geodynamics
+# pre-2022 backlog: 428 cmsauth files, 0 access files).
+_LOG_KINDS_FOR_DISCOVERY = ("access", "auth")
+
+
+def _enumerate_all_pending_days() -> list[str]:
+    """Sorted, deduped YYYYMMDD list of days with at least one pending
+    source file of any kind."""
+    days: set[str] = set()
+    for kind in _LOG_KINDS_FOR_DISCOVERY:
+        for d, _ in enumerate_log_sources(kind):
+            days.add(d)
+    return sorted(days)
+
+
 def pending_days_for_month(month_str: str) -> list[str]:
-    """Sorted list of date strings (across all source dirs) for the given YYYY-MM."""
+    """Sorted list of date strings (across all source dirs and log kinds)
+    for the given YYYY-MM.  Returns a day if EITHER an access log OR an
+    auth log is pending for it; do_import_day handles each kind on its
+    own."""
     yyyymm = month_str.replace("-", "")
-    return [d for d, _ in enumerate_log_sources("access") if d.startswith(yyyymm)]
+    return [d for d in _enumerate_all_pending_days() if d.startswith(yyyymm)]
 
 def oldest_pending_month() -> str | None:
-    """YYYY-MM of the earliest pending source log anywhere, or None — drives
-    `process --next` and the catch-up loop.  Searches daily/, daily/YYYY/,
-    and daily.holding/."""
-    files = enumerate_log_sources("access")
-    if not files:
+    """YYYY-MM of the earliest pending source log anywhere, or None —
+    drives `process --next` and the catch-up loop.  Searches daily/,
+    daily/YYYY/, and daily.holding/ across both access and auth log
+    kinds."""
+    days = _enumerate_all_pending_days()
+    if not days:
         return None
-    d = files[0][0]
+    d = days[0]
     return f"{d[:4]}-{d[4:6]}"
 
 def last_imported_date() -> str | None:
@@ -7789,7 +7811,8 @@ def _backlog_months(today_str: str) -> list[str]:
     months with `mark-dirty` (or the consistency check finds the
     drift on its own) and the next ticks redrive them."""
     months = set()
-    for d, _ in enumerate_log_sources("access"):
+    # Auth-only months count too — see _enumerate_all_pending_days.
+    for d in _enumerate_all_pending_days():
         m = f"{d[:4]}-{d[4:6]}"
         if m < today_str:
             months.add(m)
