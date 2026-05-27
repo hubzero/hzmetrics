@@ -396,6 +396,40 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.assertEqual(len(self._called("_reset_month_for_resummarize")), 1)
         self.assertEqual(self._called("_reset_month_for_resummarize")[0][1][0], "2025-06")
 
+    # --- rebuild cascade origin -------------------------------------------
+
+    def test_import_branch_records_cascade_origin(self):
+        # A fresh import (source ✓, data ✗) changes base data, so it must
+        # record rebuild_cascade_from — the rebuild walk will start here.
+        self._touch_source("2022-06", "15")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values.get("rebuild_cascade_from"), "2022-06")
+
+    def test_wipe_reimport_branch_records_cascade_origin(self):
+        # Source ✓ + data ✓ → wipe + reimport, also a base-data change.
+        self._touch_source("2023-12", "15")
+        self.fakedb.base_table_rows[("2023-12", "web")] = True
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values.get("rebuild_cascade_from"), "2023-12")
+
+    def test_resummarize_only_does_not_record_cascade_origin(self):
+        # Data-only resummarize (no source) changes NO base rows, so it
+        # must NOT set a cascade origin — there's nothing to invalidate
+        # downstream; the completeness sweep will handle this month.
+        self.fakedb.base_table_rows[("2024-07", "web")] = True
+        self.fakedb.web_months = ["2024-07"]
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values.get("rebuild_cascade_from", ""), "",
+                         "resummarize-only must not trigger an invalidation cascade")
+
+    def test_cascade_origin_keeps_oldest_imported_month(self):
+        # _record_rebuild_cascade_from only lowers, never raises.
+        st = {"rebuild_cascade_from": "2023-05"}
+        self.hz._record_rebuild_cascade_from("2024-01", st, dry_run=True)
+        self.assertEqual(st["rebuild_cascade_from"], "2023-05")
+        self.hz._record_rebuild_cascade_from("2022-09", st, dry_run=True)
+        self.assertEqual(st["rebuild_cascade_from"], "2022-09")
+
 
 # ---------------------------------------------------------------------------
 # Catchup → rebuild transition
@@ -403,13 +437,26 @@ class CatchupRoutingTests(CmdRunTestBase):
 
 class CatchupToRebuildTests(CmdRunTestBase):
 
-    def test_empty_backlog_transitions_to_rebuild(self):
+    def test_empty_backlog_no_import_skips_walk(self):
+        # No source logs, no web months → backlog empty, nothing imported.
+        # With no invalidation cascade, the rebuild cursor is set PAST
+        # prev_month so the forward walk is skipped; the completeness
+        # sweep alone runs.  (today=2026-05-19 → next_month=2026-06.)
         self.state.update(mode="catchup", catchup_started="2022-01")
-        # No source logs, no web months → backlog empty
         self.hz.cmd_run(self._args())
         self.assertEqual(self.state.values["mode"], "rebuild")
-        # rebuild_cursor should be set to catchup_started
-        self.assertEqual(self.state.values["rebuild_cursor"], "2022-01")
+        self.assertEqual(self.state.values["rebuild_cursor"], "2026-06",
+                         "no new data imported → no cascade → walk skipped")
+
+    def test_empty_backlog_with_cascade_origin_walks_from_it(self):
+        # If an earlier catchup tick recorded an imported month, the
+        # rebuild cursor starts there (the invalidation cascade origin),
+        # not past prev.
+        self.state.update(mode="catchup", catchup_started="2022-01",
+                          rebuild_cascade_from="2023-01")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["mode"], "rebuild")
+        self.assertEqual(self.state.values["rebuild_cursor"], "2023-01")
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +532,16 @@ class RebuildModeTests(CmdRunTestBase):
         self.hz.cmd_run(self._args())
         self.assertEqual(self.state.values["mode"], "normal")
         self.assertEqual(self._called("do_summarize"), [])
+
+    def test_rebuild_complete_clears_cascade_origin(self):
+        # When rebuild finishes, the cascade marker is cleared so the next
+        # catchup cycle starts from a clean "nothing imported yet" state.
+        self.state.update(mode="rebuild", rebuild_cursor="2026-05",
+                          rebuild_cascade_from="2023-01")
+        self.fakedb.incomplete_period_months = set()
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["mode"], "normal")
+        self.assertEqual(self.state.values.get("rebuild_cascade_from", ""), "")
 
     def test_rebuild_walk_takes_priority_over_sweep(self):
         # While the forward walk still has months to do, the sweep does not

@@ -8095,6 +8095,28 @@ def _backlog_months(today_str: str) -> list[str]:
                   or not is_month_fully_summarized(m))
 
 
+def _record_rebuild_cascade_from(month: str, state: dict, dry_run: bool) -> None:
+    """Lower `rebuild_cascade_from` to `month` if it's earlier than the
+    stored value (or unset).
+
+    `rebuild_cascade_from` is the oldest month catchup IMPORTED new base
+    data into during the current catchup cycle.  Only the import / wipe
+    branches call this — resummarize-only months change no base rows and
+    so invalidate no downstream long-window cells.  At the catchup→rebuild
+    handoff this becomes the rebuild walk's starting cursor: the walk must
+    cover [cascade_from, prev] because new data at `cascade_from` stales
+    the all-time (period-14) and rolling (period-12/13) windows of every
+    later month.  If catchup imports nothing, the key stays unset and the
+    walk is skipped entirely — the completeness sweep alone fixes any
+    months catchup only resummarized."""
+    prior = state.get("rebuild_cascade_from")
+    if prior and prior <= month:
+        return
+    state["rebuild_cascade_from"] = month  # local reflect for this tick
+    if not dry_run:
+        update_state(rebuild_cascade_from=month)
+
+
 def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     """Process one backlog month per tick, applying the Phase C decision
     matrix.  Returns True if we transitioned out of catchup (caller should
@@ -8150,11 +8172,13 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
         _import_month(target, dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+        _record_rebuild_cascade_from(target, state, dry_run)
     elif has_source:
         log.info(f"[catchup] {target}: source ✓ data ✗ — fresh import")
         _import_month(target, dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+        _record_rebuild_cascade_from(target, state, dry_run)
     elif has_data:
         if needs_reset:
             why = []
@@ -8293,8 +8317,21 @@ def cmd_run(args):
             if mode == "catchup":
                 done = _do_catchup_tick(today_str, state, dry_run)
                 if done:
-                    cursor = state.get("catchup_started", today_str)
-                    log.info(f"[run] catchup complete — switching to rebuild from {cursor}")
+                    # The rebuild walk starts at the oldest month catchup
+                    # actually IMPORTED new base data into — only that
+                    # staled later months' long-window cells.  If catchup
+                    # imported nothing (it only resummarized incomplete
+                    # months), there is no invalidation cascade: set the
+                    # cursor past prev_month so the walk is skipped and the
+                    # completeness sweep alone runs.
+                    cascade_from = state.get("rebuild_cascade_from")
+                    cursor = cascade_from if cascade_from else next_month(today_str)
+                    if cascade_from:
+                        log.info(f"[run] catchup complete — rebuild cascade from "
+                                 f"{cursor} (oldest month with new imported data)")
+                    else:
+                        log.info(f"[run] catchup complete — no new data imported; "
+                                 f"rebuild walk skipped, completeness sweep only")
                     if not dry_run:
                         update_state(mode="rebuild", rebuild_cursor=cursor)
                     # Don't run rebuild this tick — give the next tick a fresh start.
@@ -8303,7 +8340,9 @@ def cmd_run(args):
                 if done:
                     log.info(f"[run] rebuild complete — switching to normal")
                     if not dry_run:
-                        update_state(mode="normal")
+                        # Clear the cascade marker so the next catchup cycle
+                        # starts fresh (empty = "no import yet this cycle").
+                        update_state(mode="normal", rebuild_cascade_from="")
                     # Also run a normal tick this iteration since rebuild is cheap once done.
                     _do_normal_tick(today_str, prev, today_date, state, dry_run)
             else:
