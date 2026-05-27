@@ -41,6 +41,7 @@ class FakeDB:
         self.summary_user_period1_months: set = set()  # quick is_month_summarized check
         self.web_months: list = []           # ordered list of months in `web` for _backlog_months
         self.orphaned_stamp_months: set = set()  # months where month_has_orphaned_stamps → True
+        self.incomplete_period_months: set = set()  # months returned by period_incomplete_months' GROUP BY
 
     _BASE_RE = re.compile(
         r"SELECT 1 FROM \S+\.(\w+)\s+WHERE datetime >=", re.IGNORECASE,
@@ -56,6 +57,11 @@ class FakeDB:
     _ORPHAN_RE = re.compile(
         r"SELECT 1 FROM \S+\.web w\s+WHERE w\.datetime >=.*NOT EXISTS",
         re.IGNORECASE | re.DOTALL,
+    )
+    _INCOMPLETE_RE = re.compile(
+        r"SELECT DATE_FORMAT\(datetime, '%%Y-%%m'\) AS ym\s+FROM \S+\.(\w+)\s+"
+        r"GROUP BY ym HAVING COUNT\(DISTINCT period\) <",
+        re.IGNORECASE,
     )
 
     def scalar(self, sql: str, params=None):
@@ -83,6 +89,10 @@ class FakeDB:
             return [(m,) for m in self.web_months
                     if m + "-01" < cutoff
                     and m not in self.summary_user_period1_months]
+        if self._INCOMPLETE_RE.search(sql):
+            # period_incomplete_months' GROUP BY — return the configured
+            # incomplete months (the helper does the < today filtering).
+            return [(m,) for m in sorted(self.incomplete_period_months)]
         # Other queries from read_state etc shouldn't fire — pipeline_state
         # is monkey-patched separately.
         raise AssertionError(f"unexpected query SQL: {sql!r}")
@@ -436,10 +446,81 @@ class RebuildModeTests(CmdRunTestBase):
         self.assertEqual(self.state.values["rebuild_cursor"], "2023-01")
 
     def test_rebuild_past_prev_transitions_to_normal(self):
-        # cursor already past prev_month (2026-04)
+        # cursor already past prev_month (2026-04), nothing incomplete
         self.state.update(mode="rebuild", rebuild_cursor="2026-05")
         self.hz.cmd_run(self._args())
         self.assertEqual(self.state.values["mode"], "normal")
+
+    # --- completeness sweep ------------------------------------------------
+
+    def test_rebuild_sweep_fills_incomplete_month_after_walk(self):
+        # Cursor walk done (past prev), but an older month is incomplete
+        # (e.g. the pre-2022 cmsauth backlog: period-1 only).  Rebuild must
+        # resummarize it with all periods and STAY in rebuild — not flip to
+        # normal with the gap unfilled.
+        self.state.update(mode="rebuild", rebuild_cursor="2026-05")
+        self.fakedb.incomplete_period_months = {"2021-12"}
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["mode"], "rebuild",
+                         "must not transition to normal while an incomplete "
+                         "month remains")
+        sums = self._called("do_summarize")
+        self.assertEqual(len(sums), 1)
+        self.assertEqual(sums[0][1][0], "2021-12")
+        # Full periods (no periods= restriction) — the whole point.
+        self.assertNotIn("periods", sums[0][2])
+
+    def test_rebuild_sweep_processes_oldest_incomplete_first(self):
+        self.state.update(mode="rebuild", rebuild_cursor="2026-05")
+        self.fakedb.incomplete_period_months = {"2021-03", "2020-10", "2021-11"}
+        self.hz.cmd_run(self._args())
+        sums = self._called("do_summarize")
+        self.assertEqual(sums[0][1][0], "2020-10",
+                         "sweep should take the oldest incomplete month first")
+
+    def test_rebuild_sweep_clean_transitions_to_normal(self):
+        # Walk done AND nothing incomplete → finally normal.
+        self.state.update(mode="rebuild", rebuild_cursor="2026-05")
+        self.fakedb.incomplete_period_months = set()
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["mode"], "normal")
+        self.assertEqual(self._called("do_summarize"), [])
+
+    def test_rebuild_walk_takes_priority_over_sweep(self):
+        # While the forward walk still has months to do, the sweep does not
+        # run — the walk's cursor month is processed first.
+        self.state.update(mode="rebuild", rebuild_cursor="2024-06")
+        self.fakedb.incomplete_period_months = {"2021-12"}
+        self.hz.cmd_run(self._args())
+        sums = self._called("do_summarize")
+        self.assertEqual(len(sums), 1)
+        self.assertEqual(sums[0][1][0], "2024-06",
+                         "forward walk month runs before any sweep")
+        self.assertEqual(self.state.values["rebuild_cursor"], "2024-07")
+
+
+# ---------------------------------------------------------------------------
+# catchup_started watermark
+# ---------------------------------------------------------------------------
+
+class CatchupStartedWatermarkTests(CmdRunTestBase):
+
+    def test_catchup_started_lowered_for_older_backlog_month(self):
+        # catchup_started is pinned at 2022-01 from a prior run, but an
+        # older month (2020-10) is now pending — catchup_started must drop
+        # to it so the rebuild cascade reaches back that far.
+        self.state.update(mode="catchup", catchup_started="2022-01")
+        self._touch_source("2020-10", day="30")   # auth/access source for an older month
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["catchup_started"], "2020-10")
+
+    def test_catchup_started_not_raised_for_newer_month(self):
+        # If the only backlog is newer than the stored watermark, it must
+        # NOT move forward — the cascade start must stay at the earliest.
+        self.state.update(mode="catchup", catchup_started="2022-01")
+        self._touch_source("2024-06")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values["catchup_started"], "2022-01")
 
 
 if __name__ == "__main__":

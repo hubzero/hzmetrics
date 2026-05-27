@@ -575,6 +575,45 @@ def is_month_fully_summarized(month_str: str) -> bool:
     return True
 
 
+def period_incomplete_months(today_str: str) -> list[str]:
+    """Months (before today_str) that have SOME summary rows but are
+    missing at least one period code — i.e. summarize touched them but
+    didn't write the full set of periods.  Sorted oldest-first.
+
+    This is the cheap, table-wide complement to is_month_fully_summarized:
+    one GROUP BY per summary table (a few hundred rows each), versus 18
+    point COUNT()s per candidate month.  It catches:
+
+      - months below the rebuild cursor that a catchup pass only ever
+        period-1-summarized (the pre-2022 cmsauth backlog: imported and
+        period-1'd, but never rebuilt to full periods because
+        catchup_started was pinned ahead of them); and
+      - a month whose summarize crashed after some — but not all —
+        period codes were written.
+
+    It does NOT catch a month that has all 6 period codes present but is
+    missing rowids *within* a period (a finer partial-crash shape); the
+    forward cursor walk covers those, and is_month_fully_summarized is
+    the strict per-month check when precision matters.  Months with zero
+    summary rows are intentionally excluded — a true data gap is not the
+    same as an incomplete summarize, and GROUP BY only returns months
+    that have at least one row anyway."""
+    _, _, _, metrics_db = db_credentials()
+    full = len(_PERIOD_CODES_FOR_FULL_CHECK)
+    months: set = set()
+    for table in _SUMMARY_VALS_TABLES:
+        rows = mysql_query(
+            f"SELECT DATE_FORMAT(datetime, '%%Y-%%m') AS ym "
+            f"FROM {metrics_db}.{table} "
+            f"GROUP BY ym HAVING COUNT(DISTINCT period) < %s",
+            (full,),
+        )
+        for (ym,) in rows:
+            if ym and ym < today_str:
+                months.add(ym)
+    return sorted(months)
+
+
 def month_has_source(month_str: str) -> bool:
     """True if any pending source log file exists for the given YYYY-MM,
     anywhere the discovery layer looks (daily/, daily/YYYY/, daily.holding/).
@@ -7867,7 +7906,15 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     log.info(f"[catchup] {remaining} backlog month(s) — processing {target}")
 
     # Record the earliest backfill date so rebuild knows where to start.
-    if "catchup_started" not in state:
+    # rebuild's forward walk begins here, so catchup_started must track
+    # the OLDEST month catchup has touched: if a later catchup run picks
+    # up source files for a month earlier than the stored value (e.g. a
+    # pre-2022 auth backlog that only became visible after the discovery
+    # layer learned to enumerate auth logs), lower it so the rebuild
+    # cascade reaches back far enough to refresh every later month whose
+    # long-window cells that older data invalidates.
+    prior = state.get("catchup_started")
+    if prior is None or target < prior:
         if not dry_run:
             update_state(catchup_started=target)
         state["catchup_started"] = target  # local reflect for this tick
@@ -7931,23 +7978,48 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
     Returns True when the cursor has passed prev_month (caller transitions
     back to normal)."""
     cursor = state.get("rebuild_cursor") or state.get("catchup_started")
-    if not cursor:
-        log.warning("[rebuild] no rebuild_cursor or catchup_started in state — "
-                    "transitioning to normal (nothing to do)")
-        return True
-    if cursor > prev:
-        log.info(f"[rebuild] cursor {cursor} > prev_month {prev} — done")
-        return True
 
-    log.info(f"[rebuild] resummarizing {cursor} (all 6 periods)")
-    do_analyze(cursor, dry_run)
-    do_summarize(cursor, dry_run)  # default = all periods
+    # --- Phase 1: forward cursor walk -------------------------------------
+    # Re-summarize one month per tick from the cursor through prev_month.
+    # This is the invalidation cascade: when catchup backfilled an older
+    # month, every later month's long-window (12 / 13 / 14) cells were
+    # computed off a window that didn't yet include that data, so they're
+    # stale and must be recomputed.  The walk runs forward from the
+    # earliest backfilled month (catchup_started), never re-touching
+    # months before it.
+    if cursor and cursor <= prev:
+        log.info(f"[rebuild] resummarizing {cursor} (all 6 periods)")
+        do_analyze(cursor, dry_run)
+        do_summarize(cursor, dry_run)  # default = all periods
+        next_cursor = next_month(cursor)
+        if not dry_run:
+            update_state(rebuild_cursor=next_cursor)
+        log.info(f"[rebuild] cursor advanced: {cursor} → {next_cursor}")
+        return False
 
-    next_cursor = next_month(cursor)
-    if not dry_run:
-        update_state(rebuild_cursor=next_cursor)
-    log.info(f"[rebuild] cursor advanced: {cursor} → {next_cursor}")
-    return False
+    # --- Phase 2: completeness sweep --------------------------------------
+    # The forward walk is done (cursor past prev_month, or absent).  Before
+    # declaring rebuild complete, look for any month that has summary rows
+    # but is missing periods — months the walk never reached because they
+    # sit below the cursor.  The canonical case: a catchup pass imported +
+    # period-1-summarized months older than catchup_started (the pre-2022
+    # cmsauth backlog), so they have period=1 but none of the long-window
+    # periods.  Rebuilding such a month fills its own missing periods and
+    # has NO downstream effect (it doesn't change any other month's
+    # windows), so this is targeted, minimal work — and because rebuild
+    # writes all periods, each swept month becomes complete and is never
+    # surfaced again (no re-process loop).
+    incomplete = period_incomplete_months(today_str)
+    if incomplete:
+        target = incomplete[0]
+        log.info(f"[rebuild] completeness sweep — {len(incomplete)} incomplete "
+                 f"month(s); resummarizing {target} (all 6 periods)")
+        do_analyze(target, dry_run)
+        do_summarize(target, dry_run)
+        return False  # stay in rebuild; re-check on the next tick
+
+    log.info(f"[rebuild] cursor past prev_month and no incomplete months — done")
+    return True
 
 
 def cmd_run(args):
