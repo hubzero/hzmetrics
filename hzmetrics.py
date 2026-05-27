@@ -3758,9 +3758,17 @@ async def _resolve_ips_async(ips, nameserver, concurrency, timeout):
     async def one(ip):
         async with sem:
             try:
-                r = await resolver.gethostbyaddr(ip)
+                # Hard asyncio-level backstop around aiodns's own timeout:
+                # c-ares occasionally never completes a query (observed as
+                # stuck UDP sockets that hang asyncio.gather forever on a
+                # 2 M-IP batch).  wait_for fires even when the c-ares timer
+                # doesn't, cancels the query, and lets gather finish.  The
+                # +1s lets aiodns's own (cleaner) timeout win the race when
+                # it works, falling back to the hard cancel when it doesn't.
+                r = await asyncio.wait_for(resolver.gethostbyaddr(ip),
+                                           timeout=timeout + 1)
                 return ip, (r.name if r and r.name else "?")
-            except aiodns.error.DNSError:
+            except (aiodns.error.DNSError, asyncio.TimeoutError):
                 return ip, "?"
     return await asyncio.gather(*(one(ip) for ip in ips))
 
@@ -3897,14 +3905,6 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
         scope_label = f"{start_d}.."
     else:
         scope_label = f"{start_d}..{end_d}"
-    date_pred = _build_pred()
-
-    sel_sql = (
-        f"SELECT DISTINCT ip FROM {table} "
-        f"WHERE ip <> '' AND ip IS NOT NULL "
-        f"{date_pred}"
-        f"AND (host IS NULL OR host = '')"
-    )
 
     # Use one pymysql connection for the whole flow.  Temporary tables
     # are per-connection so they have to share this conn.
@@ -3917,6 +3917,24 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
     # — the working set sits on disk in `_dns_tmp` (InnoDB temp table)
     # and we fetch + resolve + write back one batch at a time.
     DNS_BATCH_SIZE = 10000
+
+    # InnoDB holds row locks for every row inserted by a statement until
+    # statement end; on a small innodb_buffer_pool the lock table caps
+    # how many rows one INSERT can touch (e.g., a 128 MB pool overflows
+    # at ~500 K row locks).  A single INSERT IGNORE … SELECT spanning
+    # millions of unresolved IPs exceeds that and fails with
+    # OperationalError(1206) "The total number of locks exceeds the
+    # lock table size".  Splitting phase 1 into date chunks keeps each
+    # statement's lock footprint bounded — the PRIMARY KEY on
+    # _dns_tmp.ip de-dupes across chunks, so the final working set is
+    # identical to the one-shot form.
+    #
+    # _DNS_CHUNK_DAYS=1 is also a *query-plan* fix: MariaDB's optimizer
+    # picks the `ip` index for date ranges ≥7 days (table-scan order, no
+    # date locality → ~22 M-row scans), but switches to the `datetime`
+    # index for 1-day ranges (~150 K-row scans).  Daily chunks therefore
+    # both fit the lock budget and run the right plan.
+    _DNS_CHUNK_DAYS = 1
     conn = _open_db(db_name)
     try:
         with conn.cursor() as cur:
@@ -3930,11 +3948,50 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
                 "ip VARCHAR(45) NOT NULL PRIMARY KEY, "
                 "host VARCHAR(255) NULL, "
                 "KEY host_idx (host)) ENGINE=InnoDB")
-            # The original SELECT becomes the SUBQUERY of INSERT IGNORE
-            # SELECT — DISTINCT already de-duplicates, the PRIMARY KEY
-            # de-duplicates again as belt-and-suspenders.
-            cur.execute(f"INSERT IGNORE INTO _dns_tmp (ip) {sel_sql}")
-            n_total = cur.rowcount
+
+            # Resolve chunk boundaries.  If either bound is unset we
+            # probe the unresolved rows once to learn the actual range
+            # — cheaper than a single unbounded INSERT and guarantees
+            # we cover the same data as the original one-shot form.
+            chunk_start, chunk_end = start_d, end_d
+            if chunk_start is None or chunk_end is None:
+                cur.execute(
+                    f"SELECT MIN({d_col}), MAX({d_col}) FROM {table} "
+                    f"WHERE (host IS NULL OR host = '')"
+                )
+                probe = cur.fetchone()
+                if probe and probe[0] is not None:
+                    if chunk_start is None:
+                        chunk_start = probe[0].date()
+                    if chunk_end is None:
+                        chunk_end = probe[1].date() + timedelta(days=1)
+
+            n_total = 0
+            if chunk_start is not None and chunk_end is not None:
+                cur_d = chunk_start
+                chunks_total = max(1, (chunk_end - chunk_start).days // _DNS_CHUNK_DAYS + 1)
+                ci = 0
+                while cur_d < chunk_end:
+                    nxt = min(cur_d + timedelta(days=_DNS_CHUNK_DAYS), chunk_end)
+                    cur.execute(
+                        f"INSERT IGNORE INTO _dns_tmp (ip) "
+                        f"SELECT DISTINCT ip FROM {table} "
+                        f"WHERE ip <> '' AND ip IS NOT NULL "
+                        f"  AND {d_col} >= %s AND {d_col} < %s "
+                        f"  AND (host IS NULL OR host = '')",
+                        (f"{cur_d.isoformat()} 00:00:00",
+                         f"{nxt.isoformat()} 00:00:00"),
+                    )
+                    n_total += cur.rowcount
+                    ci += 1
+                    cur_d = nxt
+                    if chunks_total > 1 and (ci % 4 == 0 or cur_d >= chunk_end):
+                        log.info(f"  scan: chunk {ci}/{chunks_total} "
+                                 f"through {cur_d}, {n_total} distinct IPs so far")
+            else:
+                # No data at all (or table empty) — leave n_total = 0.
+                pass
+
             scan_dt = time.monotonic() - t_scan
             log.info(f"[resolve-dns] {db_name}.{table} {scope_label}: "
                 f"{n_total} unresolved IPs (ns={nameserver}, c={concurrency})  "
