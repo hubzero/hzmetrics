@@ -4944,7 +4944,7 @@ def get_domain(hostname):
     return domain
 
 
-FILL_DOMAIN_TABLES = ("web", "toolstart", "sessionlog_metrics")
+FILL_DOMAIN_TABLES = ("web", "websessions", "toolstart", "sessionlog_metrics")
 
 def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
                    dry_run=False):
@@ -8789,7 +8789,7 @@ def main() -> None:
     p_fd.add_argument("db_key", choices=["metrics", "hub"],
         help="Target DB ('metrics' or 'hub')")
     p_fd.add_argument("table", choices=list(FILL_DOMAIN_TABLES),
-        help="Target table (web | toolstart | sessionlog_metrics)")
+        help="Target table (web | websessions | toolstart | sessionlog_metrics)")
     p_fd.add_argument("date_spec", nargs="?", default=None, metavar="DATE_OR_RANGE",
         help="YYYY | YYYY-MM | YYYY-MM-DD or '<start>..<end>' (default: current month)")
     p_fd.add_argument("--all", action="store_true",
