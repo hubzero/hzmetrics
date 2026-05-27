@@ -137,6 +137,33 @@ class UsageMetricsSessionsParameterTests(unittest.TestCase):
         self.assertEqual(len(ws_clean), 1)
         self.assertEqual(len(ws_fill),  1)
 
+    def test_sessions_true_resolves_and_fills_domain_for_websessions(self):
+        # websessions carries its own host/domain; resolve-dns +
+        # fill-domain must run for it under sessions=True so its
+        # domain populates the org-class JOIN in summarize.  These are
+        # session-bound — websessions only exists after logfix-session.
+        self.hz._do_usage_metrics_stage("2026-04", dry_run=False, sessions=True)
+        ws_dns = [c for c in self._calls("do_resolve_dns")
+                  if len(c[1]) >= 2 and c[1][1] == "websessions"]
+        ws_dom = [c for c in self._calls("do_fill_domain")
+                  if len(c[1]) >= 2 and c[1][1] == "websessions"]
+        self.assertEqual(len(ws_dns), 1,
+                         "sessions=True must resolve-dns websessions")
+        self.assertEqual(len(ws_dom), 1,
+                         "sessions=True must fill-domain websessions")
+
+    def test_sessions_false_skips_websessions_resolve_and_domain(self):
+        # Under sessions=False (open current month), websessions doesn't
+        # exist yet — its resolve-dns / fill-domain must NOT fire, even
+        # though the web/toolstart resolve-dns / fill-domain do.
+        self.hz._do_usage_metrics_stage("2026-05", dry_run=False, sessions=False)
+        ws_dns = [c for c in self._calls("do_resolve_dns")
+                  if len(c[1]) >= 2 and c[1][1] == "websessions"]
+        ws_dom = [c for c in self._calls("do_fill_domain")
+                  if len(c[1]) >= 2 and c[1][1] == "websessions"]
+        self.assertEqual(len(ws_dns), 0)
+        self.assertEqual(len(ws_dom), 0)
+
 
 class DoAnalyzeForwardsSessionsTests(unittest.TestCase):
     """`do_analyze` is the public surface that `_do_normal_tick`,

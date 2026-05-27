@@ -2831,6 +2831,21 @@ def _do_usage_metrics_stage(month_str, dry_run, *, sessions=True):
                 do_logfix_session(month_str, dry_run=dry_run)
             with _timed_stage("  clean-bots websessions"):
                 do_clean_bots("websessions", month_str, dry_run=dry_run)
+            # websessions carries its own host / domain / ipcountry columns.
+            # logfix-session copies host/domain from the constituent web
+            # rows at coalesce time, but a session built before its web
+            # rows were DNS-resolved (or skipped on a re-run because its
+            # web rows were already sessionid-stamped) ends up with an
+            # empty host — and an empty domain drops the session from the
+            # org-class breakdown (summary_user_vals rowid 7/8 cols 8..11
+            # join websessions.domain → domainclass with `dc.class > 0`).
+            # Resolve + fill-domain websessions directly so its host/domain
+            # are populated regardless of coalesce-time ordering, mirroring
+            # the web / toolstart / sessionlog passes above.
+            with _timed_stage("  resolve-dns websessions"):
+                do_resolve_dns("metrics", "websessions", month_str, dry_run=dry_run)
+            with _timed_stage("  fill-domain websessions"):
+                do_fill_domain("metrics", "websessions", month_str, dry_run=dry_run)
             with _timed_stage("  fill-ipcountry websessions"):
                 do_fill_ipcountry("metrics", "websessions", month_str, dry_run=dry_run)
 
