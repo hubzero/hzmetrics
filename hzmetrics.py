@@ -8126,22 +8126,34 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
 
 
 def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> bool:
-    """Walk forward from rebuild_cursor through prev_month, re-summarizing
-    one month per tick with all six periods.  This fixes the long-window
-    (12 / 13 / 14) cells in every month at-or-after the earliest backfill
-    — those cells were computed when 2022 / 2023 weren't yet in `web`,
-    so their windows are now stale.
+    """Advance the rebuild phase by one unit of work per tick.  Two phases,
+    in order:
 
-    Months that are already fully summarized, not dirty-flagged, and free
-    of orphaned sessionid stamps are skipped — the cursor fast-forwards
-    over them in a single tick without re-running analyze + summarize.
-    This makes rebuild cheap on hubs where catchup only resummarized a
-    handful of historically-incomplete months: the long-window cells in
-    intact downstream months are still correct because no new historical
-    data was imported.
+      Phase 1 — forward cursor walk.  Re-summarize one month per tick from
+      rebuild_cursor through prev_month with all six periods.  This is the
+      invalidation cascade: when catchup backfilled an older month, every
+      later month's long-window (12 / 13 / 14) cells were computed off a
+      window that didn't yet include that data, so they're stale and must
+      be recomputed.  The walk runs forward from the earliest backfilled
+      month (catchup_started), never re-touching months before it.
 
-    Returns True when the cursor has passed prev_month (caller transitions
-    back to normal)."""
+      Phase 2 — completeness sweep.  Once the walk is done (cursor past
+      prev_month), resummarize any month that has summary rows but is
+      missing period codes — months the walk never reached because they
+      sit below the cursor (e.g. a pre-catchup_started auth backlog that
+      a catchup pass only ever period-1-summarized).  One month per tick,
+      oldest first.
+
+    Note: the walk currently resummarizes every month in [cursor, prev]
+    unconditionally — it does NOT skip months that are already complete
+    and drift-free.  Within the cascade that's correct (a backfill staled
+    them), but it is broader than strictly necessary when catchup only
+    touched a few historically-incomplete months and added no new data.
+    A future optimisation could fast-forward the cursor over intact
+    months; that is not implemented here.
+
+    Returns True only when the walk is done AND no incomplete months
+    remain (caller transitions back to normal)."""
     cursor = state.get("rebuild_cursor") or state.get("catchup_started")
 
     # --- Phase 1: forward cursor walk -------------------------------------
