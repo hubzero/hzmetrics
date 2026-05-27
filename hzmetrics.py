@@ -3478,13 +3478,14 @@ def _whoisonline_resolve_dns(conn, hub_db, db_prefix):
         return
 
     log.info(f"[whoisonline] resolving {len(unresolved)} IP(s) via aiodns")
-    import asyncio
     try:
-        pairs = asyncio.run(_resolve_ips_async(
-            unresolved,
-            DNS_NAMESERVER,
-            min(len(unresolved), DNS_CONCURRENCY),
-            DNS_TIMEOUT))
+        _r = _DnsResolver(DNS_NAMESERVER,
+                          min(len(unresolved), DNS_CONCURRENCY),
+                          DNS_TIMEOUT)
+        try:
+            pairs = _r.resolve(unresolved)
+        finally:
+            _r.close()
     except ImportError as e:
         # aiodns is a declared hard dependency in pyproject.toml; reaching
         # this branch means a broken / partial install.  Fall back to
@@ -3741,36 +3742,86 @@ def _open_db(database=None):
         cur.execute("SET SESSION net_write_timeout = 86400")
     return conn
 
-async def _resolve_ips_async(ips, nameserver, concurrency, timeout):
-    """Resolve IPs to (ip, host) pairs.  Returns '?' for any failure / no-PTR.
+class _DnsResolver:
+    """Owns one asyncio event loop + one aiodns resolver for the lifetime
+    of a resolve-dns run, so repeated batch resolution reuses a single
+    loop.
 
-    nameserver='system' (case-insensitive) or '' / None means: use whatever
-    /etc/resolv.conf points at (no explicit override).  Otherwise pass the
-    string as a single nameserver IP to aiodns.
+    The previous pattern — asyncio.run(_resolve_ips_async(...)) once per
+    10K-IP batch — created and immediately closed a fresh event loop on
+    every call.  A wait_for-cancelled c-ares query then fired its socket
+    teardown callback against the already-closed loop, flooding stderr
+    with 'RuntimeError: Event loop is closed' (hundreds of tracebacks on
+    a 2 M-IP month).  A persistent loop lets that teardown run while the
+    loop is still alive; close() cancels outstanding queries and pumps
+    the loop once before tearing it down, in the right order.
+
+    Usage:
+        r = _DnsResolver(nameserver, concurrency, timeout)
+        try:
+            pairs = r.resolve(batch_of_ips)    # repeatable, one batch each
+        finally:
+            r.close()
+
+    Constructing raises ImportError if aiodns is missing — callers that
+    must degrade gracefully (whoisonline) wrap construction in try/except.
     """
-    import asyncio
-    import aiodns
-    if not nameserver or str(nameserver).strip().lower() == "system":
-        resolver = aiodns.DNSResolver(timeout=timeout)
-    else:
-        resolver = aiodns.DNSResolver(nameservers=[nameserver], timeout=timeout)
-    sem = asyncio.Semaphore(concurrency)
-    async def one(ip):
-        async with sem:
-            try:
-                # Hard asyncio-level backstop around aiodns's own timeout:
-                # c-ares occasionally never completes a query (observed as
-                # stuck UDP sockets that hang asyncio.gather forever on a
-                # 2 M-IP batch).  wait_for fires even when the c-ares timer
-                # doesn't, cancels the query, and lets gather finish.  The
-                # +1s lets aiodns's own (cleaner) timeout win the race when
-                # it works, falling back to the hard cancel when it doesn't.
-                r = await asyncio.wait_for(resolver.gethostbyaddr(ip),
-                                           timeout=timeout + 1)
-                return ip, (r.name if r and r.name else "?")
-            except (aiodns.error.DNSError, asyncio.TimeoutError):
-                return ip, "?"
-    return await asyncio.gather(*(one(ip) for ip in ips))
+    def __init__(self, nameserver, concurrency, timeout):
+        import asyncio
+        import aiodns            # ImportError propagates to the caller
+        self._asyncio = asyncio
+        self._aiodns = aiodns
+        self._timeout = timeout
+        self._concurrency = concurrency
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        if not nameserver or str(nameserver).strip().lower() == "system":
+            self._resolver = aiodns.DNSResolver(timeout=timeout, loop=self._loop)
+        else:
+            self._resolver = aiodns.DNSResolver(
+                nameservers=[nameserver], timeout=timeout, loop=self._loop)
+
+    async def _resolve_async(self, ips):
+        asyncio = self._asyncio
+        aiodns = self._aiodns
+        sem = asyncio.Semaphore(self._concurrency)
+        async def one(ip):
+            async with sem:
+                try:
+                    # Hard asyncio-level backstop around aiodns's own
+                    # timeout: c-ares occasionally never completes a query
+                    # (stuck UDP sockets that would hang gather forever on
+                    # a 2 M-IP batch).  wait_for fires even when the c-ares
+                    # timer doesn't, cancels the query, and lets gather
+                    # finish.  +1s lets aiodns's cleaner timeout win when it
+                    # works, falling back to the hard cancel otherwise.
+                    r = await asyncio.wait_for(
+                        self._resolver.gethostbyaddr(ip),
+                        timeout=self._timeout + 1)
+                    return ip, (r.name if r and r.name else "?")
+                except (aiodns.error.DNSError, asyncio.TimeoutError):
+                    return ip, "?"
+        return await asyncio.gather(*(one(ip) for ip in ips))
+
+    def resolve(self, ips):
+        """Resolve a batch of IPs to [(ip, host_or_'?'), ...]."""
+        return self._loop.run_until_complete(self._resolve_async(ips))
+
+    def close(self):
+        """Cancel outstanding queries and tear the loop down in order so
+        pycares' socket cleanup runs on a live loop, not a closed one."""
+        try:
+            self._resolver.cancel()
+        except Exception:
+            pass
+        try:
+            # Pump the loop once so any pending c-ares teardown callbacks
+            # run while the loop is still alive.
+            self._loop.run_until_complete(self._asyncio.sleep(0))
+        except Exception:
+            pass
+        self._loop.close()
+        self._asyncio.set_event_loop(None)
 
 def _expand_date_token(tok, *, side):
     """Expand 'YYYY' / 'YYYY-MM' / 'YYYY-MM-DD' to a date.
@@ -4007,28 +4058,34 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
             t_dns = time.monotonic()
             done = 0
             resolved_total = 0
-            while True:
-                cur.execute(
-                    "SELECT ip FROM _dns_tmp WHERE host IS NULL LIMIT %s",
-                    (DNS_BATCH_SIZE,),
-                )
-                batch = [r[0] for r in cur.fetchall()]
-                if not batch:
-                    break
-                pairs = asyncio.run(_resolve_ips_async(
-                    batch, nameserver, concurrency, timeout))
-                # Persist results — "?" placeholder distinguishes "tried,
-                # no PTR" from "not yet attempted" (NULL) so the loop
-                # terminates correctly.
-                cur.executemany(
-                    "UPDATE _dns_tmp SET host = %s WHERE ip = %s",
-                    [(h, ip) for ip, h in pairs],
-                )
-                done += len(batch)
-                resolved_total += sum(1 for _, h in pairs if h != "?")
-                log.info(f"  resolved {done}/{n_total} so far "
-                         f"(this batch: {sum(1 for _, h in pairs if h != '?')}"
-                         f"/{len(batch)} got PTRs)")
+            # One resolver + one event loop for every batch in this run
+            # (see _DnsResolver) — avoids per-batch loop churn and the
+            # 'Event loop is closed' teardown noise it produced.
+            dns = _DnsResolver(nameserver, concurrency, timeout)
+            try:
+                while True:
+                    cur.execute(
+                        "SELECT ip FROM _dns_tmp WHERE host IS NULL LIMIT %s",
+                        (DNS_BATCH_SIZE,),
+                    )
+                    batch = [r[0] for r in cur.fetchall()]
+                    if not batch:
+                        break
+                    pairs = dns.resolve(batch)
+                    # Persist results — "?" placeholder distinguishes "tried,
+                    # no PTR" from "not yet attempted" (NULL) so the loop
+                    # terminates correctly.
+                    cur.executemany(
+                        "UPDATE _dns_tmp SET host = %s WHERE ip = %s",
+                        [(h, ip) for ip, h in pairs],
+                    )
+                    done += len(batch)
+                    resolved_total += sum(1 for _, h in pairs if h != "?")
+                    log.info(f"  resolved {done}/{n_total} so far "
+                             f"(this batch: {sum(1 for _, h in pairs if h != '?')}"
+                             f"/{len(batch)} got PTRs)")
+            finally:
+                dns.close()
             dns_dt = time.monotonic() - t_dns
             rate = done / dns_dt if dns_dt > 0 else 0
             log.info(f"[resolve-dns] resolved={resolved_total} no_ptr={done - resolved_total} "
