@@ -22,6 +22,7 @@ tests=(
     port_import_atomic
     port_invariants
     port_determinism
+    port_msie_filter
     port_lock
     port_month_complete
     port_periods_filter

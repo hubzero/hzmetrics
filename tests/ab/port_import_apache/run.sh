@@ -22,7 +22,11 @@ run_side() {
     # Every column of web minus the auto-inc id.  Both NEW and OLD apache
     # log patterns populate (or leave empty) different columns; SELECT *
     # surfaces any format-dispatch divergence.
-    dump_full web "$METRICS_DB" "datetime, ip, content" > "$OUT/${label}_web.tsv"
+    #
+    # Exclude `dnload`: the new code sets it inline at insert (0/1), the
+    # legacy import never touched it (NULL).  port_dnload_classify pins
+    # dnload semantics directly; here it's noise.  Mirrors run_golden.sh.
+    dump_full web "$METRICS_DB" "datetime, ip, content" "dnload" > "$OUT/${label}_web.tsv"
     echo "  wrote $OUT/${label}_web.tsv ($(wc -l < $OUT/${label}_web.tsv) row(s))"
 }
 

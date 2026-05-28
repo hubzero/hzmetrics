@@ -5132,6 +5132,23 @@ _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
 _LOGIN_RETURN_RE = re.compile(r'^/login/?\?return=',         re.IGNORECASE)
 _BROWSE_QUERY_RE = re.compile(r'^/resources/browse/?\?',     re.IGNORECASE)
 
+# Pre-2016 Internet Explorer (Trident family).  Functionally extinct
+# from the real-browser population after Microsoft EOL'd IE in 2022, but
+# heavily spoofed by a long-running distributed bot family: 2024 the bot
+# pounded `/resources/<id>/download/<URL>` (open-redirect probes), went
+# quiet 2025-06 .. 2026-01, and returned 2026-02+ against a different
+# URL set (citations/files/groups/outreach).  On the geodynamics hub,
+# observed MSIE-Trident hits over four years: 0 (2022), 0 (2023),
+# 69k (2024 bot bloom), 0 (2025), 190k+ (2026 bot wave) — i.e. zero
+# legitimate traffic, all bot.  Filter is date-bound (>= 2022-01-01) so
+# any future archival backfill of pre-EOL access logs isn't affected by
+# the assumption that MSIE-Trident == bot.
+_MSIE_TRIDENT_RE = re.compile(
+    r"MSIE [789]\.0|MSIE 1[01]\.0|Trident/[4-7]\.0",
+    re.IGNORECASE,
+)
+_MSIE_FILTER_FROM = "2022-01-01"
+
 # dnload flag triggers (matches the new-code addition to set web.dnload=1)
 _DOWNLOAD_PATH_RE = re.compile(r'^/resources/.*/download/', re.IGNORECASE)
 _DOWNLOAD_EXTS = (
@@ -5254,6 +5271,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     skipped_filter = 0
     skipped_url = 0
     skipped_ref = 0
+    skipped_msie = 0
     dnload_set = 0  # counter for the dnload flag set per row
     # Track distinct YYYY-MM seen in this file.  One staged file should
     # normally contain a single day's logs (so 1 month, or 2 across a
@@ -5359,6 +5377,17 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                         skipped_bot += 1
                         continue
 
+                    # MSIE 7-11 / Trident UAs — extinct in real browsers
+                    # post-2022, used only by a distributed bot.  See the
+                    # _MSIE_TRIDENT_RE comment block for the empirical
+                    # basis.  Date-bound so an archival backfill of
+                    # pre-EOL access logs isn't retroactively filtered.
+                    if (datestamp >= _MSIE_FILTER_FROM
+                            and useragent and useragent != '-'
+                            and _MSIE_TRIDENT_RE.search(useragent)):
+                        skipped_msie += 1
+                        continue
+
                     # URL include: excluded by suffix/path UNLESS under /resources/
                     if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
                         skipped_url += 1
@@ -5400,7 +5429,8 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     log.info(f"[import-apache] parsed {parsed}/{total} (unrecognized={unrec}); "
         f"eligible={len(rows_buf) if dry_run else inserted}; "
         f"skipped: status={skipped_status} filter={skipped_filter} "
-        f"bot={skipped_bot} url={skipped_url} ref={skipped_ref}; "
+        f"bot={skipped_bot} url={skipped_url} ref={skipped_ref} "
+        f"msie={skipped_msie}; "
         f"dnload-flagged={dnload_set}")
 
     # Spillover detection: a staged daily file containing rows from >2
