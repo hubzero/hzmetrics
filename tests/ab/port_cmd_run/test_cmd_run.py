@@ -150,7 +150,6 @@ class CmdRunTestBase(unittest.TestCase):
         self.hz.do_import_day  = record("do_import_day")
         self.hz.do_analyze     = record("do_analyze")
         self.hz.do_summarize   = record("do_summarize")
-        self.hz._wipe_month_data = record("_wipe_month_data")
         self.hz._reset_month_for_resummarize = record("_reset_month_for_resummarize")
 
         # Today: fix it so date.today() is deterministic.
@@ -324,18 +323,26 @@ class CatchupRoutingTests(CmdRunTestBase):
     def test_source_only_imports(self):
         self._touch_source("2022-06", "15")
         self.hz.cmd_run(self._args())
-        self.assertEqual(len(self._called("_wipe_month_data")), 0)
+        # Fresh-import branch: no derived-state reset (nothing prior to reset).
+        self.assertEqual(len(self._called("_reset_month_for_resummarize")), 0)
         self.assertGreaterEqual(len(self._called("do_import_day")), 1)
         sum_calls = self._called("do_summarize")
         self.assertEqual(sum_calls[0][2].get("periods"), self.hz._CATCHUP_PERIODS)
 
-    def test_source_and_data_wipes_then_imports(self):
-        # 2023-12 case: source ✓, web rows present, no summary
+    def test_source_and_data_imports_additively_and_resets_derived(self):
+        # 2023-12 case: source ✓, web rows present, no summary.
+        # Provenance principle: base rows must NOT be deleted by datetime.
+        # Branch is: additive import + reset derived state + analyze + summarize.
         self._touch_source("2023-12", "15")
         self.fakedb.base_table_rows[("2023-12", "web")] = True
         self.hz.cmd_run(self._args())
-        self.assertEqual(len(self._called("_wipe_month_data")), 1)
+        # Import runs (additive — INSERT IGNORE on imported_sources keeps it safe).
         self.assertGreaterEqual(len(self._called("do_import_day")), 1)
+        # Derived state is reset exactly once for this month.
+        reset_calls = self._called("_reset_month_for_resummarize")
+        self.assertEqual(len(reset_calls), 1)
+        self.assertEqual(reset_calls[0][1][0], "2023-12")
+        # Analyze + summarize run for the target month.
         self.assertEqual(self._called("do_summarize")[0][1][0], "2023-12")
 
     def test_data_only_resummarizes(self):
@@ -344,7 +351,7 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.fakedb.web_months = ["2024-07"]  # _backlog_months DB query picks this up
         self.hz.cmd_run(self._args())
         self.assertEqual(len(self._called("do_import_day")), 0)  # no imports
-        self.assertEqual(len(self._called("_wipe_month_data")), 0)
+        # Clean data-only branch: no reset (data is consistent, just unsummarized).
         self.assertEqual(len(self._called("_reset_month_for_resummarize")), 0)
         # Did analyze + resummarize (period=1 only)
         ana = self._called("do_analyze")
@@ -405,8 +412,9 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.hz.cmd_run(self._args())
         self.assertEqual(self.state.values.get("rebuild_cascade_from"), "2022-06")
 
-    def test_wipe_reimport_branch_records_cascade_origin(self):
-        # Source ✓ + data ✓ → wipe + reimport, also a base-data change.
+    def test_source_and_data_records_cascade_origin(self):
+        # Source ✓ + data ✓ → additive import + reset-derived.  The import
+        # adds new base rows, so cascade origin must still be recorded.
         self._touch_source("2023-12", "15")
         self.fakedb.base_table_rows[("2023-12", "web")] = True
         self.hz.cmd_run(self._args())

@@ -314,7 +314,7 @@ five branches based on three Phase-C helpers (`month_has_source`,
 | source | data | summary       | action |
 |:------:|:----:|:--------------|--------|
 |   ✓    |  ✗   | —             | fresh import + analyze + summarize-period-1 |
-|   ✓    |  ✓   | none/partial  | wipe + reimport + analyze + summarize-period-1 |
+|   ✓    |  ✓   | none/partial  | additive import + reset-derived + analyze + summarize-period-1 |
 |   ✗    |  ✓   | none/partial  | DB-only: analyze + summarize-period-1 (no import) |
 |   ✗    |  ✗   | —             | skip (true gap — no source ever existed) |
 |  any   |  ✓   | full          | skip (already done) |
@@ -322,6 +322,30 @@ five branches based on three Phase-C helpers (`month_has_source`,
 The `source ✗ data ✓` branch is what catches the 2024-access case
 on geodynamics (rows exist in `web` because they were imported once,
 but the archived source files are gone and can't be re-derived).
+
+**Provenance principle:** base tables (`web`, `userlogin`, `webhits`)
+are *never* deleted by datetime range — only via `forget-import`
+against an explicit `imported_sources` PK range.  A filename is a
+sortable identifier, not a data dictionary; the `datetime` of rows it
+imported is recorded in `imported_sources.pk_start..pk_end`, not
+inferrable from the name.  The `source ✓ data ✓` branch therefore
+trusts existing rows and imports pending files additively (the
+`(filename, target_table)` UNIQUE key on `imported_sources` already
+makes re-import a no-op), then calls `_reset_month_for_resummarize`
+which clears only derived state (`web.sessionid` stamps, `websessions`
+rows, `summary_*_vals` cells for the month) so that `logfix-session`
+recomputes sessions over the combined base rows.  Pre-migration-#44
+rows have no `imported_sources` provenance — for those, the honest
+stance is "don't touch the base table"; use `mark-dirty` to force a
+derived-state-only resummarize.
+
+`webhits` is a known asymmetry: `do_import_webhits` uses plain INSERT
+(no IGNORE, no UNIQUE key on `datetime`), so cross-file boundary
+buckets (e.g., the hour at midnight where two adjacent days'
+log files both contribute) yield two `webhits` rows for the same
+hour.  Consumers that `SUM()` over a date range stay correct; anyone
+expecting one-row-per-hour would see drift.  The legacy datetime
+wipe used to mask this by clearing `webhits` before reimport.
 
 ### Source-log discovery
 

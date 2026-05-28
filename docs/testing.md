@@ -63,10 +63,7 @@ every row of the catchup decision matrix), `port_cmd_run`
 routing via monkey-patched DB), `port_rebuild_summaries`
 (the manual-range CLI + extended `status` output).
 
-**Catchup correctness (3):** `port_wipe_scope` (`_wipe_month_data`
-deletes the target month from web/userlogin/webhits/websessions and
-all four summary_*_vals tables and leaves adjacent months
-untouched), `port_periods_filter` (`do_summarize(periods=(1,))`
+**Catchup correctness (2):** `port_periods_filter` (`do_summarize(periods=(1,))`
 writes exactly the period-1 grid and zero rows in any other period;
 inverse pass with `periods=None` populates all six),
 `port_rebuild_correctness` (loads month M2 fully summarized; adds

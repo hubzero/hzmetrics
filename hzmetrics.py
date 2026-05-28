@@ -625,22 +625,6 @@ def month_has_source(month_str: str) -> bool:
     return bool(pending_days_for_month(month_str))
 
 
-def _kinds_with_source(month_str: str) -> set[str]:
-    """Set of source-log kinds with pending files for `month_str` —
-    a subset of {"access", "auth"}.  Used by the catchup decision matrix
-    to scope reimport-wipes to only the tables whose data we're about to
-    replace: apache files repopulate web/webhits/websessions, cmsauth
-    files repopulate userlogin.  Wiping userlogin when only apache files
-    are pending would destroy irreplaceable data — keep the wipe surgical."""
-    kinds: set[str] = set()
-    for kind in ("access", "auth"):
-        for d, _ in enumerate_log_sources(kind):
-            if d[:4] + "-" + d[4:6] == month_str:
-                kinds.add(kind)
-                break
-    return kinds
-
-
 # Base tables that hold per-row activity for a single month.  Used to
 # detect "this month was already imported at some point" even when the
 # source log has been archived off the host (which happened to all the
@@ -697,85 +681,25 @@ def month_has_orphaned_stamps(month_str: str) -> bool:
     ))
 
 
-# Map source-log kind → base tables it (re)populates.  Used to scope
-# _wipe_month_data so a recovery that re-adds only apache files doesn't
-# also destroy correct userlogin data that has no apache replacement.
-_TABLES_BY_KIND = {
-    "access": ("web", "webhits", "websessions"),  # websessions = derived from web
-    "auth":   ("userlogin",),
-}
-
-
-def _wipe_month_data(month_str: str, dry_run: bool = False,
-                     kinds: set[str] | None = None) -> None:
-    """DELETE rows for `month_str` from the base time-series tables and
-    the summary_*_vals tables.  Used by the catchup decision matrix when
-    both source ✓ and data ✓: prior import / summarize state for this
-    month is suspect (partial), so we wipe it and reimport from the
-    archived source files for a clean slate.
-
-    `kinds` scopes which base tables get wiped.  None means "wipe every
-    base table" (the conservative all-or-nothing default for direct
-    callers).  A set like {"access"} restricts the wipe to apache-derived
-    tables (web/webhits/websessions), leaving auth-derived tables alone
-    — the catchup branch passes this to avoid destroying userlogin when
-    only apache files are being recovered.  Summary tables are always
-    wiped (they're derived from every base table; leaving them stale
-    after a partial wipe is worse than letting the analyze+summarize
-    that follows redo them).
-
-    Never call this on a month whose source logs are gone — that data is
-    irreplaceable.  Callers must check month_has_source() first."""
-    _, _, _, metrics_db = db_credentials()
-    y, m = int(month_str[:4]), int(month_str[5:7])
-    start = f"{month_str}-01"
-    end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
-    dt_summary = f"{month_str}-00"  # '-00' = whole-month marker
-
-    if kinds is None:
-        tables_to_wipe = _BASE_DATA_TABLES
-        scope = "all"
-    else:
-        tables_to_wipe = tuple(
-            t for k in sorted(kinds) for t in _TABLES_BY_KIND.get(k, ())
-        )
-        scope = "+".join(sorted(kinds)) or "none"
-
-    log.info(f"[wipe] {month_str}: clearing base ({scope}) + summary rows")
-    if dry_run:
-        for table in tables_to_wipe:
-            log.info(f"  [dry-run] DELETE FROM {table} "
-                     f"WHERE datetime >= '{start}' AND datetime < '{end}';")
-        for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
-            log.info(f"  [dry-run] DELETE FROM {table} "
-                     f"WHERE datetime = '{dt_summary}';")
-        return
-
-    for table in tables_to_wipe:
-        mysql_exec(
-            f"DELETE FROM {metrics_db}.{table} "
-            f"WHERE datetime >= %s AND datetime < %s;",
-            (start, end),
-        )
-    for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
-        mysql_exec(
-            f"DELETE FROM {metrics_db}.{table} WHERE datetime = %s;",
-            (dt_summary,),
-        )
-
-
 def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
-    """Clear derived state (`web.sessionid` + `websessions` + summary
-    cells) for one month, leaving the `web` rows themselves intact.
-    Used by the catchup decision matrix when a month is flagged as
-    needing rework — either because the operator added it to
-    `pipeline_state.dirty_months` after a bulk DELETE/UPDATE, or
-    because `month_has_orphaned_stamps()` detected drift.
+    """Clear derived state for one month — `web.sessionid` stamps, all
+    `websessions` rows for the month, and the month's `summary_*_vals`
+    cells — leaving the base `web`/`userlogin`/`webhits` rows intact.
+    Used by the catchup decision matrix in three cases:
 
-    Differs from `_wipe_month_data` (which deletes web/userlogin/...
-    rows too) by preserving the base data — the use case here is
-    "web is correct now, derived tables are not" rather than "this
-    month's import is suspect."""
+      - operator marked the month dirty (after a bulk DELETE/UPDATE);
+      - `month_has_orphaned_stamps()` detected drift between `web` and
+        `websessions`;
+      - `source ✓ data ✓` branch, after additively importing pending
+        files, to force `logfix-session` to recompute sessions from
+        the combined (existing + new) base rows.
+
+    Never touches base tables.  Their only safe deletion path is
+    `forget-import` against an `imported_sources` PK range — datetime
+    inference is forbidden because filenames are sortable identifiers,
+    not data dictionaries (the `datetime` of rows a file imported is
+    that file's business, recorded in `imported_sources.pk_start..pk_end`,
+    not inferrable from the filename)."""
     _, _, _, metrics_db = db_credentials()
     y, m = int(month_str[:4]), int(month_str[5:7])
     start = f"{month_str}-01"
@@ -8275,12 +8199,34 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     update state["mode"]).
 
     Decision matrix (source / data / summary state → action):
-      ✓ ✗ –        : import + analyze + summarize-period-1
-      ✓ ✓ none/partial : wipe + reimport + analyze + summarize-period-1
+      ✓ ✗ –            : import + analyze + summarize-period-1
+      ✓ ✓ none/partial : import (additive) + reset-derived + analyze + summarize-period-1
       ✗ ✓ none/partial : (re)summarize-period-1 only — data is in DB,
                           source is gone (2024 access months / 2025-07)
-      ✗ ✗ –        : skip (true gap)
-      any ✓ full   : skip (already done)
+      ✗ ✗ –            : skip (true gap)
+      any ✓ full       : skip (already done)
+
+    Provenance principle: base tables (web/userlogin/webhits) are never
+    deleted by datetime — only via `forget-import` against an explicit
+    `imported_sources` PK range.  A filename is a sortable identifier,
+    not a data dictionary; the `datetime` of rows it imported is its own
+    business.  The `source ✓ data ✓` branch therefore trusts existing
+    rows (their provenance is either recorded in `imported_sources` or
+    is pre-migration-#44 and thus unrecoverable — either way, deleting
+    them by inferred date range is wrong) and just adds the pending
+    files on top.  `_reset_month_for_resummarize` clears *only* derived
+    state — `web.sessionid`, `websessions`, the month's `summary_*_vals`
+    cells — so `logfix-session` can recompute sessions from the combined
+    (existing + newly imported) base rows.
+
+    `webhits` caveat: `do_import_webhits` uses plain INSERT (no IGNORE,
+    no UNIQUE key), so when two different files contribute hits to the
+    same hour bucket (e.g., Aug-31's file timestamped 2025-09-01 00:0x
+    plus Sept-1's file's own 2025-09-01 00:0x rows), both rows land in
+    `webhits`.  Consumers that `SUM()` over a date range stay correct;
+    anyone expecting one row per hour would see two.  Tolerated for now;
+    the old datetime-wipe masked this by clearing `webhits` before
+    reimport.
     """
     backlog = _backlog_months(today_str)
     if not backlog:
@@ -8317,11 +8263,13 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
         return False  # let next tick advance past it
 
     if has_source and has_data:
-        kinds = _kinds_with_source(target)
         log.info(f"[catchup] {target}: source ✓ data ✓ — "
-                 f"wiping {'+'.join(sorted(kinds))} rows + reimport")
-        _wipe_month_data(target, dry_run=dry_run, kinds=kinds)
+                 f"importing pending files + resetting derived state")
         _import_month(target, dry_run)
+        # Reset derived state AFTER import so logfix-session in
+        # do_analyze recomputes websessions over the combined (existing
+        # + newly imported) base rows.  Base tables are untouched.
+        _reset_month_for_resummarize(target, dry_run=dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
         _record_rebuild_cascade_from(target, state, dry_run)

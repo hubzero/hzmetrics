@@ -32,7 +32,6 @@ tests=(
     port_session_split
     port_state
     port_window_boundaries
-    port_wipe_scope
 )
 
 pass=0
