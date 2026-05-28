@@ -5061,17 +5061,72 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             # The function call removal lets the planner use the
             # web_host index (added by migration 37) — turning a per-host
             # full scan into an indexed lookup.
-            update_sql = (
-                f"UPDATE {table} t "
-                f"INNER JOIN _domain_tmp d ON t.host = d.host "
-                f"SET t.domain = d.domain "
-                f"WHERE (t.domain = '' OR t.domain = '?' OR t.domain IS NULL) "
-                f"AND t.host <> '' AND t.host IS NOT NULL"
-                f"{date_pred_sql.replace(d_col, 't.' + d_col)}"
-            )
-            cur.execute(update_sql, date_params)
-            updated = cur.rowcount
-            cur.execute("DROP TEMPORARY TABLE _domain_tmp")
+            #
+            # Two strategies depending on table size:
+            #
+            # `web` (big — ~12 M rows / freshly-reimported month):
+            #   chunk by PRIMARY KEY id range with FORCE INDEX(PRIMARY),
+            #   so each statement does a sequential PK scan of one chunk
+            #   and probes _domain_tmp (Memory hash) per row.  Locks are
+            #   bounded to chunk size; PK-sequential scans are
+            #   cache-friendly on a small buffer pool.  Prior approaches
+            #   all foundered on the lock manager: a single whole-month
+            #   JOIN-UPDATE overflowed (1206) or wedged for hours; per-day
+            #   chunks didn't help because the planner drives the join off
+            #   web_host and ignores the date predicate for locking;
+            #   FORCE INDEX(datetime) bounded date scope but still wedged
+            #   under lock-manager pressure on a freshly-imported month;
+            #   per-host updates fell over on bot ISP hosts that own
+            #   millions of rows each (static.vnpt.vn alone has 5.5 M).
+            #
+            # `toolstart` / `sessionlog_metrics` (small):
+            #   single JOIN-UPDATE — the row count is tiny so lock-table
+            #   capacity is not at risk and the simpler form is fine.
+            if table == "web":
+                # ~250 K id-range per chunk: each chunk's lock set is
+                # ~500 K rows worst-case (PK scan plus probe), which fits
+                # within the InnoDB lock budget at 512 MB buffer pool
+                # with substantial headroom.
+                _CHUNK_IDS = 250_000
+                cur.execute(
+                    f"SELECT MIN(id), MAX(id) FROM {table} WHERE 1=1{date_pred_sql}",
+                    date_params,
+                )
+                row = cur.fetchone()
+                id_lo, id_hi = (row if row else (None, None))
+                base_update = (
+                    f"UPDATE {table} w FORCE INDEX (PRIMARY) "
+                    f"INNER JOIN _domain_tmp d ON w.host = d.host "
+                    f"SET w.domain = d.domain "
+                    f"WHERE w.id >= %s AND w.id < %s "
+                    f"AND (w.domain = '' OR w.domain = '?' OR w.domain IS NULL) "
+                    f"AND w.host <> '' AND w.host IS NOT NULL"
+                )
+                updated = 0
+                if id_lo is not None and id_hi is not None:
+                    cur_id = id_lo
+                    total_chunks = max(1, (id_hi - id_lo) // _CHUNK_IDS + 1)
+                    ci = 0
+                    while cur_id <= id_hi:
+                        nxt = cur_id + _CHUNK_IDS
+                        cur.execute(base_update, (cur_id, nxt))
+                        updated += cur.rowcount
+                        ci += 1
+                        cur_id = nxt
+                        if ci % 10 == 0 or cur_id > id_hi:
+                            log.info(f"  fill-domain: chunk {ci}/~{total_chunks} "
+                                     f"(id<{cur_id}), {updated} row(s) updated so far")
+            else:
+                update_sql = (
+                    f"UPDATE {table} t INNER JOIN _domain_tmp d ON t.host = d.host "
+                    f"SET t.domain = d.domain "
+                    f"WHERE (t.domain = '' OR t.domain = '?' OR t.domain IS NULL) "
+                    f"AND t.host <> '' AND t.host IS NOT NULL"
+                    f"{date_pred_sql.replace(d_col, 't.' + d_col)}"
+                )
+                cur.execute(update_sql, date_params)
+                updated = cur.rowcount
+            cur.execute("DROP TEMPORARY TABLE IF EXISTS _domain_tmp")
 
         log.info(f"[fill-domain] updated {updated} row(s) in {table}")
         return 0
