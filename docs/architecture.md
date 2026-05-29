@@ -42,7 +42,7 @@ Pipeline-owned.  The big ones:
 | `websessions` | Coalesced visitor session | `logfix-session` |
 | `toolstart` | Tool launch | `import-hub-data` + `middleware-{wall,cpu}` |
 | `userlogin` | Login / sim_login event | `import-auth` |
-| `webhits` | Hourly hit count | `import-webhits` |
+| `webhits` | Per-day hit count (derived from `web`) | `import-apache` (inline) / `rebuild-webhits` (regen) |
 | `userlogin_lite` | Filtered view of `userlogin` (login + simulation only) | Rebuilt from scratch on each `summarize-month` run |
 | `sessionlog_metrics` | Enriched tool-session record | `import-hub-data` |
 | `jos_xprofiles_metrics` | User profile snapshot | `import-hub-data` (full rebuild from `<hub>.jos_xprofiles`) |
@@ -123,9 +123,9 @@ for each pending month, oldest first:                  ┐ outer loop:
 
 ```
 fetch        → concatenate daily/*.gz into staging files
-import-apache → web (one row per HTTP request)
+import-apache → web (one row per HTTP request) + webhits
+                (derived per-day count, populated inline)
 import-auth   → userlogin (one row per login event)
-import-webhits → webhits (hourly aggregate)
 identify-bots → bot_useragents (table of known bot UAs)
 archive       → gzip and move daily logs into imported/
 ```
@@ -339,13 +339,18 @@ rows have no `imported_sources` provenance — for those, the honest
 stance is "don't touch the base table"; use `mark-dirty` to force a
 derived-state-only resummarize.
 
-`webhits` is a known asymmetry: `do_import_webhits` uses plain INSERT
-(no IGNORE, no UNIQUE key on `datetime`), so cross-file boundary
-buckets (e.g., the hour at midnight where two adjacent days'
-log files both contribute) yield two `webhits` rows for the same
-hour.  Consumers that `SUM()` over a date range stay correct; anyone
-expecting one-row-per-hour would see drift.  The legacy datetime
-wipe used to mask this by clearing `webhits` before reimport.
+`webhits` is now a derived table.  `do_import_apache` writes one
+`webhits` row per day in the same loop that filters web rows (a
+`defaultdict(int)` accumulates kept-row counts per `datestamp`, and
+the function INSERTs one row per day at the end of the same
+transaction).  `webhits` has no UNIQUE key per legacy semantics —
+cross-file boundary days (midnight bleed) still yield duplicate
+`(datetime)` rows that `SUM()` reads correctly.  `_reset_month_for_resummarize`
+DELETEs the month's `webhits` rows alongside the other derived state,
+and `do_analyze` regenerates them from current `web` via
+`do_rebuild_webhits` after `clean-bots web` settles.  The
+`rebuild-webhits [--month YYYY-MM | --all]` CLI is the
+operator-driven repair path for filter-change retroactivity.
 
 ### Source-log discovery
 

@@ -19,7 +19,7 @@ Usage:
   hzmetrics.py import-auth <file>      (file may be '-' for stdin)
   hzmetrics.py fill-user-info {metrics|hub} <table>
   hzmetrics.py identify-bots <file>    (file may be '-' for stdin)
-  hzmetrics.py import-webhits <file>   (file may be '-' for stdin)
+  hzmetrics.py rebuild-webhits [--month YYYY-MM | --all] [--dry-run]
   hzmetrics.py fill-domain {metrics|hub} <table>
   hzmetrics.py import-apache <file>    (file may be '-' for stdin)
   hzmetrics.py andmore-usage [YYYY-MM]
@@ -703,9 +703,10 @@ def month_has_orphaned_stamps(month_str: str) -> bool:
 
 def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
     """Clear derived state for one month — `web.sessionid` stamps, all
-    `websessions` rows for the month, and the month's `summary_*_vals`
-    cells — leaving the base `web`/`userlogin`/`webhits` rows intact.
-    Used by the catchup decision matrix in three cases:
+    `websessions` rows for the month, the month's `summary_*_vals`
+    cells, AND the month's `webhits` rows — leaving the base `web` /
+    `userlogin` rows intact.  Used by the catchup decision matrix in
+    three cases:
 
       - operator marked the month dirty (after a bulk DELETE/UPDATE);
       - `month_has_orphaned_stamps()` detected drift between `web` and
@@ -713,6 +714,18 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
       - `source ✓ data ✓` branch, after additively importing pending
         files, to force `logfix-session` to recompute sessions from
         the combined (existing + new) base rows.
+
+    `webhits` is derived — one row per day = COUNT(*) of kept web rows.
+    Reset deletes the month's webhits rows and then re-aggregates from
+    current `web` (via do_rebuild_webhits) so the table is left
+    consistent with the post-reset state of web.  Without that
+    delete-then-rebuild, a marked-dirty month would summarize with
+    stale (pre-bulk-edit) hit counts.
+
+    Rebuild lives here (not in do_analyze) so analyze stays a no-op on
+    derived tables that haven't been wiped — test fixtures that seed
+    webhits with hand-chosen values to exercise summarize don't get
+    their seed replaced on every analyze run.
 
     Never touches base tables.  Their only safe deletion path is
     `forget-import` against an `imported_sources` PK range — datetime
@@ -730,6 +743,7 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
     if dry_run:
         log.info(f"  [dry-run] UPDATE web SET sessionid=NULL WHERE datetime in [{start},{end})")
         log.info(f"  [dry-run] DELETE FROM websessions WHERE datetime in [{start},{end})")
+        log.info(f"  [dry-run] DELETE FROM webhits WHERE datetime in [{start},{end})")
         for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
             log.info(f"  [dry-run] DELETE FROM {table} WHERE datetime = '{dt_summary}'")
         return
@@ -762,6 +776,11 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
                 f"WHERE datetime >= %s AND datetime < %s;",
                 (start, end),
             )
+            cur.execute(
+                f"DELETE FROM {metrics_db}.webhits "
+                f"WHERE datetime >= %s AND datetime < %s;",
+                (start, end),
+            )
             for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
                 cur.execute(
                     f"DELETE FROM {metrics_db}.{table} WHERE datetime = %s;",
@@ -769,6 +788,12 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
                 )
     finally:
         conn.close()
+
+    # Repopulate webhits from current `web` so the table is left
+    # consistent (rather than empty) after reset.  Cheap COUNT(*) per
+    # day.  Outside the connection above because do_rebuild_webhits
+    # opens its own connection via mysql_exec.
+    do_rebuild_webhits(month_str, dry_run=dry_run)
 
 
 _lock_fd: int | None = None  # held open across acquire/release so flock survives
@@ -2429,9 +2454,8 @@ def do_import_staged_logs(*, dry_run=False):
 
     if STAGED_APACHE.exists():
         log.info(f"[import-staged] {STAGED_APACHE}")
-        do_import_webhits(str(STAGED_APACHE), dry_run=dry_run)
-        do_identify_bots( str(STAGED_APACHE), dry_run=dry_run)
-        do_import_apache( str(STAGED_APACHE), dry_run=dry_run)
+        do_identify_bots(str(STAGED_APACHE), dry_run=dry_run)
+        do_import_apache(str(STAGED_APACHE), dry_run=dry_run)
         if not dry_run:
             prev = HZ_METRICS_STAGING / "_prev_hub_apache.log"
             STAGED_APACHE.replace(prev)
@@ -2503,10 +2527,11 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> int:
       1. Stream-decompress source → STAGED_APACHE
       2. Open conn, BEGIN
       3. INSERT IGNORE imported_sources(filename, 'web')
-      4. If first-time: parse + INSERT into web; capture pk_start..pk_end;
-         identify-bots; INSERT IGNORE imported_sources(filename, 'webhits')
-         and import-webhits if also first-time.
-      5. COMMIT — atomically commits imported_sources rows AND data rows
+      4. If first-time: parse + INSERT into web (with inline per-day
+         INSERT into webhits in the same loop); capture pk_start..pk_end;
+         identify-bots.
+      5. COMMIT — atomically commits the imported_sources row, web rows,
+         and webhits rows
       6. Move source → imported/  (best-effort; failure is recoverable)
 
     Crash anywhere in 2-5 → InnoDB rolls back, file stays in daily/,
@@ -2517,6 +2542,11 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> int:
     the file was already committed by a prior run — crash-recovery
     path).  Callers use this to gate `rebuild_cascade_from`: no new
     base data means no downstream long-window invalidation.
+
+    webhits no longer has its own imported_sources row: it commits in
+    the same transaction as `web`, so `web_first` IS the signal.  If
+    webhits ever drifts from `web`, `rebuild-webhits` regenerates it
+    from the (filtered) `web` rows.
     """
     filename = src_path.name
     HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
@@ -2530,19 +2560,19 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> int:
         _stream_decompress(src_path, out)
     log.info(f"[import-apache-atomic] staged {filename} -> {STAGED_APACHE}")
 
-    # do_import_apache + do_identify_bots + do_import_webhits all rely
-    # on the connection's default schema for unqualified table refs
-    # (`exclude_list`, `bot_useragents`, `INSERT INTO web …`).  Without
-    # database= here, MariaDB returns "(1046) No database selected" on
-    # the first SELECT and the entire transaction rolls back without
-    # importing the file or writing an imported_sources marker.
+    # do_import_apache + do_identify_bots both rely on the connection's
+    # default schema for unqualified table refs (`exclude_list`,
+    # `bot_useragents`, `INSERT INTO web …`, `INSERT INTO webhits …`).
+    # Without database= here, MariaDB returns "(1046) No database
+    # selected" on the first SELECT and the entire transaction rolls
+    # back without importing the file or writing an imported_sources
+    # marker.
     web_inserted = 0
     _, _, _, metrics_db = db_credentials()
     conn = _open_db(metrics_db)
     try:
         conn.begin()
         with conn.cursor() as cur:
-            # web target
             web_first = _record_imported_source(
                 cur, filename, "web", None, None, 0)
             if web_first:
@@ -2560,22 +2590,6 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> int:
             else:
                 log.info(f"[import-apache-atomic] {filename}: web already "
                          f"committed by prior run; skipping data INSERT")
-
-            # webhits target (no PK; just tracking).
-            webhits_first = _record_imported_source(
-                cur, filename, "webhits", None, None, 0)
-            if webhits_first:
-                _rc, _ps, _pe, n = do_import_webhits(
-                    str(STAGED_APACHE), conn=conn, dry_run=False)
-                _, _, _, mdb = db_credentials()
-                cur.execute(
-                    f"UPDATE {mdb}.imported_sources "
-                    f"SET row_count=%s "
-                    f"WHERE filename=%s AND target_table='webhits'",
-                    (n, filename))
-            else:
-                log.info(f"[import-apache-atomic] {filename}: webhits "
-                         f"already committed by prior run; skipping")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -3299,6 +3313,104 @@ def cmd_backfill_dnload(args):
     dry_run = args.dry_run
     do_backfill_dnload(args.start, dry_run)
     log.info(">>> done")
+
+
+# ---------------------------------------------------------------------------
+# rebuild-webhits  (regenerate the `webhits` derived table from `web`)
+# ---------------------------------------------------------------------------
+
+def do_rebuild_webhits(month=None, *, dry_run=False):
+    """Regenerate `webhits` for one month (or every month present in
+    web) by re-aggregating from `web`.
+
+    webhits is a derived table — one row per day with the count of
+    kept `web` rows for that day.  Normally populated incrementally
+    inline by do_import_apache (same loop, same transaction); this
+    command exists for disaster recovery and for retroactively
+    applying new filter rules to historical data:
+
+      - filter logic changes (e.g. a new bot pattern is added to
+        the chain in do_import_apache); old `web` rows have been
+        deleted by a one-shot cleanup but webhits still reflects
+        the pre-cleanup counts → rebuild from current `web`
+      - operator ran `forget-import --table web` for some file;
+        webhits rows for those days are now inflated → rebuild
+        for the affected month
+      - any cross-table drift between web and webhits detected by
+        a future invariant check
+
+    Per-month DELETE + INSERT.  webhits has no UNIQUE key so DELETE
+    is unconditional within the month range.  Operates over months
+    that actually exist in `web`; an empty month gets no webhits
+    rows (consistent with the inline-populate behavior).
+    """
+    _, _, _, metrics_db = db_credentials()
+
+    if month:
+        # Single-month form.
+        y, m = int(month[:4]), int(month[5:7])
+        start = f"{month}-01"
+        end = (f"{y + 1:04d}-01-01" if m == 12
+               else f"{y:04d}-{m + 1:02d}-01")
+        months = [(month, start, end)]
+    else:
+        # Enumerate every distinct YYYY-MM in `web`.  Same %->%% quoting
+        # caveat as do_backfill_dnload's months query.
+        rows = mysql_column(
+            f"SELECT DISTINCT DATE_FORMAT(datetime,'%%Y-%%m') "
+            f"FROM {metrics_db}.web ORDER BY 1;")
+        months = []
+        for m_str in rows:
+            y, m = int(m_str[:4]), int(m_str[5:7])
+            start = f"{m_str}-01"
+            end = (f"{y + 1:04d}-01-01" if m == 12
+                   else f"{y:04d}-{m + 1:02d}-01")
+            months.append((m_str, start, end))
+
+    if not months:
+        log.info("  No months found in web table.")
+        return
+
+    log.info(f"  Will rebuild webhits for {len(months)} month(s)"
+             f"{': ' + months[0][0] + ' .. ' + months[-1][0] if len(months) > 1 else ': ' + months[0][0]}")
+
+    for m_str, start, end in months:
+        if dry_run:
+            existing = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.webhits "
+                f"WHERE datetime >= %s AND datetime < %s;",
+                (start, end))
+            new_count = mysql_scalar(
+                f"SELECT COUNT(DISTINCT DATE(datetime)) FROM {metrics_db}.web "
+                f"WHERE datetime >= %s AND datetime < %s;",
+                (start, end))
+            log.info(f"  [dry-run] {m_str}: would replace "
+                     f"{existing} webhits row(s) with {new_count} day(s)")
+            continue
+
+        mysql_exec(
+            f"DELETE FROM {metrics_db}.webhits "
+            f"WHERE datetime >= %s AND datetime < %s;",
+            (start, end))
+        n = mysql_exec(
+            f"INSERT INTO {metrics_db}.webhits (datetime, hits) "
+            f"SELECT DATE(datetime), COUNT(*) FROM {metrics_db}.web "
+            f"WHERE datetime >= %s AND datetime < %s "
+            f"GROUP BY DATE(datetime);",
+            (start, end))
+        log.info(f"  {m_str}: rebuilt {n} day(s)")
+
+
+def cmd_rebuild_webhits(args):
+    if not args.all and not args.month:
+        log.error("rebuild-webhits: must specify --month YYYY-MM or --all")
+        return 2
+    if args.all and args.month:
+        log.error("rebuild-webhits: --month and --all are mutually exclusive")
+        return 2
+    do_rebuild_webhits(args.month, dry_run=args.dry_run)
+    log.info(">>> done")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -4696,147 +4808,11 @@ def _search_array(needle, filters):
 # Backwards-compatible alias for code that already called _ip_excluded.
 _ip_excluded = _search_array
 
-def do_import_webhits(input_file, *, dry_run=False, conn=None):
-    """Aggregate per-day hit counts from an apache staged log and
-    INSERT one row per day into metrics.webhits.
-
-    If `conn` is provided, the INSERTs run inside the caller's
-    transaction (caller owns commit/rollback) and the function
-    returns (rc, None, None, inserted) for imported_sources tracking.
-    webhits has no auto-increment PK, so pk_start/pk_end are always
-    None — forget-import on webhits records logs a warning instead of
-    auto-deleting.
-
-    Counted rows: same filter chain as do_import_apache, via the
-    shared _filter_apache_row helper.  Sharing the chain keeps the
-    daily-hit aggregate consistent with the filtered `web` row counts;
-    summarize reads SUM(hits) from this table for the "Web server
-    hits" cell (summary_misc_vals rowid=8).  Diverging here would
-    inflate that cell relative to every other dashboard cell — see
-    the helper's docstring for the 2026-02 audit history.
-
-    Note: webhits has no unique key; legacy PHP uses plain INSERT
-    (not INSERT IGNORE), so re-running this on overlapping content adds
-    duplicate (datetime, hits) rows.  This port preserves that semantic.
-    """
-    cfg = db_config()
-    metrics_db = cfg.get("metrics_db", "")
-    if not metrics_db:
-        msg = "[import-webhits] missing metrics_db in access.cfg"
-        log.info(msg)
-        return (2, None, None, 0) if conn is not None else 2
-
-    # Pull filter lists + bot_useragents — same shape as do_import_apache.
-    def _load_filters(cur):
-        cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
-        ipf = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT filter FROM exclude_list WHERE type='useragent'")
-        uaf = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
-        urlf = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT useragent FROM bot_useragents")
-        b = {r[0] for r in cur.fetchall()}
-        return ipf, uaf, urlf, b
-
-    if conn is not None:
-        with conn.cursor() as cur:
-            ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
-    else:
-        _fc = _open_db(metrics_db)
-        try:
-            with _fc.cursor() as cur:
-                ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
-        finally:
-            _fc.close()
-
-    daily_hits = defaultdict(int)
-    total = 0
-    unrec = 0
-    skipped = 0
-
-    with _open_input(input_file) as src:
-        for line in src:
-            total += 1
-            line = line.rstrip("\r\n")
-            m = _APACHE_PAT_NEW.match(line)
-            if m:
-                datestamp = m.group(1)
-                firstline = m.group(6)
-                return_code = m.group(7)
-                bytes_str = m.group(8)
-                ip = m.group(9)
-                referrer = m.group(10)
-                useragent = m.group(11)
-            else:
-                m = _APACHE_PAT_OLD.match(line)
-                if not m:
-                    unrec += 1
-                    continue
-                datestamp = m.group(1)
-                firstline = m.group(5)
-                return_code = m.group(6)
-                bytes_str = m.group(7)
-                ip = m.group(8)
-                referrer = m.group(9)
-                useragent = m.group(10)
-
-            # Parse method/url/protocol — PHP edge case: when only one token in
-            # the request line, treat it as URL with default GET method.
-            parts = firstline.strip().split(None, 2)
-            method = parts[0] if parts else ''
-            url = parts[1] if len(parts) > 1 else ''
-            if not url:
-                url = method
-                method = 'GET'
-            url = _SLASH_COLLAPSE.sub('/', url)
-
-            keep, _reason = _filter_apache_row(
-                return_code=return_code, bytes_str=bytes_str, method=method,
-                ip=ip, useragent=useragent, url=url, referrer=referrer,
-                datestamp=datestamp,
-                ip_filters=ip_filters, ua_filters=ua_filters,
-                url_filters=url_filters, bot_uas=bot_uas)
-            if not keep:
-                skipped += 1
-                continue
-            daily_hits[datestamp] += 1
-
-    log.info(f"[import-webhits] parsed {total} line(s); "
-        f"counted {sum(daily_hits.values())} hit(s) across {len(daily_hits)} day(s); "
-        f"skipped {skipped}; unrecognized = {unrec}")
-
-    if dry_run or not daily_hits:
-        if dry_run:
-            for d, h in sorted(daily_hits.items())[:5]:
-                log.info(f"  [dry-run] {d}  hits={h}")
-            if len(daily_hits) > 5:
-                log.info(f"  [dry-run] ... and {len(daily_hits) - 5} more day(s)")
-        if conn is not None:
-            return 0, None, None, 0
-        return 0
-
-    _owns_conn = (conn is None)
-    if _owns_conn:
-        conn = _open_db(metrics_db)
-    try:
-        with conn.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO webhits (datetime, hits) VALUES (%s, %s)",
-                sorted(daily_hits.items()),
-            )
-            inserted = cur.rowcount
-    finally:
-        if _owns_conn:
-            conn.close()
-
-    log.info(f"[import-webhits] inserted {inserted} row(s) into webhits")
-    if not _owns_conn:
-        # webhits has no AUTO_INCREMENT PK — return pk_start/pk_end as None
-        return 0, None, None, inserted
-    return 0
-
-def cmd_import_webhits(args):
-    return do_import_webhits(args.input_file, dry_run=args.dry_run)
+# do_import_webhits used to be a separate file-parser that re-read the
+# staged apache log to populate `webhits`.  It was deleted when webhits
+# became a derived table of `web`: do_import_apache now counts kept rows
+# per day in the same loop and emits webhits rows in the same atomic
+# transaction.  See rebuild-webhits for the regenerate-from-`web` path.
 
 
 # ---------------------------------------------------------------------------
@@ -5251,57 +5227,11 @@ def _is_archive_events_crawl(url, datestamp, referrer):
     return url_year <= log_year - _EVENTS_ARCHIVE_LOOKBACK_YEARS
 
 
-def _filter_apache_row(*, return_code, bytes_str, method, ip, useragent, url,
-                       referrer, datestamp,
-                       ip_filters, ua_filters, url_filters, bot_uas):
-    """Filter an already-parsed apache log row.  Returns (keep, reason).
-
-    `reason` is one of 'status', 'filter', 'bot', 'msie', 'url', 'ref',
-    'events' on drop, or None on keep.
-
-    Shared between do_import_apache (which uses `reason` to bucket the
-    per-source-file skip counters) and do_import_webhits (which only
-    needs the keep/drop signal but must agree on the boundary so its
-    per-day hit aggregates stay consistent with the filtered `web`
-    row counts).
-
-    Why this is shared, not duplicated: the 2026-02 audit found
-    `webhits` was applying only the legacy `exclude_list` filters,
-    while `web` had grown the MSIE / /register / /citations/browse
-    / /events/<old> filters on top.  Summarize reads SUM(hits) from
-    webhits for the dashboard's "Web server hits" cell (rowid=8 of
-    summary_misc_vals — see xlogfix_summary.php parity), so the
-    drift inflated that cell relative to every other cell in the
-    same row-set (sessions, downloads, etc.) which derive from
-    websessions built from filtered web rows.  Sharing the filter
-    chain makes drift structurally impossible — a new filter added
-    to one importer is automatically applied to the other."""
-    if return_code != "200":
-        return False, "status"
-    try:
-        if int(bytes_str) <= 0:
-            return False, "status"
-    except ValueError:
-        return False, "status"
-    if method != "GET" and method != "POST":
-        return False, "status"
-    if (_search_array(ip, ip_filters)
-            or _search_array(useragent, ua_filters)
-            or _search_array(url, url_filters)):
-        return False, "filter"
-    if useragent and useragent != '-' and useragent in bot_uas:
-        return False, "bot"
-    if (datestamp >= _MSIE_FILTER_FROM
-            and useragent and useragent != '-'
-            and _MSIE_TRIDENT_RE.search(useragent)):
-        return False, "msie"
-    if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
-        return False, "url"
-    if _is_referer_spam(url, referrer):
-        return False, "ref"
-    if _is_archive_events_crawl(url, datestamp, referrer):
-        return False, "events"
-    return True, None
+# _filter_apache_row was briefly extracted as a shared helper when
+# do_import_webhits had its own parser; both are gone now (webhits
+# became a derived table populated inline by do_import_apache and
+# regeneratable via rebuild-webhits).  The filter chain inlines back
+# into do_import_apache below.
 
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     """Parse an apache staged log file and INSERT eligible rows into
@@ -5393,6 +5323,12 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     skipped_msie = 0
     skipped_events = 0
     dnload_set = 0  # counter for the dnload flag set per row
+    # Per-day kept-row aggregate — emitted into `webhits` after the
+    # main loop.  webhits is just COUNT(*) per day of `web` rows; doing
+    # it inline avoids a second parse of the staged file and structurally
+    # guarantees the two tables agree on what counts (replaces the
+    # standalone do_import_webhits + _filter_apache_row split).
+    daily_hits: dict = defaultdict(int)
     # Track distinct YYYY-MM seen in this file.  One staged file should
     # normally contain a single day's logs (so 1 month, or 2 across a
     # midnight TZ boundary).  >2 months in one file is almost always a
@@ -5474,30 +5410,46 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                         method = 'GET'
                     url = _SLASH_COLLAPSE.sub('/', url)
 
-                    # Filter chain — shared with do_import_webhits via
-                    # _filter_apache_row so the two importers never drift
-                    # (see the helper's docstring for the audit history).
-                    keep, reason = _filter_apache_row(
-                        return_code=ret_code, bytes_str=bytes_str, method=method,
-                        ip=ip, useragent=useragent, url=url, referrer=referrer,
-                        datestamp=datestamp,
-                        ip_filters=ip_filters, ua_filters=ua_filters,
-                        url_filters=url_filters, bot_uas=bot_uas)
-                    if not keep:
-                        if reason == "status":
+                    # Filter chain — same order as legacy PHP, extended
+                    # for the 2025-05 referer-spam and 2026-02 distributed-bot
+                    # waves.  webhits is derived from the kept rows below
+                    # (daily_hits counter), so this chain is the single
+                    # source of truth for both tables.
+                    if ret_code != "200":
+                        skipped_status += 1
+                        continue
+                    try:
+                        if int(bytes_str) <= 0:
                             skipped_status += 1
-                        elif reason == "filter":
-                            skipped_filter += 1
-                        elif reason == "bot":
-                            skipped_bot += 1
-                        elif reason == "msie":
-                            skipped_msie += 1
-                        elif reason == "url":
-                            skipped_url += 1
-                        elif reason == "ref":
-                            skipped_ref += 1
-                        elif reason == "events":
-                            skipped_events += 1
+                            continue
+                    except ValueError:
+                        skipped_status += 1
+                        continue
+                    if method != "GET" and method != "POST":
+                        skipped_status += 1
+                        continue
+                    if _search_array(ip, ip_filters) or \
+                       _search_array(useragent, ua_filters) or \
+                       _search_array(url, url_filters):
+                        skipped_filter += 1
+                        continue
+                    if useragent and useragent != '-' and useragent in bot_uas:
+                        skipped_bot += 1
+                        continue
+                    # MSIE 7-11 / Trident — see _MSIE_TRIDENT_RE comment.
+                    if (datestamp >= _MSIE_FILTER_FROM
+                            and useragent and useragent != '-'
+                            and _MSIE_TRIDENT_RE.search(useragent)):
+                        skipped_msie += 1
+                        continue
+                    if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
+                        skipped_url += 1
+                        continue
+                    if _is_referer_spam(url, referrer):
+                        skipped_ref += 1
+                        continue
+                    if _is_archive_events_crawl(url, datestamp, referrer):
+                        skipped_events += 1
                         continue
 
                     dnload = 1 if _is_download_url(url) else 0
@@ -5510,6 +5462,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                         comp_name, view_name, task_name, actn_name, item_name,
                         dnload,
                     ))
+                    daily_hits[datestamp] += 1
 
                     if len(rows_buf) >= batch_size and not dry_run:
                         cur.executemany(insert_sql, rows_buf)
@@ -5523,6 +5476,15 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                 if pk_start is None and cur.lastrowid:
                     pk_start = cur.lastrowid
                 inserted += cur.rowcount
+
+            # webhits — one row per day with the kept-row count.  webhits
+            # has no UNIQUE key per legacy semantics, so concurrent or
+            # repeated imports of the same date append duplicate rows;
+            # rebuild-webhits is the operator-facing reversal.
+            if daily_hits and not dry_run:
+                cur.executemany(
+                    "INSERT INTO webhits (datetime, hits) VALUES (%s, %s)",
+                    [(f"{d} 00:00:00", h) for d, h in sorted(daily_hits.items())])
     finally:
         if _owns_conn:
             conn.close()
@@ -5532,7 +5494,8 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
         f"skipped: status={skipped_status} filter={skipped_filter} "
         f"bot={skipped_bot} url={skipped_url} ref={skipped_ref} "
         f"msie={skipped_msie} events={skipped_events}; "
-        f"dnload-flagged={dnload_set}")
+        f"dnload-flagged={dnload_set}; "
+        f"webhits={sum(daily_hits.values())} across {len(daily_hits)} day(s)")
 
     # Spillover detection: a staged daily file containing rows from >2
     # distinct YYYY-MM is almost always a logrotate failure (1 month is
@@ -8344,19 +8307,12 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     rows (their provenance is either recorded in `imported_sources` or
     is pre-migration-#44 and thus unrecoverable — either way, deleting
     them by inferred date range is wrong) and just adds the pending
-    files on top.  `_reset_month_for_resummarize` clears *only* derived
+    files on top.  `_reset_month_for_resummarize` clears all derived
     state — `web.sessionid`, `websessions`, the month's `summary_*_vals`
-    cells — so `logfix-session` can recompute sessions from the combined
-    (existing + newly imported) base rows.
-
-    `webhits` caveat: `do_import_webhits` uses plain INSERT (no IGNORE,
-    no UNIQUE key), so when two different files contribute hits to the
-    same hour bucket (e.g., Aug-31's file timestamped 2025-09-01 00:0x
-    plus Sept-1's file's own 2025-09-01 00:0x rows), both rows land in
-    `webhits`.  Consumers that `SUM()` over a date range stay correct;
-    anyone expecting one row per hour would see two.  Tolerated for now;
-    the old datetime-wipe masked this by clearing `webhits` before
-    reimport.
+    cells, AND the month's `webhits` rows — so `logfix-session`
+    recomputes sessions from the combined (existing + newly imported)
+    base rows, and `do_rebuild_webhits` (called at the end of
+    `do_analyze`) regenerates `webhits` from current `web`.
     """
     backlog = _backlog_months(today_str)
     if not backlog:
@@ -8855,6 +8811,18 @@ def main() -> None:
         help="Only process months >= this (default: all)")
     p_dnload.add_argument("--dry-run", action="store_true", help="Show what would be done without doing it")
 
+    p_rwh = sub.add_parser("rebuild-webhits",
+        help="Regenerate the webhits derived table from web (disaster recovery / "
+             "retroactive filter rule application)")
+    p_rwh.set_defaults(func=cmd_rebuild_webhits)
+    grp_rwh = p_rwh.add_mutually_exclusive_group()
+    grp_rwh.add_argument("--month", metavar="YYYY-MM", type=_arg_yyyymm,
+        help="Rebuild a specific month")
+    grp_rwh.add_argument("--all", action="store_true",
+        help="Rebuild every month present in web")
+    p_rwh.add_argument("--dry-run", action="store_true",
+        help="Show what would be deleted/inserted without doing it")
+
     p_geo = sub.add_parser("fill-geo", help="Backfill missing GeoIP country data")
     p_geo.set_defaults(func=cmd_fill_geo)
     grp_geo = p_geo.add_mutually_exclusive_group(required=True)
@@ -9017,15 +8985,6 @@ def main() -> None:
         help="No date filter (use with care on large tables)")
     p_fd.add_argument("--dry-run", action="store_true",
         help="Show derivations; don't UPDATE")
-
-    p_wh = sub.add_parser("import-webhits",
-        help="Aggregate per-day hit counts from an apache log into metrics.webhits "
-             "(ports xlogimport_webhits.php)")
-    p_wh.set_defaults(func=cmd_import_webhits)
-    p_wh.add_argument("input_file", metavar="FILE",
-        help="path to staged apache log, or '-' for stdin")
-    p_wh.add_argument("--dry-run", action="store_true",
-        help="Parse and report counts; don't INSERT")
 
     p_bots = sub.add_parser("identify-bots",
         help="Scan an apache-format log and populate metrics.bot_useragents "

@@ -353,17 +353,19 @@ Worth the work only if substring-based detection plateaus.
 
 ## Single-pass import
 
-The current import phase reads each daily access log three times —
+The legacy import phase read each daily access log three times —
 `import-webhits` (per-day counts), `identify-bots` (UA harvest),
-`import-apache` (rows into `web`).  Faithful port of the legacy PHP
-chain, but redundant: one pass through the file could do all three.
+`import-apache` (rows into `web`).  The 2026-05 refactor folded
+webhits into `do_import_apache` (now a derived per-day counter
+populated inline; `rebuild-webhits` is the regenerate-from-`web`
+path), leaving only `identify-bots` as a second file pass.
 
-Deferred during the catch-up because changing the parser mid-catch-up
-would have invalidated the in-flight months and broken the A/B golden
-snapshots.  Pick this up after the catch-up settles.
+**Remaining work**: collapse `identify-bots` into the same loop —
+collect the unique-UA set as the parser already iterates rows.  That
+eliminates the last redundant pass and halves the staging-stage CPU.
 
-**Scope**: one new combined import command, retire the three
-individual ones from the orchestrator (keep them as CLI subcommands
+**Scope**: small follow-up — fold the UA collection into the
+import-apache loop, retire identify-bots as a separate CLI subcommand
 for one-off backfills), update the A/B fixtures.  Probably a few
 days, mostly testing.
 

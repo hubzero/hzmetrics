@@ -10,20 +10,27 @@ imported/ after ALL of them succeeded.  That left a window where:
 
 Or worse:
 
-  - import-apache committed both web AND webhits, then
+  - import-apache committed web AND webhits, then
   - process was killed BEFORE moving the source file to imported/
   - retry tried to re-import, hitting the same data again
 
 The fix wraps each source file's import in a single transaction
-guarded by INSERT IGNORE on imported_sources(filename,target).
+guarded by INSERT IGNORE on imported_sources(filename, target).
 Then:
 
   - Crash mid-INSERT → InnoDB rolls back, file stays in daily/, retry
     sees no imported_sources row, imports cleanly.
   - Crash post-COMMIT pre-move → imported_sources row exists, retry
     sees rowcount=0 on INSERT IGNORE, skips data INSERT, retries move.
-  - Per-table independence: web/webhits and userlogin commit on
-    different files; a crash during auth doesn't unwind web.
+  - Per-table independence: web (with its inline-derived webhits)
+    and userlogin commit on different files; a crash during auth
+    doesn't unwind web/webhits.
+
+webhits is no longer a separately-tracked import target — it's
+populated inline by do_import_apache as a derived count of kept rows
+per day, in the same transaction that commits web.  The forget-import
+tests still cover the legacy 'webhits'-target rows that may exist in
+imported_sources on hubs imported before the refactor.
 
 These tests pin the new semantics and the forget-import escape hatch
 that lets an operator deliberately re-import a file.
@@ -73,10 +80,21 @@ class StructuralTests(unittest.TestCase):
             "def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None)",
             self.src)
 
-    def test_do_import_webhits_accepts_conn_kwarg(self):
-        self.assertIn(
-            "def do_import_webhits(input_file, *, dry_run=False, conn=None)",
-            self.src)
+    def test_webhits_emitted_inline_by_do_import_apache(self):
+        # After the refactor that removed do_import_webhits, webhits
+        # is populated by a per-day counter inside do_import_apache's
+        # filter loop, then INSERTed in the same transaction.  Pin
+        # both the counter wiring and the INSERT call so a future
+        # refactor that breaks the inline path gets caught.
+        self.assertIn("daily_hits[datestamp] += 1", self.src,
+            "do_import_apache must accumulate webhits daily counts inline")
+        self.assertIn("INSERT INTO webhits (datetime, hits)", self.src,
+            "do_import_apache must INSERT webhits rows in the same txn")
+        # The standalone parser must NOT come back as a hidden re-import.
+        self.assertNotIn("def do_import_webhits(", self.src,
+            "do_import_webhits should be removed — webhits is derived "
+            "from web by do_import_apache (inline) and do_rebuild_webhits "
+            "(operator-driven regen)")
 
     def test_atomic_helpers_defined(self):
         self.assertIn("def _import_apache_file_atomic(", self.src)
@@ -277,10 +295,6 @@ class AtomicHelperOrchestrationTests(unittest.TestCase):
             self.calls.append(("do_import_apache", a, kw))
             return 0, 1000, 1500, 501
 
-        def stub_webhits(*a, **kw):
-            self.calls.append(("do_import_webhits", a, kw))
-            return 0, None, None, 30
-
         def stub_auth(*a, **kw):
             self.calls.append(("do_import_auth", a, kw))
             return 0, 9000, 9200, 201
@@ -289,7 +303,6 @@ class AtomicHelperOrchestrationTests(unittest.TestCase):
             self.calls.append(("do_identify_bots", a, kw))
 
         self.hz.do_import_apache  = stub_apache
-        self.hz.do_import_webhits = stub_webhits
         self.hz.do_import_auth    = stub_auth
         self.hz.do_identify_bots  = stub_bots
 
@@ -341,11 +354,15 @@ class AtomicHelperOrchestrationTests(unittest.TestCase):
         self.assertTrue(self.fake_conn.began)
         self.assertTrue(self.fake_conn.committed)
         self.assertFalse(self.fake_conn.rolled_back)
-        # Both apache and webhits ran (first-time path)
+        # Apache importer and identify-bots ran (first-time path).
+        # webhits is no longer a separate call — do_import_apache
+        # emits webhits rows inline via its own daily_hits counter.
         names = [c[0] for c in self.calls]
         self.assertIn("do_import_apache",  names)
         self.assertIn("do_identify_bots",  names)
-        self.assertIn("do_import_webhits", names)
+        self.assertNotIn("do_import_webhits", names,
+            "webhits is now inline in do_import_apache; the standalone "
+            "function was removed in the rebuild-webhits refactor")
         # File moved to imported/
         self.assertFalse(src.exists())
         self.assertTrue((self.hz.HTTPD_IMPORTED / src.name).exists())

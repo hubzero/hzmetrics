@@ -28,7 +28,7 @@ current codebase.  CI runs golden plus defensive mode.
 
 ## What's tested
 
-46 test directories under `tests/ab/port_*`:
+45 test directories under `tests/ab/port_*`:
 
 **Per-port A/B (16):** `port_andmore_usage`, `port_clean_bots`,
 `port_fill_domain`, `port_fill_ipcountry`, `port_fill_user_info`,
@@ -81,7 +81,7 @@ detection across reboot / container restart), `port_month_complete`
 (data-driven month-closed check that gates `logfix-session` to month
 boundary).
 
-**Filter regression guards (7):** `port_dnload_classify` (Python
+**Filter regression guards (6):** `port_dnload_classify` (Python
 `_is_download_url` covers every download-extension and download-path
 shape), `port_dnload_backfill_regex` (SQL-side backfill-dnload regex
 correctly handles literal-dot vs any-char — pins the silent fix in
@@ -91,10 +91,6 @@ citations/browse, and /register empty-Referer crawler-spam regexes),
 import-apache wiring source-grep), `port_crawl_filters_2026`
 (/register Referer-gating + date-bound /events/<old-year>/ filter that
 measures from the log line's datestamp, not date.today()),
-`port_filter_chain` (the shared `_filter_apache_row` helper that both
-do_import_apache and do_import_webhits route through — pins the
-per-row contract and asserts both importers wire into it, so a new
-filter added to one side can't silently drift the other),
 `port_session_split` (1800-second session boundary).
 
 **Window-boundary semantics (1):** `port_window_boundaries` (27
