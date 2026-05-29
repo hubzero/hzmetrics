@@ -5091,6 +5091,15 @@ _SVN_RE       = re.compile(r'/projects/.+?/svn/\!svn/', re.IGNORECASE)
 # happens to share the domain; they contribute no hub-usage signal.
 _PIPERMAIL_RE = re.compile(r'^/pipermail/',        re.IGNORECASE)
 _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
+# /register registration-form crawler probes.  2026-02..05 audit: 629 k
+# hits in 3 months; top 2 UAs hit at 145 k and 100 k distinct IPs with
+# ≈1 hit/IP — the same distributed-bot signature as the MSIE wave, just
+# with current-Chrome UAs.  Empty-Referer gated rather than uncondit-
+# ional: a real human reaching /register arrives via the login redirect
+# or homepage with Referer set, so the gate preserves that ~1 % signal
+# while still dropping the 99 % bot volume.  Matches the safety pattern
+# of /login?return=, /resources/browse?, /citations/browse.
+_REGISTER_RE  = re.compile(r'^/register(?:[/?]|$)', re.IGNORECASE)
 
 # Crawler hits identifiable by URL pattern + empty Referer.  The 2025-05
 # survey found 2.1 M rows in web for that month, of which:
@@ -5110,6 +5119,23 @@ _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
 # slash-variant rows that the no-slash form had been missing.
 _LOGIN_RETURN_RE = re.compile(r'^/login/?\?return=',         re.IGNORECASE)
 _BROWSE_QUERY_RE = re.compile(r'^/resources/browse/?\?',     re.IGNORECASE)
+# /citations/browse — same shape as /resources/browse?: paginated
+# catalog walk + empty Referer.  2026-02..05 audit: 113 k hits, same
+# distributed-bot UAs.  Broader regex (no `?` required) because real
+# users reach the catalog landing page with a Referer set, so the
+# empty-Referer gate alone separates bots from browsers.
+_CITATIONS_BROWSE_RE = re.compile(r'^/citations/browse(?:[/?]|$)', re.IGNORECASE)
+
+# /events/<year> archive walks.  2026-02..05 audit: a uniform ≈17-18 k
+# hits per archive year going back to 2006, all with empty Referer.
+# Real users browse near-current events; a flat hit-rate across 20
+# years of past archives is a systematic crawler walking the index.
+# Filter compares the URL's year against the apache log line's own
+# datestamp year (NOT date.today()) — so a backfill of 2024 logs
+# filters /events/<=2020, matching what a 2024-era operator would
+# have considered "old."  Lookback bound by _EVENTS_ARCHIVE_LOOKBACK_YEARS.
+_EVENTS_ARCHIVE_RE = re.compile(r'^/events/(\d{4})(?:[/?]|$)', re.IGNORECASE)
+_EVENTS_ARCHIVE_LOOKBACK_YEARS = 3
 
 # Pre-2016 Internet Explorer (Trident family).  Functionally extinct
 # from the real-browser population after Microsoft EOL'd IE in 2022, but
@@ -5157,11 +5183,34 @@ def _is_excluded_url(url):
 
 def _is_referer_spam(url, referrer):
     """True iff the row is a crawler hit identifiable by URL pattern +
-    empty Referer.  See _LOGIN_RETURN_RE / _BROWSE_QUERY_RE for the two
-    patterns and the 2025-05 measurement that justified them."""
+    empty Referer.  See _LOGIN_RETURN_RE / _BROWSE_QUERY_RE /
+    _CITATIONS_BROWSE_RE / _REGISTER_RE for the patterns and the
+    2025-05 / 2026-02 measurements that justified them."""
     if referrer and referrer != '-':
         return False
-    return bool(_LOGIN_RETURN_RE.match(url) or _BROWSE_QUERY_RE.match(url))
+    return bool(
+        _LOGIN_RETURN_RE.match(url)
+        or _BROWSE_QUERY_RE.match(url)
+        or _CITATIONS_BROWSE_RE.match(url)
+        or _REGISTER_RE.match(url)
+    )
+
+
+def _is_archive_events_crawl(url, datestamp, referrer):
+    """True iff the row is a crawler hit to /events/<old-year> with
+    empty Referer.  Year cutoff is the log line's own datestamp year
+    minus _EVENTS_ARCHIVE_LOOKBACK_YEARS — see _EVENTS_ARCHIVE_RE."""
+    if referrer and referrer != '-':
+        return False
+    m = _EVENTS_ARCHIVE_RE.match(url)
+    if not m:
+        return False
+    try:
+        url_year = int(m.group(1))
+        log_year = int(datestamp[:4])
+    except (ValueError, TypeError):
+        return False
+    return url_year <= log_year - _EVENTS_ARCHIVE_LOOKBACK_YEARS
 
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     """Parse an apache staged log file and INSERT eligible rows into
@@ -5251,6 +5300,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     skipped_url = 0
     skipped_ref = 0
     skipped_msie = 0
+    skipped_events = 0
     dnload_set = 0  # counter for the dnload flag set per row
     # Track distinct YYYY-MM seen in this file.  One staged file should
     # normally contain a single day's logs (so 1 month, or 2 across a
@@ -5377,6 +5427,9 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                     if _is_referer_spam(url, referrer):
                         skipped_ref += 1
                         continue
+                    if _is_archive_events_crawl(url, datestamp, referrer):
+                        skipped_events += 1
+                        continue
 
                     dnload = 1 if _is_download_url(url) else 0
                     if dnload:
@@ -5409,7 +5462,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
         f"eligible={len(rows_buf) if dry_run else inserted}; "
         f"skipped: status={skipped_status} filter={skipped_filter} "
         f"bot={skipped_bot} url={skipped_url} ref={skipped_ref} "
-        f"msie={skipped_msie}; "
+        f"msie={skipped_msie} events={skipped_events}; "
         f"dnload-flagged={dnload_set}")
 
     # Spillover detection: a staged daily file containing rows from >2

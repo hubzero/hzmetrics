@@ -1,10 +1,13 @@
 """Regression tests for the empty-Referer crawler-pattern filter.
 
-Background: import-apache drops a row when its URL matches one of two
-patterns AND the Referer header is empty/dash/null:
+Background: import-apache drops a row when its URL matches one of
+these patterns AND the Referer header is empty/dash/null:
 
   - /login?return=<base64>  (auth-redirect spam)
   - /resources/browse?<q>   (catalog crawl)
+  - /citations/browse...    (citations catalog walk; 2026-02 audit:
+                             113 k hits in 3 months from the same
+                             distributed-bot UA family)
 
 Slash variants (`/login/?return=`, `/resources/browse/?...`) route to
 the same CMS actions and are hit by the same crawlers, so the regexes
@@ -66,6 +69,35 @@ class IsRefererSpamTests(unittest.TestCase):
             "/resources/browse/?limit=50&sortby=date&tag=cig",
             referrer=""))
 
+    # --- /citations/browse positive cases ----------------------------
+
+    def test_citations_browse_no_slash_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/citations/browse", referrer=""))
+
+    def test_citations_browse_with_slash_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/citations/browse/", referrer=""))
+
+    def test_citations_browse_with_query_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/citations/browse?page=3&sort=year", referrer=""))
+
+    def test_citations_browse_dash_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/citations/browse?page=3", referrer="-"))
+
+    def test_citations_browse_with_referer_is_not_spam(self):
+        # Real user reached the catalog via an on-site link — keep.
+        self.assertFalse(self.hz._is_referer_spam(
+            "/citations/browse?page=3",
+            referrer="https://geodynamics.org/"))
+
+    def test_citations_subpath_is_not_spam(self):
+        # /citations/<id> (specific record) — never filter.
+        self.assertFalse(self.hz._is_referer_spam(
+            "/citations/12345", referrer=""))
+
     # --- negative cases: real users with Referer ---------------------
 
     def test_login_with_referer_is_not_spam(self):
@@ -116,6 +148,15 @@ class IsRefererSpamTests(unittest.TestCase):
     def test_browse_re_accepts_both_slash_variants(self):
         self.assertTrue(self.hz._BROWSE_QUERY_RE.match("/resources/browse?tag=x"))
         self.assertTrue(self.hz._BROWSE_QUERY_RE.match("/resources/browse/?tag=x"))
+
+    def test_citations_browse_re_accepts_bare_and_query_variants(self):
+        self.assertTrue(self.hz._CITATIONS_BROWSE_RE.match("/citations/browse"))
+        self.assertTrue(self.hz._CITATIONS_BROWSE_RE.match("/citations/browse/"))
+        self.assertTrue(self.hz._CITATIONS_BROWSE_RE.match("/citations/browse?x=1"))
+        self.assertTrue(self.hz._CITATIONS_BROWSE_RE.match("/citations/browse/?x=1"))
+        # Specific-citation paths must NOT match.
+        self.assertFalse(self.hz._CITATIONS_BROWSE_RE.match("/citations/12345"))
+        self.assertFalse(self.hz._CITATIONS_BROWSE_RE.match("/citations/browselook"))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ tests=(
     port_bootstrap
     port_cli_contracts
     port_cmd_run
+    port_crawl_filters_2026
     port_decisions
     port_discovery
     port_dnload_backfill_regex
