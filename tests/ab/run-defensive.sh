@@ -18,6 +18,7 @@ tests=(
     port_dnload_classify
     port_dryrun
     port_empty_input
+    port_filter_chain
     port_fuzz
     port_idempotency
     port_import_atomic

@@ -1,37 +1,18 @@
 #!/bin/bash
-# A/B compare legacy xlogimport_webhits.php vs new hzmetrics.py import-webhits.
+# do_import_webhits now applies the same shared filter chain as
+# do_import_apache (see _filter_apache_row in hzmetrics.py).  This is
+# a deliberate divergence from legacy xlogimport_webhits.php, which
+# only applied the exclude_list substring filter — the 2026-02 audit
+# found ~30 % of bot rows that get dropped from `web` were being
+# counted in `webhits`, inflating the dashboard's "Web server hits"
+# cell (summary_misc_vals rowid=8) relative to every other cell in
+# the same row-set (sessions, downloads, etc., derived from filtered
+# web rows).
+#
+# The legacy A/B that previously lived here is retired: the new code
+# is intentionally a strict subset of legacy output.  The golden TSV
+# is the canonical expected output now — defer to run_golden.sh.  The
+# shared filter chain itself is pinned by tests/ab/port_filter_chain.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AB="$(cd "$DIR/.." && pwd)"
-. "$AB/conftest.sh"
-
-OUT="$DIR/_out"
-mkdir -p "$OUT"
-LOGFILE="$AB/fixtures/sample_apache.log"
-
-run_side() {
-    local label="$1" invoker="$2"; shift 2
-    echo
-    echo "=== $label: $* ==="
-    reset_test_dbs
-    "$invoker" "$@" > "$OUT/${label}_stdout.log" 2>&1 || {
-        echo "  $label invocation failed; log:"
-        cat "$OUT/${label}_stdout.log"
-        return 1
-    }
-    dump_full webhits "$METRICS_DB" "datetime" > "$OUT/${label}_webhits.tsv"
-    echo "  wrote $OUT/${label}_webhits.tsv"
-}
-
-run_side legacy run_legacy_php "import/xlogimport_webhits.php" "$LOGFILE"
-run_side new    run_new        import-webhits                  "$LOGFILE"
-
-echo
-echo "=== diff: legacy vs new ==="
-if diff -u "$OUT/legacy_webhits.tsv" "$OUT/new_webhits.tsv"; then
-    echo "PASS"
-    exit 0
-else
-    echo "FAIL"
-    exit 1
-fi
+exec "$DIR/run_golden.sh"

@@ -4698,8 +4698,7 @@ _ip_excluded = _search_array
 
 def do_import_webhits(input_file, *, dry_run=False, conn=None):
     """Aggregate per-day hit counts from an apache staged log and
-    INSERT one row per day into metrics.webhits.  Faithful port of
-    xlogimport_webhits.php.
+    INSERT one row per day into metrics.webhits.
 
     If `conn` is provided, the INSERTs run inside the caller's
     transaction (caller owns commit/rollback) and the function
@@ -4708,11 +4707,15 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
     None — forget-import on webhits records logs a warning instead of
     auto-deleting.
 
-    Counted rows: status=200, bytes>0, method ∈ {GET,POST}, IP/UA/URL
-    not matched by their respective exclude_list filters (substring,
-    case-insensitive).  URL is normalised by collapsing repeated '/'.
+    Counted rows: same filter chain as do_import_apache, via the
+    shared _filter_apache_row helper.  Sharing the chain keeps the
+    daily-hit aggregate consistent with the filtered `web` row counts;
+    summarize reads SUM(hits) from this table for the "Web server
+    hits" cell (summary_misc_vals rowid=8).  Diverging here would
+    inflate that cell relative to every other dashboard cell — see
+    the helper's docstring for the 2026-02 audit history.
 
-    Note: webhits has no unique key; original PHP uses plain INSERT
+    Note: webhits has no unique key; legacy PHP uses plain INSERT
     (not INSERT IGNORE), so re-running this on overlapping content adds
     duplicate (datetime, hits) rows.  This port preserves that semantic.
     """
@@ -4723,8 +4726,7 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
         log.info(msg)
         return (2, None, None, 0) if conn is not None else 2
 
-    # Pull filter lists — use the caller's conn if we have one,
-    # otherwise a short-lived one.
+    # Pull filter lists + bot_useragents — same shape as do_import_apache.
     def _load_filters(cur):
         cur.execute("SELECT filter FROM exclude_list WHERE type='ip'")
         ipf = [r[0] for r in cur.fetchall()]
@@ -4732,22 +4734,25 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
         uaf = [r[0] for r in cur.fetchall()]
         cur.execute("SELECT filter FROM exclude_list WHERE type='url'")
         urlf = [r[0] for r in cur.fetchall()]
-        return ipf, uaf, urlf
+        cur.execute("SELECT useragent FROM bot_useragents")
+        b = {r[0] for r in cur.fetchall()}
+        return ipf, uaf, urlf, b
 
     if conn is not None:
         with conn.cursor() as cur:
-            ip_filters, ua_filters, url_filters = _load_filters(cur)
+            ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
     else:
         _fc = _open_db(metrics_db)
         try:
             with _fc.cursor() as cur:
-                ip_filters, ua_filters, url_filters = _load_filters(cur)
+                ip_filters, ua_filters, url_filters, bot_uas = _load_filters(cur)
         finally:
             _fc.close()
 
     daily_hits = defaultdict(int)
     total = 0
     unrec = 0
+    skipped = 0
 
     with _open_input(input_file) as src:
         for line in src:
@@ -4760,6 +4765,7 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
                 return_code = m.group(7)
                 bytes_str = m.group(8)
                 ip = m.group(9)
+                referrer = m.group(10)
                 useragent = m.group(11)
             else:
                 m = _APACHE_PAT_OLD.match(line)
@@ -4771,6 +4777,7 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
                 return_code = m.group(6)
                 bytes_str = m.group(7)
                 ip = m.group(8)
+                referrer = m.group(9)
                 useragent = m.group(10)
 
             # Parse method/url/protocol — PHP edge case: when only one token in
@@ -4783,28 +4790,20 @@ def do_import_webhits(input_file, *, dry_run=False, conn=None):
                 method = 'GET'
             url = _SLASH_COLLAPSE.sub('/', url)
 
-            # Filter chain
-            if return_code != "200":
+            keep, _reason = _filter_apache_row(
+                return_code=return_code, bytes_str=bytes_str, method=method,
+                ip=ip, useragent=useragent, url=url, referrer=referrer,
+                datestamp=datestamp,
+                ip_filters=ip_filters, ua_filters=ua_filters,
+                url_filters=url_filters, bot_uas=bot_uas)
+            if not keep:
+                skipped += 1
                 continue
-            try:
-                if int(bytes_str) <= 0:
-                    continue
-            except ValueError:
-                continue
-            if method != "GET" and method != "POST":
-                continue
-            if _search_array(ip, ip_filters):
-                continue
-            if _search_array(useragent, ua_filters):
-                continue
-            if _search_array(url, url_filters):
-                continue
-
             daily_hits[datestamp] += 1
 
     log.info(f"[import-webhits] parsed {total} line(s); "
         f"counted {sum(daily_hits.values())} hit(s) across {len(daily_hits)} day(s); "
-        f"unrecognized = {unrec}")
+        f"skipped {skipped}; unrecognized = {unrec}")
 
     if dry_run or not daily_hits:
         if dry_run:
@@ -5251,6 +5250,59 @@ def _is_archive_events_crawl(url, datestamp, referrer):
         return False
     return url_year <= log_year - _EVENTS_ARCHIVE_LOOKBACK_YEARS
 
+
+def _filter_apache_row(*, return_code, bytes_str, method, ip, useragent, url,
+                       referrer, datestamp,
+                       ip_filters, ua_filters, url_filters, bot_uas):
+    """Filter an already-parsed apache log row.  Returns (keep, reason).
+
+    `reason` is one of 'status', 'filter', 'bot', 'msie', 'url', 'ref',
+    'events' on drop, or None on keep.
+
+    Shared between do_import_apache (which uses `reason` to bucket the
+    per-source-file skip counters) and do_import_webhits (which only
+    needs the keep/drop signal but must agree on the boundary so its
+    per-day hit aggregates stay consistent with the filtered `web`
+    row counts).
+
+    Why this is shared, not duplicated: the 2026-02 audit found
+    `webhits` was applying only the legacy `exclude_list` filters,
+    while `web` had grown the MSIE / /register / /citations/browse
+    / /events/<old> filters on top.  Summarize reads SUM(hits) from
+    webhits for the dashboard's "Web server hits" cell (rowid=8 of
+    summary_misc_vals — see xlogfix_summary.php parity), so the
+    drift inflated that cell relative to every other cell in the
+    same row-set (sessions, downloads, etc.) which derive from
+    websessions built from filtered web rows.  Sharing the filter
+    chain makes drift structurally impossible — a new filter added
+    to one importer is automatically applied to the other."""
+    if return_code != "200":
+        return False, "status"
+    try:
+        if int(bytes_str) <= 0:
+            return False, "status"
+    except ValueError:
+        return False, "status"
+    if method != "GET" and method != "POST":
+        return False, "status"
+    if (_search_array(ip, ip_filters)
+            or _search_array(useragent, ua_filters)
+            or _search_array(url, url_filters)):
+        return False, "filter"
+    if useragent and useragent != '-' and useragent in bot_uas:
+        return False, "bot"
+    if (datestamp >= _MSIE_FILTER_FROM
+            and useragent and useragent != '-'
+            and _MSIE_TRIDENT_RE.search(useragent)):
+        return False, "msie"
+    if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
+        return False, "url"
+    if _is_referer_spam(url, referrer):
+        return False, "ref"
+    if _is_archive_events_crawl(url, datestamp, referrer):
+        return False, "events"
+    return True, None
+
 def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     """Parse an apache staged log file and INSERT eligible rows into
     metrics.web.  Faithful port of xlogimport_apache.php (the 1018cc2^
@@ -5422,52 +5474,30 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
                         method = 'GET'
                     url = _SLASH_COLLAPSE.sub('/', url)
 
-                    # Filter chain — same order as PHP
-                    if ret_code != "200":
-                        skipped_status += 1
-                        continue
-                    try:
-                        if int(bytes_str) <= 0:
+                    # Filter chain — shared with do_import_webhits via
+                    # _filter_apache_row so the two importers never drift
+                    # (see the helper's docstring for the audit history).
+                    keep, reason = _filter_apache_row(
+                        return_code=ret_code, bytes_str=bytes_str, method=method,
+                        ip=ip, useragent=useragent, url=url, referrer=referrer,
+                        datestamp=datestamp,
+                        ip_filters=ip_filters, ua_filters=ua_filters,
+                        url_filters=url_filters, bot_uas=bot_uas)
+                    if not keep:
+                        if reason == "status":
                             skipped_status += 1
-                            continue
-                    except ValueError:
-                        skipped_status += 1
-                        continue
-                    if method != "GET" and method != "POST":
-                        skipped_status += 1
-                        continue
-                    if _search_array(ip, ip_filters) or \
-                       _search_array(useragent, ua_filters) or \
-                       _search_array(url, url_filters):
-                        skipped_filter += 1
-                        continue
-                    if useragent and useragent != '-' and useragent in bot_uas:
-                        skipped_bot += 1
-                        continue
-
-                    # MSIE 7-11 / Trident UAs — extinct in real browsers
-                    # post-2022, used only by a distributed bot.  See the
-                    # _MSIE_TRIDENT_RE comment block for the empirical
-                    # basis.  Date-bound so an archival backfill of
-                    # pre-EOL access logs isn't retroactively filtered.
-                    if (datestamp >= _MSIE_FILTER_FROM
-                            and useragent and useragent != '-'
-                            and _MSIE_TRIDENT_RE.search(useragent)):
-                        skipped_msie += 1
-                        continue
-
-                    # URL include: excluded by suffix/path UNLESS under /resources/
-                    if _is_excluded_url(url) and not _RESOURCES_RE.match(url):
-                        skipped_url += 1
-                        continue
-                    # Crawl-spam: /login?return=<x> or /resources/browse?<q>
-                    # with empty Referer (deliberate divergence from legacy
-                    # — legacy doesn't see Referer and so couldn't filter).
-                    if _is_referer_spam(url, referrer):
-                        skipped_ref += 1
-                        continue
-                    if _is_archive_events_crawl(url, datestamp, referrer):
-                        skipped_events += 1
+                        elif reason == "filter":
+                            skipped_filter += 1
+                        elif reason == "bot":
+                            skipped_bot += 1
+                        elif reason == "msie":
+                            skipped_msie += 1
+                        elif reason == "url":
+                            skipped_url += 1
+                        elif reason == "ref":
+                            skipped_ref += 1
+                        elif reason == "events":
+                            skipped_events += 1
                         continue
 
                     dnload = 1 if _is_download_url(url) else 0
