@@ -59,8 +59,8 @@ If the host has been down for a while, log files just accumulate in
 `/var/log/hubzero/daily/`.  Once `tick` resumes, the orchestrator
 detects the backlog, flips itself into `catchup` mode, and drains
 months oldest-first — one per invocation — using a per-month decision
-matrix that picks between fresh import, wipe+reimport, or DB-only
-resummarize.  After catchup, a `rebuild` phase walks every affected
+matrix that picks between fresh import, additive import + reset-derived,
+or DB-only resummarize.  After catchup, a `rebuild` phase walks every affected
 month with all six period codes to fix long-window cells.  No manual
 intervention required for routine backfill; see
 [architecture.md → Catchup orchestration](architecture.md#catchup-orchestration-state-machine).

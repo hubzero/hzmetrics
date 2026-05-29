@@ -28,7 +28,7 @@ current codebase.  CI runs golden plus defensive mode.
 
 ## What's tested
 
-44 test directories under `tests/ab/port_*`:
+45 test directories under `tests/ab/port_*`:
 
 **Per-port A/B (16):** `port_andmore_usage`, `port_clean_bots`,
 `port_fill_domain`, `port_fill_ipcountry`, `port_fill_user_info`,
@@ -81,13 +81,17 @@ detection across reboot / container restart), `port_month_complete`
 (data-driven month-closed check that gates `logfix-session` to month
 boundary).
 
-**Filter regression guards (4):** `port_dnload_classify` (Python
+**Filter regression guards (6):** `port_dnload_classify` (Python
 `_is_download_url` covers every download-extension and download-path
 shape), `port_dnload_backfill_regex` (SQL-side backfill-dnload regex
 correctly handles literal-dot vs any-char — pins the silent fix in
-db5d8ba), `port_referer_spam` (login/?return= and resources/browse?
-crawler-spam regex), `port_session_split` (1800-second session
-boundary).
+db5d8ba), `port_referer_spam` (login/?return=, resources/browse?,
+citations/browse, and /register empty-Referer crawler-spam regexes),
+`port_msie_filter` (date-bound MSIE-Trident UA regex + watermark + the
+import-apache wiring source-grep), `port_crawl_filters_2026`
+(/register Referer-gating + date-bound /events/<old-year>/ filter that
+measures from the log line's datestamp, not date.today()),
+`port_session_split` (1800-second session boundary).
 
 **Window-boundary semantics (1):** `port_window_boundaries` (27
 assertions: period range arithmetic across month / quarter / year /

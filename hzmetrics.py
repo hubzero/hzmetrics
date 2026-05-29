@@ -8229,9 +8229,9 @@ def _record_rebuild_cascade_from(month: str, state: dict, dry_run: bool) -> None
     stored value (or unset).
 
     `rebuild_cascade_from` is the oldest month catchup IMPORTED new base
-    data into during the current catchup cycle.  Only the import / wipe
-    branches call this — resummarize-only months change no base rows and
-    so invalidate no downstream long-window cells.  At the catchup→rebuild
+    data into during the current catchup cycle.  Only the import branches
+    call this — resummarize-only months change no base rows and so
+    invalidate no downstream long-window cells.  At the catchup→rebuild
     handoff this becomes the rebuild walk's starting cursor: the walk must
     cover [cascade_from, prev] because new data at `cascade_from` stales
     the all-time (period-14) and rolling (period-12/13) windows of every
