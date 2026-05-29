@@ -55,7 +55,10 @@ class FakeDB:
         re.IGNORECASE,
     )
     _ORPHAN_RE = re.compile(
-        r"SELECT 1 FROM \S+\.web w\s+WHERE w\.datetime >=.*NOT EXISTS",
+        # Matches the two NOT-EXISTS probes inside month_has_orphaned_stamps:
+        # the `web w` and `toolstart t` variants.  Both compare a base-table
+        # sessionid stamp against websessions.id.
+        r"SELECT 1 FROM \S+\.(?:web|toolstart) \w\s+WHERE \w\.datetime >=.*NOT EXISTS",
         re.IGNORECASE | re.DOTALL,
     )
     _INCOMPLETE_RE = re.compile(
@@ -141,13 +144,19 @@ class CmdRunTestBase(unittest.TestCase):
         self.hz.acquire_lock = lambda: True
         self.hz.release_lock = lambda: None
 
-        # Stub the heavy workers — record calls but do nothing.
+        # Stub the heavy workers — record calls.  Default return is 0 so
+        # callers that sum the result (e.g. _import_month → do_import_day
+        # returning row counts) get a valid int.  Tests that need a
+        # specific non-zero return value (e.g. crash-recovery: file
+        # already imported → 0) override self.hz.do_import_day after
+        # setUp.
         self.calls: list = []
-        def record(name):
+        def record(name, returns=0):
             def f(*a, **kw):
                 self.calls.append((name, a, kw))
+                return returns
             return f
-        self.hz.do_import_day  = record("do_import_day")
+        self.hz.do_import_day  = record("do_import_day", returns=1)
         self.hz.do_analyze     = record("do_analyze")
         self.hz.do_summarize   = record("do_summarize")
         self.hz._reset_month_for_resummarize = record("_reset_month_for_resummarize")
@@ -429,6 +438,26 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.hz.cmd_run(self._args())
         self.assertEqual(self.state.values.get("rebuild_cascade_from", ""), "",
                          "resummarize-only must not trigger an invalidation cascade")
+
+    def test_source_and_data_with_zero_new_rows_skips_cascade_marker(self):
+        # Crash-recovery scenario: source file is back in daily/ but
+        # its `imported_sources` row is still present (atomic helper
+        # committed the row but crashed before move-to-imported/).  The
+        # atomic helper re-runs idempotently, inserts ZERO new rows,
+        # do_import_day returns 0.  Cascade marker must NOT be lowered
+        # — no new base data means no downstream invalidation.
+        self._touch_source("2022-06", "15")
+        self.fakedb.base_table_rows[("2022-06", "web")] = True
+        # Override the default stub to simulate the no-op import.
+        def import_day_noop(*a, **kw):
+            self.calls.append(("do_import_day", a, kw))
+            return 0
+        self.hz.do_import_day = import_day_noop
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values.get("rebuild_cascade_from", ""), "",
+                         "zero-insert crash-recovery must not lower the "
+                         "cascade marker — the rebuild walk it triggers "
+                         "would be wasted work across years of months")
 
     def test_cascade_origin_keeps_oldest_imported_month(self):
         # _record_rebuild_cascade_from only lowers, never raises.

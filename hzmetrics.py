@@ -654,27 +654,47 @@ def month_has_data(month_str: str) -> bool:
 
 
 def month_has_orphaned_stamps(month_str: str) -> bool:
-    """True iff any `web` row in this month carries a `sessionid` stamp
-    that doesn't reference an extant `websessions.id`.  Surfaces the
-    cleanup landmine: wiping websessions without resetting web.sessionid
-    leaves ghost stamps that the next logfix-session subsequently skips
-    (its predicate is `WHERE sessionid IS NULL OR sessionid = '0'`),
-    so months end up with vastly fewer sessions than the data warrants.
+    """True iff any `web` OR `toolstart` row in this month carries a
+    `sessionid` stamp that doesn't reference an extant `websessions.id`.
+    Surfaces the cleanup landmine: wiping websessions without resetting
+    web.sessionid (or the tool-session stamps in toolstart) leaves
+    ghost stamps that the next logfix-session subsequently skips (its
+    predicate is `WHERE sessionid IS NULL OR sessionid = '0'`), so
+    months end up with vastly fewer sessions than the data warrants.
 
-    Cheap LIMIT 1 probe — uses the sessionid index on web.  Called by
-    the catchup decision matrix to force a reset-and-resummarize on
-    any month whose derived tables have drifted from `web`."""
+    Probes both base tables that logfix-session stamps: `web` (every
+    websessions-emit UPDATEs the matching event rows) and `toolstart`
+    (the _iphost_jobs pass stamps tool-launch rows for the period-3
+    sessions metric).  Web-only checking would miss a toolstart drift
+    if the safety net is ever asked to catch a future invariant break.
+
+    Cheap LIMIT 1 probes per side — both use the sessionid index.
+    Called by the catchup decision matrix to force a
+    reset-and-resummarize on any month whose derived tables have
+    drifted from the base tables."""
     _, _, _, metrics_db = db_credentials()
     y, m = int(month_str[:4]), int(month_str[5:7])
     start = f"{month_str}-01"
     end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
-    return bool(mysql_scalar(
+    if mysql_scalar(
         f"SELECT 1 FROM {metrics_db}.web w "
         f"WHERE w.datetime >= %s AND w.datetime < %s "
         f"  AND w.sessionid IS NOT NULL AND w.sessionid <> '0' "
         f"  AND NOT EXISTS ("
         f"    SELECT 1 FROM {metrics_db}.websessions ws "
         f"    WHERE ws.id = w.sessionid"
+        f"  ) "
+        f"LIMIT 1;",
+        (start, end),
+    ):
+        return True
+    return bool(mysql_scalar(
+        f"SELECT 1 FROM {metrics_db}.toolstart t "
+        f"WHERE t.datetime >= %s AND t.datetime < %s "
+        f"  AND t.sessionid IS NOT NULL AND t.sessionid <> '0' "
+        f"  AND NOT EXISTS ("
+        f"    SELECT 1 FROM {metrics_db}.websessions ws "
+        f"    WHERE ws.id = t.sessionid"
         f"  ) "
         f"LIMIT 1;",
         (start, end),
@@ -2478,7 +2498,7 @@ def _move_to_imported(src_path: Path, imported_dir: Path) -> None:
     log.info(f"  -> {dst}")
 
 
-def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
+def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> int:
     """Atomic per-file apache-log import:
       1. Stream-decompress source → STAGED_APACHE
       2. Open conn, BEGIN
@@ -2492,13 +2512,18 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
     Crash anywhere in 2-5 → InnoDB rolls back, file stays in daily/,
     next tick re-imports cleanly.  Crash between 5 and 6 → next tick
     sees imported_sources rowcount=0 → skips data, retries the move.
+
+    Returns the number of rows inserted into `web` on this call (0 if
+    the file was already committed by a prior run — crash-recovery
+    path).  Callers use this to gate `rebuild_cascade_from`: no new
+    base data means no downstream long-window invalidation.
     """
     filename = src_path.name
     HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
 
     if dry_run:
         log.info(f"[import-apache-atomic] [dry-run] {filename}")
-        return
+        return 0
 
     # Stage the file (overwrites any prior staging — idempotent).
     with open(STAGED_APACHE, "wb") as out:
@@ -2511,6 +2536,7 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
     # database= here, MariaDB returns "(1046) No database selected" on
     # the first SELECT and the entire transaction rolls back without
     # importing the file or writing an imported_sources marker.
+    web_inserted = 0
     _, _, _, metrics_db = db_credentials()
     conn = _open_db(metrics_db)
     try:
@@ -2522,6 +2548,7 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
             if web_first:
                 _rc, pk_start, pk_end, n = do_import_apache(
                     str(STAGED_APACHE), conn=conn, dry_run=False)
+                web_inserted = n or 0
                 if pk_start is not None:
                     _, _, _, mdb = db_credentials()
                     cur.execute(
@@ -2564,22 +2591,26 @@ def _import_apache_file_atomic(src_path: Path, dry_run: bool = False) -> None:
     except OSError as e:
         log.warning(f"[import-apache-atomic] data committed for {filename} "
                     f"but move failed: {e}; next tick will retry the move")
+    return web_inserted
 
 
-def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> None:
+def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> int:
     """Atomic per-file cmsauth-log import.  Same shape as
-    _import_apache_file_atomic but for userlogin."""
+    _import_apache_file_atomic but for userlogin.  Returns the number
+    of rows inserted into `userlogin` on this call (0 on dry-run or
+    crash-recovery skip)."""
     filename = src_path.name
     HZ_METRICS_STAGING.mkdir(parents=True, exist_ok=True)
 
     if dry_run:
         log.info(f"[import-auth-atomic] [dry-run] {filename}")
-        return
+        return 0
 
     with open(STAGED_AUTH, "wb") as out:
         _stream_decompress(src_path, out)
     log.info(f"[import-auth-atomic] staged {filename} -> {STAGED_AUTH}")
 
+    ul_inserted = 0
     # Match the same default-schema requirement as the apache helper —
     # do_import_auth's SELECTs and INSERTs are unqualified.
     _, _, _, metrics_db = db_credentials()
@@ -2592,6 +2623,7 @@ def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> None:
             if ul_first:
                 _rc, pk_start, pk_end, n = do_import_auth(
                     str(STAGED_AUTH), conn=conn, dry_run=False)
+                ul_inserted = n or 0
                 if pk_start is not None:
                     _, _, _, mdb = db_credentials()
                     cur.execute(
@@ -2615,14 +2647,19 @@ def _import_auth_file_atomic(src_path: Path, dry_run: bool = False) -> None:
     except OSError as e:
         log.warning(f"[import-auth-atomic] data committed for {filename} "
                     f"but move failed: {e}; next tick will retry the move")
+    return ul_inserted
 
 
-def do_import_day(date_str, dry_run=False):
+def do_import_day(date_str, dry_run=False) -> int:
     """Per-source-file atomic import for one day.  Each source file is
     its own commit unit: a partial import rolls back, file stays in
     daily/, next tick re-imports cleanly.  A successful import that
     crashes between COMMIT and the move-to-imported/ step is handled
-    by the imported_sources UNIQUE constraint on retry."""
+    by the imported_sources UNIQUE constraint on retry.
+
+    Returns the total number of base-table rows inserted across web
+    and userlogin on this call — 0 if every source file was already
+    committed by a prior run (crash-recovery / mark-dirty re-tick)."""
     with _timed_stage(f"import-day {date_str}"):
         access  = _source_files_matching("access", date_str)
         cmsauth = _source_files_matching("auth",   date_str)
@@ -2634,12 +2671,14 @@ def do_import_day(date_str, dry_run=False):
                 log.info(f"    [dry-run] WARNING: no access log found for {date_str}")
             if not cmsauth:
                 log.info(f"    [dry-run] WARNING: no cmsauth log found for {date_str}")
-            return
+            return 0
 
+        inserted = 0
         for src in access:
-            _import_apache_file_atomic(src, dry_run=dry_run)
+            inserted += _import_apache_file_atomic(src, dry_run=dry_run)
         for src in cmsauth:
-            _import_auth_file_atomic(src, dry_run=dry_run)
+            inserted += _import_auth_file_atomic(src, dry_run=dry_run)
+        return inserted
 
 
 def cmd_fetch_logs(args):
@@ -8123,16 +8162,24 @@ def cmd_resolve_dns(args):
 _CATCHUP_PERIODS: tuple = (1,)  # period=1 only: this-month cells, self-contained
 
 
-def _import_month(month_str: str, dry_run: bool) -> None:
+def _import_month(month_str: str, dry_run: bool) -> int:
     """Import every pending day in `month_str` via do_import_day.  Days
     that aren't pending (because they're already in imported/ or simply
     don't exist) are silently skipped — do_import_day itself is a no-op
-    when its source files aren't found."""
+    when its source files aren't found.
+
+    Returns total base-table rows inserted across the whole month.
+    Crash-recovery re-ticks (where every source file is already
+    committed in `imported_sources`) return 0 — the caller uses that
+    signal to skip lowering `rebuild_cascade_from` and the cascade
+    walk that follows."""
     days = pending_days_for_month(month_str)
     log.info(f"[import] {month_str}: {len(days)} day(s) pending")
+    inserted = 0
     for date_str in days:
         log.info(f"--- {date_str} ---")
-        do_import_day(date_str, dry_run)
+        inserted += do_import_day(date_str, dry_run)
+    return inserted
 
 
 def _do_normal_tick(today_str: str, prev: str, today_date: str,
@@ -8318,20 +8365,26 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     if has_source and has_data:
         log.info(f"[catchup] {target}: source ✓ data ✓ — "
                  f"importing pending files + resetting derived state")
-        _import_month(target, dry_run)
+        inserted = _import_month(target, dry_run)
         # Reset derived state AFTER import so logfix-session in
         # do_analyze recomputes websessions over the combined (existing
         # + newly imported) base rows.  Base tables are untouched.
         _reset_month_for_resummarize(target, dry_run=dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
-        _record_rebuild_cascade_from(target, state, dry_run)
+        # Only lower the cascade marker if NEW base data landed.  A
+        # crash-recovery re-tick where every file in `imported_sources`
+        # already committed inserts 0 — re-summarizing without new
+        # base rows invalidates nothing downstream.
+        if inserted > 0:
+            _record_rebuild_cascade_from(target, state, dry_run)
     elif has_source:
         log.info(f"[catchup] {target}: source ✓ data ✗ — fresh import")
-        _import_month(target, dry_run)
+        inserted = _import_month(target, dry_run)
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
-        _record_rebuild_cascade_from(target, state, dry_run)
+        if inserted > 0:
+            _record_rebuild_cascade_from(target, state, dry_run)
     elif has_data:
         if needs_reset:
             why = []
