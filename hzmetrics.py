@@ -7018,15 +7018,46 @@ def do_logfix_session(month=None, *, dry_run=False):
     conn_read  = _open_db(metrics_db)
     conn_write = _open_db(metrics_db)
 
+    # Batch session emits inside explicit transactions so each set of
+    # writes commits with one redo-log fsync rather than one per
+    # statement.  Profile on a fresh 11.7 M-row month (2026-02) showed
+    # logfix-session at 7.6 h with autocommit-per-emit; the cost was
+    # dominated by ~20 M individual fsyncs, not by the work itself.
+    #
+    # Idempotency / safety: a session is only emitted AFTER its end is
+    # detected, so the in-flight session state lives in Python only —
+    # nothing partial ever reaches the DB.  The transaction boundary
+    # therefore falls cleanly between fully-emitted sessions:
+    #   - mid-batch crash: InnoDB rolls back the uncommitted transaction;
+    #     those sessions never existed; on re-run the SELECT filter
+    #     `(sessionid = '0' OR sessionid IS NULL)` re-processes their
+    #     web rows from scratch.
+    #   - INSERT IGNORE on websessions is belt-and-suspenders against
+    #     any s_id collision across re-runs (s_id starts from current
+    #     MAX(id) at each run, so committed sessions always sit below
+    #     re-run s_ids — collisions only happen if a re-run starts
+    #     while a crashed transaction's uncommitted rows haven't yet
+    #     been visible-rolled-back, which InnoDB precludes).
+    #   - month_has_orphaned_stamps() (already used by catchup) still
+    #     catches drift if any future code path violates this invariant.
+    _LOGFIX_TXN_BATCH = 500
+    conn_write.autocommit(False)
+
     total_sessions = 0
     total_events   = 0
     total_jobs     = 0
+    sessions_in_txn = 0
 
     try:
         with conn_write.cursor() as cur:
             cur.execute("SELECT MAX(id) FROM websessions")
             row = cur.fetchone()
             s_id = int(row[0]) if row and row[0] else 0
+        # The MAX(id) probe above opened an implicit transaction;
+        # commit it so we start the batch loop on a clean transaction
+        # boundary (avoids a stale read snapshot if anything else
+        # touched websessions between probe and emit).
+        conn_write.commit()
 
         # Session state spans weeks: Perl declares state vars at script scope
         # so an in-flight session at the end of one week can be flushed by an
@@ -7096,6 +7127,13 @@ def do_logfix_session(month=None, *, dry_run=False):
                         week_events   += len(s_events)
                         total_jobs    += n_jobs
                         s_datetime = None
+                        # Commit at the session boundary, never mid-session,
+                        # so an interrupted re-run never sees a half-stamped
+                        # session.  See the batch-safety comment above.
+                        sessions_in_txn += 1
+                        if sessions_in_txn >= _LOGFIX_TXN_BATCH:
+                            conn_write.commit()
+                            sessions_in_txn = 0
 
                     if s_datetime is None:
                         s_webevents  = 0
@@ -7125,9 +7163,23 @@ def do_logfix_session(month=None, *, dry_run=False):
             total_sessions += week_sessions
             total_events   += week_events
 
+        # Commit any tail batch that didn't reach the batch threshold.
+        if sessions_in_txn > 0:
+            conn_write.commit()
+            sessions_in_txn = 0
+
         log.info(f"[logfix-session] total: {total_sessions} session(s), "
             f"{total_events} web event(s), {total_jobs} toolstart job(s) linked")
         return 0
+    except BaseException:
+        # On any exception (including KeyboardInterrupt / SystemExit),
+        # explicitly rollback so the partial in-flight batch is dropped
+        # cleanly — re-run starts from the last committed batch.
+        try:
+            conn_write.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn_write.close()
         conn_read.close()
