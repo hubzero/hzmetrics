@@ -3410,6 +3410,61 @@ def do_rebuild_webhits(month=None, *, dry_run=False):
             (start, end)) or 0
         log.info(f"  {m_str}: rebuilt {n} day(s)")
 
+    # Wire into the orchestrator's resummarize cascade: changing webhits
+    # invalidates `summary_misc_vals[rowid=8]` (the "Web server hits"
+    # cell) for every period that touches the changed months — including
+    # the all-time and rolling-12 windows of every LATER month.  Same
+    # invalidation shape as a back-month base-data change, so we reuse
+    # the same cascade-from machinery.
+    if months:
+        _rebuild_cascade_after_webhits(months[0][0], dry_run)
+
+
+def _rebuild_cascade_after_webhits(oldest_touched: str, dry_run: bool) -> None:
+    """Lower `rebuild_cascade_from` so the orchestrator picks up the
+    webhits change in its next cascade walk.  Integrates with the
+    current orchestrator mode:
+
+      - normal  : bootstrap into rebuild mode with cursor=oldest_touched
+                  (otherwise the marker alone wouldn't fire — normal
+                  mode doesn't check it)
+      - rebuild : also lower `rebuild_cursor` if it's currently past
+                  oldest_touched (extend the walk backward)
+      - catchup : leave mode alone; the catchup→rebuild handoff will
+                  read `rebuild_cascade_from` when catchup completes
+    """
+    state = read_state()
+    mode = state.get("mode", "normal")
+    prior_cascade = state.get("rebuild_cascade_from", "")
+    new_cascade = (oldest_touched if not prior_cascade
+                   else min(prior_cascade, oldest_touched))
+
+    updates: dict = {}
+    if new_cascade != prior_cascade:
+        updates["rebuild_cascade_from"] = new_cascade
+
+    if mode == "normal":
+        updates["mode"] = "rebuild"
+        updates["rebuild_cursor"] = new_cascade
+    elif mode == "rebuild":
+        prior_cursor = state.get("rebuild_cursor", "")
+        if not prior_cursor or new_cascade < prior_cursor:
+            updates["rebuild_cursor"] = new_cascade
+    # mode == "catchup": leave mode/cursor alone.
+
+    if not updates:
+        log.info(f"  rebuild_cascade_from already at {prior_cascade} "
+                 f"(≤ {oldest_touched}); orchestrator state unchanged")
+        return
+
+    if dry_run:
+        log.info(f"  [dry-run] would set: {updates}")
+        return
+
+    update_state(**updates)
+    bits = ", ".join(f"{k}={v}" for k, v in sorted(updates.items()))
+    log.info(f"  set {bits}; next tick will resummarize from {new_cascade}")
+
 
 def cmd_rebuild_webhits(args):
     if not args.all and not args.month:
