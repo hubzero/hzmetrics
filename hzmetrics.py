@@ -3410,60 +3410,71 @@ def do_rebuild_webhits(month=None, *, dry_run=False):
             (start, end)) or 0
         log.info(f"  {m_str}: rebuilt {n} day(s)")
 
-    # Wire into the orchestrator's resummarize cascade: changing webhits
-    # invalidates `summary_misc_vals[rowid=8]` (the "Web server hits"
-    # cell) for every period that touches the changed months — including
-    # the all-time and rolling-12 windows of every LATER month.  Same
-    # invalidation shape as a back-month base-data change, so we reuse
-    # the same cascade-from machinery.
+    # webhits change → exactly one summary cell is affected:
+    # summary_misc_vals[rowid=8] (the "Web server hits" dashboard
+    # number, which reads SUM(hits) FROM webhits).  No other summary
+    # cell depends on webhits — see _summary_build_misc_main and
+    # docs/usage-tables.md.  So instead of triggering a full rebuild
+    # cascade (which would also redo sessions, downloads, andmore, and
+    # every other rowid — minutes per month, hours total), recompute
+    # just that one cell for every (month, period) tuple whose window
+    # touches the rebuilt months.  Typical cost: <1 s for the whole
+    # range.
     if months:
-        _rebuild_cascade_after_webhits(months[0][0], dry_run)
+        _refresh_misc_hits_for_months(months[0][0], dry_run)
 
 
-def _rebuild_cascade_after_webhits(oldest_touched: str, dry_run: bool) -> None:
-    """Lower `rebuild_cascade_from` so the orchestrator picks up the
-    webhits change in its next cascade walk.  Integrates with the
-    current orchestrator mode:
-
-      - normal  : bootstrap into rebuild mode with cursor=oldest_touched
-                  (otherwise the marker alone wouldn't fire — normal
-                  mode doesn't check it)
-      - rebuild : also lower `rebuild_cursor` if it's currently past
-                  oldest_touched (extend the walk backward)
-      - catchup : leave mode alone; the catchup→rebuild handoff will
-                  read `rebuild_cascade_from` when catchup completes
-    """
-    state = read_state()
-    mode = state.get("mode", "normal")
-    prior_cascade = state.get("rebuild_cascade_from", "")
-    new_cascade = (oldest_touched if not prior_cascade
-                   else min(prior_cascade, oldest_touched))
-
-    updates: dict = {}
-    if new_cascade != prior_cascade:
-        updates["rebuild_cascade_from"] = new_cascade
-
-    if mode == "normal":
-        updates["mode"] = "rebuild"
-        updates["rebuild_cursor"] = new_cascade
-    elif mode == "rebuild":
-        prior_cursor = state.get("rebuild_cursor", "")
-        if not prior_cursor or new_cascade < prior_cursor:
-            updates["rebuild_cursor"] = new_cascade
-    # mode == "catchup": leave mode/cursor alone.
-
-    if not updates:
-        log.info(f"  rebuild_cascade_from already at {prior_cascade} "
-                 f"(≤ {oldest_touched}); orchestrator state unchanged")
+def _refresh_misc_hits_for_months(oldest_touched: str, dry_run: bool) -> None:
+    """Recompute summary_misc_vals[rowid=8] for every (month, period)
+    cell whose window touches `oldest_touched` or later.  No other
+    summary cell reads from `webhits`, so this is the complete fix
+    for a webhits-only change — orders of magnitude cheaper than the
+    rebuild cascade (which would also redo sessions, downloads, etc.)
+    that fires for changes affecting `web` row content."""
+    cfg = db_config()
+    metrics_db = cfg.get("metrics_db", "")
+    today_ym = date.today().strftime("%Y-%m")
+    prev = previous_month(today_ym)
+    if oldest_touched > prev:
+        log.info(f"  no summary_misc_vals cells to refresh "
+                 f"(oldest_touched {oldest_touched} > prev_month {prev})")
         return
+
+    affected = months_in_range(oldest_touched, prev)
+    periods = (PERIOD_CAL_YEAR, PERIOD_MONTH, PERIOD_QUARTER,
+               PERIOD_ROLLING_12, PERIOD_FISCAL_YR, PERIOD_ALL_TIME)
+    total = len(affected) * len(periods)
 
     if dry_run:
-        log.info(f"  [dry-run] would set: {updates}")
+        log.info(f"  [dry-run] would refresh summary_misc_vals[rowid=8] "
+                 f"for {len(affected)} month(s) x {len(periods)} period(s) "
+                 f"= {total} cell(s)")
         return
 
-    update_state(**updates)
-    bits = ", ".join(f"{k}={v}" for k, v in sorted(updates.items()))
-    log.info(f"  set {bits}; next tick will resummarize from {new_cascade}")
+    log.info(f"  refreshing summary_misc_vals[rowid=8] for "
+             f"{len(affected)} month(s) x {len(periods)} period(s) "
+             f"= {total} cell(s)")
+    table = f"{metrics_db}.summary_misc_vals"
+    conn = _open_db(metrics_db)
+    try:
+        with conn.cursor() as cur:
+            for ym in affected:
+                dthis = f"{ym}-00"
+                for period in periods:
+                    dstart, dstop = period_dates(ym, period)
+                    cur.execute(
+                        f"SELECT SUM(hits) FROM {metrics_db}.webhits "
+                        f"WHERE datetime > %s AND datetime < %s",
+                        (dstart, dstop))
+                    r = cur.fetchone()
+                    # Same NULL→'' coercion as _summary_build_misc_main:
+                    # empty window means empty string, not 0.
+                    v = (r[0] if r and r[0] is not None else '')
+                    _summary_write_cell(cur, table, 8, 1, dthis, period, v, 1)
+        conn.commit()
+    finally:
+        conn.close()
+    log.info(f"  refreshed {total} cell(s)")
 
 
 def cmd_rebuild_webhits(args):
