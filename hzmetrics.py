@@ -7000,6 +7000,22 @@ def _iphost_jobs(conn_write, s_id, ip, host, dstart, dstop):
     return len(ids)
 
 
+# Above this many event_ids in one session, route the UPDATE through a
+# temporary table joined on web.id (PRIMARY KEY) instead of expanding
+# into a huge `WHERE id IN (...)` literal.  The IN-list form can push
+# the optimizer into a wide range scan whose row-lock footprint
+# exceeds InnoDB's lock table on a small innodb_buffer_pool (128 MB →
+# ~500 K-lock ceiling) and fails with OperationalError(1206) "The
+# total number of locks exceeds the lock table size".  Observed on
+# 2020-12 week 3: a single session with tens of thousands of web
+# events overflowed.  The JOIN form drives from the small temp table
+# using web.id PK lookups, so the lock count equals len(event_ids).
+# Small sessions stay on the original one-shot IN path so the cheap
+# case is unchanged (one round-trip instead of three).
+_EMIT_UPDATE_TMPTABLE_THRESHOLD = 1000
+_EMIT_UPDATE_INSERT_BATCH       = 5000
+
+
 def _emit_websession(conn_write, s_id, s_datetime, s_ip, s_host,
                      s_duration, s_domain, s_jobs, s_webevents, event_ids):
     """INSERT IGNORE the websessions row and UPDATE web.sessionid for events."""
@@ -7011,12 +7027,38 @@ def _emit_websession(conn_write, s_id, s_datetime, s_ip, s_host,
             (s_id, s_datetime, s_ip or "", s_host or "",
              s_duration, s_domain or "", s_jobs, s_webevents),
         )
-        if event_ids:
+        if not event_ids:
+            return
+
+        if len(event_ids) <= _EMIT_UPDATE_TMPTABLE_THRESHOLD:
             placeholders = ",".join(["%s"] * len(event_ids))
             cur.execute(
                 f"UPDATE web SET sessionid = %s WHERE id IN ({placeholders})",
                 [s_id, *event_ids],
             )
+            return
+
+        # Big-session path — see comment above.  CREATE IF NOT EXISTS
+        # + DELETE makes the temp table reusable across calls on the
+        # same connection (TEMPORARY TABLEs are per-connection); the
+        # CREATE is a no-op after the first time.
+        cur.execute(
+            "CREATE TEMPORARY TABLE IF NOT EXISTS _logfix_emit_eids "
+            "(id BIGINT UNSIGNED NOT NULL PRIMARY KEY) ENGINE=Memory"
+        )
+        cur.execute("DELETE FROM _logfix_emit_eids")
+        for i in range(0, len(event_ids), _EMIT_UPDATE_INSERT_BATCH):
+            chunk = event_ids[i:i + _EMIT_UPDATE_INSERT_BATCH]
+            values = ",".join(["(%s)"] * len(chunk))
+            cur.execute(
+                f"INSERT INTO _logfix_emit_eids (id) VALUES {values}",
+                chunk,
+            )
+        cur.execute(
+            "UPDATE web w JOIN _logfix_emit_eids e ON w.id = e.id "
+            "SET w.sessionid = %s",
+            (s_id,),
+        )
 
 
 def do_logfix_session(month=None, *, dry_run=False):
