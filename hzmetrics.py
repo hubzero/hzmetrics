@@ -3354,11 +3354,16 @@ def do_rebuild_webhits(month=None, *, dry_run=False):
                else f"{y:04d}-{m + 1:02d}-01")
         months = [(month, start, end)]
     else:
-        # Enumerate every distinct YYYY-MM in `web`.  Same %->%% quoting
-        # caveat as do_backfill_dnload's months query.
+        # Enumerate every distinct YYYY-MM in `web`.  The `%%` doubling
+        # is for pymysql param-substitution: even with an empty `()`
+        # params tuple, pymysql treats `%` as significant and `%%`
+        # becomes literal `%` in the SQL sent to MariaDB.  Passing None
+        # / no-params would send `%%` literally and DATE_FORMAT would
+        # return the string '%Y-%m' for every row (asked me how I know).
         rows = mysql_column(
             f"SELECT DISTINCT DATE_FORMAT(datetime,'%%Y-%%m') "
-            f"FROM {metrics_db}.web ORDER BY 1;")
+            f"FROM {metrics_db}.web ORDER BY 1;",
+            ())
         months = []
         for m_str in rows:
             y, m = int(m_str[:4]), int(m_str[5:7])
@@ -3392,12 +3397,17 @@ def do_rebuild_webhits(month=None, *, dry_run=False):
             f"DELETE FROM {metrics_db}.webhits "
             f"WHERE datetime >= %s AND datetime < %s;",
             (start, end))
-        n = mysql_exec(
+        mysql_exec(
             f"INSERT INTO {metrics_db}.webhits (datetime, hits) "
             f"SELECT DATE(datetime), COUNT(*) FROM {metrics_db}.web "
             f"WHERE datetime >= %s AND datetime < %s "
             f"GROUP BY DATE(datetime);",
             (start, end))
+        # mysql_exec returns 0 on success (not rowcount), so count after.
+        n = mysql_scalar(
+            f"SELECT COUNT(*) FROM {metrics_db}.webhits "
+            f"WHERE datetime >= %s AND datetime < %s;",
+            (start, end)) or 0
         log.info(f"  {m_str}: rebuilt {n} day(s)")
 
 
