@@ -1514,12 +1514,20 @@ for _i, _tbl in enumerate(_UTF8MB3_NORMALISE_TABLES):
             f"ALTER TABLE {{metrics_db}}.{_tbl} "
             f"CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
         ),
+        # Count rows in `information_schema.tables` that still need
+        # converting — i.e. the named table EXISTS in this metrics_db
+        # AND is not yet utf8mb3_general_ci.  Coupled with
+        # check_expect=0 below, "rows that still need fixing"=0 means
+        # "already applied OR table absent (e.g. ipcitylatlong is
+        # missing on the geodynamics hub) — record as applied and
+        # skip".
         check_sql=(
             "SELECT COUNT(*) FROM information_schema.tables "
             f"WHERE table_schema='{{metrics_db}}' "
             f"AND table_name='{_tbl}' "
-            f"AND table_collation='utf8mb3_general_ci';"
+            f"AND table_collation <> 'utf8mb3_general_ci';"
         ),
+        check_expect=0,
         required=False,
     ))
 del _i, _tbl
@@ -3948,6 +3956,9 @@ def hub_db_name():
     """Convenience alias for db_config()['hub_db']."""
     return db_config().get("hub_db", "")
 
+_CONN_CHARSET = None  # lazy-set on first _open_db (probes installed pymysql)
+
+
 def _open_db(database=None):
     """Open a pymysql connection from access.cfg.  Lazy import so other
     hzmetrics.py commands don't pay the dep if they don't need it.
@@ -3974,9 +3985,21 @@ def _open_db(database=None):
     # by default, which would force cross-collation JOINs against the
     # utf8mb3 tables and silently degrade query plans (the eq_ref-via-PK
     # path is rejected by the optimizer under mismatched collations).
+    #
+    # pymysql charset-name compatibility: the client-side lookup table
+    # added 'utf8mb3' as a recognised name in pymysql 1.1 (2023); 1.0.x
+    # (system-RPM pymysql on RHEL 8.10 is 1.0.2-2.el8) only knows 'utf8'.
+    # Both names map to the same server charset (id=33, 3-byte UTF-8) —
+    # MariaDB accepts SET NAMES utf8 as an alias for utf8mb3, so the wire
+    # protocol behaviour is identical.  Probe once, pick the name the
+    # installed pymysql understands.
+    global _CONN_CHARSET
+    if _CONN_CHARSET is None:
+        from pymysql.charset import charset_by_name
+        _CONN_CHARSET = "utf8mb3" if charset_by_name("utf8mb3") else "utf8"
     conn = pymysql.connect(
         host=host, user=user, password=password,
-        database=database, autocommit=True, charset="utf8mb3",
+        database=database, autocommit=True, charset=_CONN_CHARSET,
     )
     with conn.cursor() as cur:
         cur.execute("SET SESSION wait_timeout = 86400")
