@@ -5214,58 +5214,118 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             #
             # Two strategies depending on table size:
             #
-            # `web` (big — ~12 M rows / freshly-reimported month):
-            #   chunk by PRIMARY KEY id range with FORCE INDEX(PRIMARY),
-            #   so each statement does a sequential PK scan of one chunk
-            #   and probes _domain_tmp (Memory hash) per row.  Locks are
-            #   bounded to chunk size; PK-sequential scans are
-            #   cache-friendly on a small buffer pool.  Prior approaches
-            #   all foundered on the lock manager: a single whole-month
-            #   JOIN-UPDATE overflowed (1206) or wedged for hours; per-day
-            #   chunks didn't help because the planner drives the join off
-            #   web_host and ignores the date predicate for locking;
-            #   FORCE INDEX(datetime) bounded date scope but still wedged
-            #   under lock-manager pressure on a freshly-imported month;
-            #   per-host updates fell over on bot ISP hosts that own
-            #   millions of rows each (static.vnpt.vn alone has 5.5 M).
+            # `web` (big — millions of rows / month, sparse id distribution
+            # after the InnoDB rebuild):
+            #   SELECT candidate ids in id-ordered batches via the datetime
+            #   index (consistent read — no locks on the SELECT side), then
+            #   UPDATE WHERE id IN (...) which locks only the N matched PKs.
+            #
+            #   Prior approaches all foundered for different reasons:
+            #     - Whole-month JOIN-UPDATE: lock-table overflow on a small
+            #       innodb_buffer_pool (1206) or quadratic lock-manager wedge
+            #       even at 512 MB once the lock list filled.
+            #     - Per-day JOIN-UPDATE: planner drives off web_host so the
+            #       date predicate becomes a post-filter and locks span all
+            #       dates regardless of chunking.
+            #     - FORCE INDEX(datetime): bounded the locked-row set but
+            #       still wedged the lock manager on a freshly-imported
+            #       11.7 M-row month.
+            #     - Per-host UPDATE loop: a bot ISP host (static.vnpt.vn
+            #       alone) can own 5.5 M rows; the planner then picks a
+            #       full-table PK scan for that one host, locking the heap.
+            #     - PK-range chunked JOIN-UPDATE: works on a contiguous id
+            #       range (the 2026-02 reimport) but blows up on the current
+            #       month, where id allocation during recovery left 2026-05
+            #       rows split across a 17 M-id span with a 14 M-id dead
+            #       zone in the middle — burning 22 minutes per dead chunk
+            #       scanning ids that no longer correspond to in-range rows.
+            #
+            #   The two-step form below is immune to all of these: the SELECT
+            #   uses the datetime index to find only ids that actually need
+            #   work (no locks because MVCC), and the UPDATE locks only the
+            #   batch's PKs.  Iteration is paced by `id > last_id` keyset so
+            #   dead id zones cost a single index seek, not 250 K row reads.
             #
             # `toolstart` / `sessionlog_metrics` (small):
             #   single JOIN-UPDATE — the row count is tiny so lock-table
             #   capacity is not at risk and the simpler form is fine.
             if table == "web":
-                # ~250 K id-range per chunk: each chunk's lock set is
-                # ~500 K rows worst-case (PK scan plus probe), which fits
-                # within the InnoDB lock budget at 512 MB buffer pool
-                # with substantial headroom.
-                _CHUNK_IDS = 250_000
+                # Same pattern logfix-session adopted in 8faa511: route
+                # the batch UPDATE through a temp table keyed on web.id
+                # and JOIN on the PK, instead of emitting a wide
+                # `WHERE id IN (…)` literal.  An IN list with 50 K
+                # placeholders both flirts with max_allowed_packet and
+                # can push the optimizer off the PK index into a range
+                # scan whose lock footprint exceeds the lock table on a
+                # small innodb_buffer_pool (1206).  The temp-table JOIN
+                # is unambiguous: drive from the small _id_dom side
+                # (~50 K rows max), look up each in web by PK, lock
+                # exactly that many rows.
+                #
+                # Iteration uses keyset pagination on web.id with a
+                # consistent-read SELECT that takes no locks, so dead
+                # id zones (the current month's sparse distribution
+                # after the InnoDB rebuild) cost a single index seek
+                # per batch — not 250 K row reads as the prior
+                # PK-range chunk loop did.
+                _ID_BATCH = 50_000
+                _INSERT_BATCH = 5000
+                pairs_dict = dict(pairs)
+                cur.execute("DROP TEMPORARY TABLE IF EXISTS _id_dom")
                 cur.execute(
-                    f"SELECT MIN(id), MAX(id) FROM {table} WHERE 1=1{date_pred_sql}",
-                    date_params,
+                    "CREATE TEMPORARY TABLE _id_dom ("
+                    "id BIGINT NOT NULL PRIMARY KEY, "
+                    "domain VARCHAR(255) NOT NULL"
+                    ") ENGINE=Memory"
                 )
-                row = cur.fetchone()
-                id_lo, id_hi = (row if row else (None, None))
-                base_update = (
-                    f"UPDATE {table} w FORCE INDEX (PRIMARY) "
-                    f"INNER JOIN _domain_tmp d ON w.host = d.host "
-                    f"SET w.domain = d.domain "
-                    f"WHERE w.id >= %s AND w.id < %s "
-                    f"AND (w.domain = '' OR w.domain = '?' OR w.domain IS NULL) "
-                    f"AND w.host <> '' AND w.host IS NOT NULL"
+                select_id_host_sql = (
+                    f"SELECT id, host FROM {table} "
+                    f"WHERE id > %s "
+                    f"AND (domain = '' OR domain = '?' OR domain IS NULL) "
+                    f"AND host <> '' AND host IS NOT NULL"
+                    f"{date_pred_sql} "
+                    f"ORDER BY id LIMIT {_ID_BATCH}"
+                )
+                update_join_sql = (
+                    f"UPDATE {table} w INNER JOIN _id_dom t ON w.id = t.id "
+                    f"SET w.domain = t.domain"
                 )
                 updated = 0
-                if id_lo is not None and id_hi is not None:
-                    cur_id = id_lo
-                    total_chunks = max(1, (id_hi - id_lo) // _CHUNK_IDS + 1)
-                    ci = 0
-                    while cur_id <= id_hi:
-                        nxt = cur_id + _CHUNK_IDS
-                        cur.execute(base_update, (cur_id, nxt))
+                last_id = 0
+                batch_n = 0
+                while True:
+                    cur.execute(select_id_host_sql, (last_id,) + date_params)
+                    rows = cur.fetchall()
+                    if not rows:
+                        break
+                    # Resolve domain for each row from the host→domain
+                    # map (built earlier from `pairs`).  Hosts not in
+                    # the map are skipped — they'll fall through to
+                    # the next pass if a later fill-domain run learns
+                    # them; this matches the legacy "no domain known
+                    # yet" behaviour.  Plain loop (no walrus) so the
+                    # file still parses on Python 3.6 before
+                    # _relaunch_if_needed execs into 3.11.
+                    id_dom = []
+                    for rid, h in rows:
+                        dm = pairs_dict.get(h)
+                        if dm is not None:
+                            id_dom.append((rid, dm))
+                    if id_dom:
+                        cur.execute("DELETE FROM _id_dom")
+                        for i in range(0, len(id_dom), _INSERT_BATCH):
+                            cur.executemany(
+                                "INSERT INTO _id_dom (id, domain) VALUES (%s, %s)",
+                                id_dom[i:i + _INSERT_BATCH],
+                            )
+                        cur.execute(update_join_sql)
                         updated += cur.rowcount
-                        ci += 1
-                        cur_id = nxt
-                        if ci % 10 == 0 or cur_id > id_hi:
-                            log.info(f"  fill-domain: chunk {ci}/~{total_chunks} "
-                                     f"(id<{cur_id}), {updated} row(s) updated so far")
+                    last_id = rows[-1][0]
+                    batch_n += 1
+                    if batch_n % 10 == 0:
+                        log.info(f"  fill-domain: batch {batch_n} "
+                                 f"(id>{last_id}), {updated} row(s) updated so far")
+                cur.execute("DROP TEMPORARY TABLE IF EXISTS _id_dom")
             else:
                 update_sql = (
                     f"UPDATE {table} t INNER JOIN _domain_tmp d ON t.host = d.host "
