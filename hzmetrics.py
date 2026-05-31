@@ -2325,18 +2325,28 @@ def cmd_doctor(args):
 # ---------------------------------------------------------------------------
 
 # (table, human-readable column, missing-predicate, remediation subcommand)
+#
+# Predicate convention: only NULL / '' count as "missing" (never
+# attempted).  The "tried, no answer" placeholders — host='?' (no PTR
+# record) and ipcountry='-' (GeoIP returned no country) — are NOT
+# treated as missing, because the corresponding `resolve-dns` /
+# `fill-ipcountry` subcommands skip them by design and re-running them
+# is wasted work.  This keeps audit consistent with the pipeline's
+# enrichment semantics: a flagged month is one where some enrichment
+# step still has real work to do, not one where the enrichment ran
+# and the upstream service had nothing to return.
 _AUDIT_CHECKS = [
     ("web",         "host",      "host IS NULL OR host = ''",
         "resolve-dns metrics web {ym}"),
     ("web",         "domain",    "domain IS NULL OR domain = ''",
         "fill-domain metrics web {ym}"),
-    ("web",         "ipcountry", "ipcountry IS NULL OR ipcountry = '' OR ipcountry = '-'",
+    ("web",         "ipcountry", "ipcountry IS NULL OR ipcountry = ''",
         "fill-ipcountry metrics web {ym}"),
     ("websessions", "host",      "host IS NULL OR host = ''",
         "resolve-dns metrics websessions {ym}"),
     ("websessions", "domain",    "domain IS NULL OR domain = ''",
         "fill-domain metrics websessions {ym}"),
-    ("websessions", "ipcountry", "ipcountry IS NULL OR ipcountry = '' OR ipcountry = '-'",
+    ("websessions", "ipcountry", "ipcountry IS NULL OR ipcountry = ''",
         "fill-ipcountry metrics websessions {ym}"),
 ]
 
@@ -2446,7 +2456,9 @@ def cmd_audit(args):
                              None, None, f"summarize-month {ym}"))
 
     if not findings:
-        log.info(f"[audit] all checks passed — {lookback} month(s) clean")
+        scope_label = ("all months" if args.all
+                       else f"{max(1, args.months)} month(s)")
+        log.info(f"[audit] all checks passed — {scope_label} clean")
         return 0
 
     log.error(f"[audit] {len(findings)} finding(s).  Recommended backfills:")
