@@ -293,10 +293,20 @@ class StageOperatorSourceTests(unittest.TestCase):
         )
 
     def test_cleanbots_uses_gt_lte(self):
+        # do_clean_bots was refactored to a two-step SELECT-id + DELETE-by-PK
+        # form (commit fa0adc5) to bound the InnoDB lock-table footprint on
+        # tight buffer pools.  The half-open `> start AND <= end` window
+        # convention moves to the SELECT side of the pair.  Verify both
+        # the domain= and host LIKE branches still use that boundary.
         self.assertIn(
-            "WHERE datetime > %s AND datetime <= %s AND domain = %s",
+            "datetime > %s AND datetime <= %s AND domain = %s",
             self.src,
-            "clean-bots SQL changed shape — update STAGE_OPS and roadmap.md",
+            "clean-bots domain-filter window changed shape — update STAGE_OPS and roadmap.md",
+        )
+        self.assertIn(
+            "datetime > %s AND datetime <= %s AND host LIKE %s",
+            self.src,
+            "clean-bots host-filter window changed shape — update STAGE_OPS and roadmap.md",
         )
 
 
