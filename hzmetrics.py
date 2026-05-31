@@ -2347,19 +2347,36 @@ def cmd_audit(args):
     """Per-month enrichment + structural health audit.  Exits 0 if no
     anomalies, 1 if any finding."""
     _, _, _, metrics_db = db_credentials()
-    lookback = max(1, args.months)
     floor = max(0.0, args.floor)
 
     today = date.today()
-    # Start = first of (today minus `lookback` months)
-    y, m = today.year, today.month - lookback
-    while m <= 0:
-        m += 12
-        y -= 1
-    start_iso = f"{y:04d}-{m:02d}-01 00:00:00"
     # End = first of current month — exclude the in-progress current
     # month from the scan (its enrichment is by definition incomplete).
     end_iso = f"{today.year:04d}-{today.month:02d}-01 00:00:00"
+
+    if args.all:
+        # Probe the earliest datetime across the enrichment-scoped
+        # tables so the date predicate bounds match what's actually in
+        # the DB.  UNION-MIN returns a real datetime (or NULL when both
+        # tables are empty) — avoids the str-typed fallback gotcha of
+        # COALESCE(MIN, 'literal').
+        probe = mysql_query(
+            f"SELECT MIN(d) FROM ("
+            f"  SELECT MIN(datetime) AS d FROM {metrics_db}.web "
+            f"  UNION ALL "
+            f"  SELECT MIN(datetime) FROM {metrics_db}.websessions"
+            f") t"
+        )
+        start_dt = probe[0][0] if probe and probe[0] else None
+        start_iso = (start_dt.strftime("%Y-%m-%d %H:%M:%S")
+                     if start_dt else "2014-01-01 00:00:00")
+    else:
+        lookback = max(1, args.months)
+        y, m = today.year, today.month - lookback
+        while m <= 0:
+            m += 12
+            y -= 1
+        start_iso = f"{y:04d}-{m:02d}-01 00:00:00"
 
     log.info(f"[audit] scope: {start_iso[:10]} .. {end_iso[:10]} "
              f"(median × 5 or > {floor*100:.1f}% triggers a finding)")
@@ -9334,8 +9351,12 @@ def main() -> None:
              "ipcountry materially exceeds the rolling median, and "
              "prints copy-paste backfill commands for each finding.")
     p_audit.set_defaults(func=cmd_audit)
-    p_audit.add_argument("--months", type=int, default=24,
+    g_audit = p_audit.add_mutually_exclusive_group()
+    g_audit.add_argument("--months", type=int, default=24,
         help="Lookback window in months (default: 24)")
+    g_audit.add_argument("--all", action="store_true",
+        help="Audit every month present in the data, not just the "
+             "default rolling window")
     p_audit.add_argument("--floor", type=float, default=0.05,
         help="Absolute %%missing floor that triggers a finding even when "
              "the median is also high (default: 0.05 = 5%%)")
