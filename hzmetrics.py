@@ -1525,6 +1525,37 @@ for _i, _tbl in enumerate(_UTF8MB3_NORMALISE_TABLES):
 del _i, _tbl
 
 
+# The DATABASE-level default charset of hubzero_metrics is the
+# pre-MariaDB-10.6 latin1 server-default — `CREATE TABLE` without
+# explicit COLLATE inherits this (NOT the connection's
+# collation_connection, contrary to first intuition).  TEMPORARY
+# tables created by the pipeline (_domain_tmp, _dns_tmp, etc.) were
+# therefore latin1_swedish_ci no matter what charset _open_db
+# negotiated, silently cross-collation-JOINing against the utf8mb3
+# persistent tables and degrading plans (38 K outer × 700 K inner =
+# 28 B row probes per chunk on fill-domain web; 3-4 h per chunk
+# observed on 2025-05).  Setting the DB default to utf8mb3 fixes
+# every future CREATE TABLE site at once.  Existing persistent
+# tables keep their CREATE-time collations and are unaffected.
+MIGRATIONS.append(Migration(
+    id=47,
+    description=(
+        "ALTER DATABASE charset/collation to utf8mb3_general_ci — "
+        "fixes CREATE TEMPORARY TABLE default for pipeline temp tables"
+    ),
+    sql=(
+        "ALTER DATABASE {metrics_db} "
+        "CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+    ),
+    check_sql=(
+        "SELECT COUNT(*) FROM information_schema.SCHEMATA "
+        "WHERE SCHEMA_NAME='{metrics_db}' "
+        "AND DEFAULT_COLLATION_NAME='utf8mb3_general_ci';"
+    ),
+    required=False,
+))
+
+
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
 # size free, the direct ALTER TABLE in migration #41 can overflow the
 # datadir transient (old MyISAM + new InnoDB live side-by-side during
