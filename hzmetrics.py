@@ -4370,20 +4370,50 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
                     log.info(f"  [dry-run] host LIKE {f!r}")
                 return 0
 
+            # Two-step DELETE: SELECT id batches (consistent read, no
+            # locks) → DELETE WHERE id IN (...) (locks only the N PKs).
+            # A single DELETE … WHERE host LIKE %pat% over a full
+            # week of a freshly-reimported month does a full scan of
+            # the date range (LIKE with a leading wildcard has no
+            # usable index) and InnoDB takes next-key locks on every
+            # row examined, not just the matched ones — blowing the
+            # lock table on a fresh-import 11.7 M-row month even at
+            # 512 MB innodb_buffer_pool (OperationalError 1206).
+            # The two-step form bounds locks to N matched rows per
+            # DELETE statement; the SELECT side runs lock-free under
+            # InnoDB's consistent-read snapshot.  Applied to both
+            # filter kinds for symmetry — domain filters use an
+            # indexed equality and rarely hit the limit, but a
+            # popular bot domain on a big month could.
+            _CHUNK = 50000
+            def _delete_matching(where_pred, where_params):
+                deleted_local = 0
+                while True:
+                    cur.execute(
+                        f"SELECT id FROM {table} WHERE {where_pred} LIMIT {_CHUNK}",
+                        where_params)
+                    ids = [r[0] for r in cur.fetchall()]
+                    if not ids:
+                        break
+                    placeholders = ",".join(["%s"] * len(ids))
+                    cur.execute(
+                        f"DELETE FROM {table} WHERE id IN ({placeholders})",
+                        ids)
+                    deleted_local += cur.rowcount
+                    if len(ids) < _CHUNK:
+                        break
+                return deleted_local
+
             total_deleted = 0
             for c_start, c_end in chunks:
                 for f in domain_filters:
-                    cur.execute(
-                        f"DELETE FROM {table} "
-                        f"WHERE datetime > %s AND datetime <= %s AND domain = %s",
+                    total_deleted += _delete_matching(
+                        "datetime > %s AND datetime <= %s AND domain = %s",
                         (c_start, c_end, f))
-                    total_deleted += cur.rowcount
                 for f in host_filters:
-                    cur.execute(
-                        f"DELETE FROM {table} "
-                        f"WHERE datetime > %s AND datetime <= %s AND host LIKE %s",
+                    total_deleted += _delete_matching(
+                        "datetime > %s AND datetime <= %s AND host LIKE %s",
                         (c_start, c_end, f))
-                    total_deleted += cur.rowcount
 
             log.info(f"[clean-bots] deleted {total_deleted} rows from {table}")
             return 0
