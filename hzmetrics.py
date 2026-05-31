@@ -2370,6 +2370,11 @@ def cmd_audit(args):
         start_dt = probe[0][0] if probe and probe[0] else None
         start_iso = (start_dt.strftime("%Y-%m-%d %H:%M:%S")
                      if start_dt else "2014-01-01 00:00:00")
+        # Compute lookback from the data-driven start so the success
+        # log line reports a meaningful month count (the `--all` path
+        # never sees `args.months`).
+        sy, sm = int(start_iso[:4]), int(start_iso[5:7])
+        lookback = (today.year - sy) * 12 + (today.month - sm)
     else:
         lookback = max(1, args.months)
         y, m = today.year, today.month - lookback
