@@ -2297,6 +2297,180 @@ def cmd_doctor(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# audit — per-month enrichment quality scan
+#
+# `doctor` covers install / DB / migration health; `audit` covers the
+# per-month *data quality* shape that's expensive enough to want to look
+# at deliberately, not on every cron tick.  The motivating cases:
+#
+#   * A code change adds enrichment to a table that wasn't previously
+#     enriched (e.g., commit e506e8e routed resolve-dns + fill-domain
+#     through websessions in addition to web); historical months are now
+#     "below par" and need a backfill.  No tick will retry them on its
+#     own — the per-month catchup decision matrix considers them
+#     complete because they have data + summary.
+#
+#   * An ipinfo/ipgeo API hiccup during a month's original processing
+#     left a large fraction of rows with ipcountry NULL.  (Observed on
+#     2025-04: 638 K / 1.46 M rows = 44 % vs a median of ~0.1 % per
+#     month.)  Steady-state ticks don't revisit older months.
+#
+# Detection rule per (table, column): compute %missing per month over
+# the lookback window, flag any month whose %missing exceeds
+# max(median × 5, --floor).  The median rule auto-tunes to the natural
+# floor (e.g., ~half of host values are '?' on noisy hubs; that's
+# baseline, not an alarm).  Months with very few rows are skipped to
+# avoid noise.  Output prints a copy-paste backfill command per finding.
+# ---------------------------------------------------------------------------
+
+# (table, human-readable column, missing-predicate, remediation subcommand)
+_AUDIT_CHECKS = [
+    ("web",         "host",      "host IS NULL OR host = ''",
+        "resolve-dns metrics web {ym}"),
+    ("web",         "domain",    "domain IS NULL OR domain = ''",
+        "fill-domain metrics web {ym}"),
+    ("web",         "ipcountry", "ipcountry IS NULL OR ipcountry = '' OR ipcountry = '-'",
+        "fill-ipcountry metrics web {ym}"),
+    ("websessions", "host",      "host IS NULL OR host = ''",
+        "resolve-dns metrics websessions {ym}"),
+    ("websessions", "domain",    "domain IS NULL OR domain = ''",
+        "fill-domain metrics websessions {ym}"),
+    ("websessions", "ipcountry", "ipcountry IS NULL OR ipcountry = '' OR ipcountry = '-'",
+        "fill-ipcountry metrics websessions {ym}"),
+]
+
+_AUDIT_MIN_ROWS = 100  # months with fewer rows are too noisy to score
+
+
+def cmd_audit(args):
+    """Per-month enrichment + structural health audit.  Exits 0 if no
+    anomalies, 1 if any finding."""
+    _, _, _, metrics_db = db_credentials()
+    lookback = max(1, args.months)
+    floor = max(0.0, args.floor)
+
+    today = date.today()
+    # Start = first of (today minus `lookback` months)
+    y, m = today.year, today.month - lookback
+    while m <= 0:
+        m += 12
+        y -= 1
+    start_iso = f"{y:04d}-{m:02d}-01 00:00:00"
+    # End = first of current month — exclude the in-progress current
+    # month from the scan (its enrichment is by definition incomplete).
+    end_iso = f"{today.year:04d}-{today.month:02d}-01 00:00:00"
+
+    log.info(f"[audit] scope: {start_iso[:10]} .. {end_iso[:10]} "
+             f"(median × 5 or > {floor*100:.1f}% triggers a finding)")
+
+    findings: list[tuple] = []  # (table, column, ym, total, missing, pct, median, cmd)
+
+    for table, column, pred, remediate_tmpl in _AUDIT_CHECKS:
+        rows = mysql_query(
+            f"SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, "
+            f"       COUNT(*) total, SUM({pred}) missing "
+            f"FROM {metrics_db}.{table} "
+            f"WHERE datetime >= %s AND datetime < %s "
+            f"GROUP BY ym "
+            f"HAVING total >= %s "
+            f"ORDER BY ym",
+            (start_iso, end_iso, _AUDIT_MIN_ROWS),
+        )
+        if not rows:
+            continue
+        pcts = [(ym, int(total), int(missing or 0),
+                 (int(missing or 0) / int(total)) if total else 0.0)
+                for ym, total, missing in rows]
+        sorted_pcts = sorted(p[3] for p in pcts)
+        median = sorted_pcts[len(sorted_pcts) // 2]
+        threshold = max(median * 5, floor)
+        bad = [p for p in pcts if p[2] > 0 and p[3] > threshold]
+        if not bad:
+            log.info(f"[audit] OK    {table}.{column:<10} "
+                     f"median {median*100:.2f}%  ({len(pcts)} month(s) scanned)")
+            continue
+        log.warning(f"[audit] WARN  {table}.{column:<10} "
+                    f"median {median*100:.2f}%, threshold {threshold*100:.2f}%  "
+                    f"— {len(bad)} anomalous month(s)")
+        for ym, total, missing, pct in bad:
+            findings.append((table, column, ym, total, missing, pct, median,
+                             remediate_tmpl.format(ym=ym)))
+
+    # Structural: months with web data but no period-1 summary.
+    rows = mysql_query(
+        f"SELECT DISTINCT DATE_FORMAT(datetime, '%%Y-%%m') ym "
+        f"FROM {metrics_db}.web "
+        f"WHERE datetime >= %s AND datetime < %s "
+        f"  AND DATE_FORMAT(datetime, '%%Y-%%m') NOT IN ("
+        f"      SELECT DATE_FORMAT(datetime, '%%Y-%%m') "
+        f"      FROM {metrics_db}.summary_user_vals WHERE period = 1) "
+        f"ORDER BY ym",
+        (start_iso, end_iso),
+    )
+    for (ym,) in rows:
+        if not ym:
+            continue
+        log.warning(f"[audit] WARN  {ym}: web has data but no period-1 summary")
+        findings.append(("summary_user_vals", "(missing)", ym, None, None,
+                         None, None, f"summarize-month {ym}"))
+
+    # Structural: period-incomplete months in scope (some periods missing).
+    today_str = today.strftime("%Y-%m")
+    for ym in period_incomplete_months(today_str):
+        if ym >= start_iso[:7]:
+            log.warning(f"[audit] WARN  {ym}: summary exists but missing periods")
+            findings.append(("summary_user_vals", "(periods)", ym, None, None,
+                             None, None, f"summarize-month {ym}"))
+
+    if not findings:
+        log.info(f"[audit] all checks passed — {lookback} month(s) clean")
+        return 0
+
+    log.error(f"[audit] {len(findings)} finding(s).  Recommended backfills:")
+    # Group findings by remediation command (collapse runs of consecutive
+    # months for the same check into a range form when the subcommand
+    # supports it — resolve-dns / fill-ipcountry / fill-domain all accept
+    # `<start>..<end>` ranges).
+    by_check: dict[tuple, list[str]] = {}
+    for table, column, ym, *_ in findings:
+        # Strip the {ym} token to use as the check key
+        key = (table, column)
+        by_check.setdefault(key, []).append(ym)
+
+    for (table, column), yms in by_check.items():
+        yms = sorted(set(yms))
+        # Find the remediation template for this check
+        tmpl = None
+        for t, c, _p, r in _AUDIT_CHECKS:
+            if t == table and c == column:
+                tmpl = r
+                break
+        if tmpl is None:
+            for ym in yms:
+                log.error(f"    summarize-month {ym}")
+            continue
+        # Emit ranges where consecutive months collapse
+        i = 0
+        while i < len(yms):
+            j = i
+            while j + 1 < len(yms) and _next_yyyymm(yms[j]) == yms[j + 1]:
+                j += 1
+            if i == j:
+                log.error(f"    hzmetrics.py " + tmpl.format(ym=yms[i]))
+            else:
+                log.error(f"    hzmetrics.py " +
+                          tmpl.format(ym=f"{yms[i]}..{yms[j]}"))
+            i = j + 1
+
+    return 1
+
+
+def _next_yyyymm(ym: str) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    return f"{y+1:04d}-01" if m == 12 else f"{y:04d}-{m+1:02d}"
+
+
 DOWNLOAD_EXTS = [
     "txt", "png", "pdf", "ppt", "pptx", "swf", "docx", "jpg", "doc", "zip",
     "mp3", "mbtiles", "xml", "xlsx", "webm", "mp4", "xls", "r", "csv", "nc4",
@@ -9152,6 +9326,19 @@ def main() -> None:
         "--fix", action="store_true",
         help="Attempt to repair (run the same dir + DB + migrate "
              "bootstrap _self_bootstrap uses on cron startup)")
+
+    p_audit = sub.add_parser(
+        "audit",
+        help="Per-month enrichment + summary health audit (lookback "
+             "window).  Flags months whose %missing for host / domain / "
+             "ipcountry materially exceeds the rolling median, and "
+             "prints copy-paste backfill commands for each finding.")
+    p_audit.set_defaults(func=cmd_audit)
+    p_audit.add_argument("--months", type=int, default=24,
+        help="Lookback window in months (default: 24)")
+    p_audit.add_argument("--floor", type=float, default=0.05,
+        help="Absolute %%missing floor that triggers a finding even when "
+             "the median is also high (default: 0.05 = 5%%)")
 
     p_dnload = sub.add_parser("backfill-dnload", help="Populate web.dnload flag for historical rows")
     p_dnload.set_defaults(func=cmd_backfill_dnload)
