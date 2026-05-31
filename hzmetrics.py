@@ -1486,6 +1486,45 @@ MIGRATIONS.extend([
     ),
 ])
 
+
+# Collation normalisation to utf8mb3_general_ci — bring the two latin1
+# stragglers in line with the rest of the metrics schema (and the hub
+# DB upstream).  The bulk of the schema is already utf8mb3; these two
+# are pre-existing legacy tables that never got cleaned up.
+#
+# ipcitylatlong is a 3 M-row ip→city geo table that hzmetrics doesn't
+# query — included purely for schema consistency.  userlogin_lite is
+# DROPped + recreated from `userlogin` (utf8mb3) on every
+# summarize-month run, so it self-heals on the next analyze; the
+# migration entry just brings the current rows into line immediately
+# rather than waiting for that cycle.
+_UTF8MB3_NORMALISE_TABLES = [
+    "ipcitylatlong",
+    "userlogin_lite",
+]
+
+for _i, _tbl in enumerate(_UTF8MB3_NORMALISE_TABLES):
+    MIGRATIONS.append(Migration(
+        id=45 + _i,
+        description=(
+            f"Convert {_tbl} from latin1_swedish_ci to "
+            f"utf8mb3_general_ci — schema collation normalisation"
+        ),
+        sql=(
+            f"ALTER TABLE {{metrics_db}}.{_tbl} "
+            f"CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;"
+        ),
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_schema='{{metrics_db}}' "
+            f"AND table_name='{_tbl}' "
+            f"AND table_collation='utf8mb3_general_ci';"
+        ),
+        required=False,
+    ))
+del _i, _tbl
+
+
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
 # size free, the direct ALTER TABLE in migration #41 can overflow the
 # datadir transient (old MyISAM + new InnoDB live side-by-side during
@@ -3898,9 +3937,15 @@ def _open_db(database=None):
     half-applied."""
     import pymysql
     host, user, password, _ = db_credentials()
+    # Connection charset matches the persistent schema — metrics tables
+    # are utf8mb3_general_ci (as is the bulk of the hub DB we read).
+    # Using utf8mb4 here makes every temp table inherit utf8mb4_general_ci
+    # by default, which would force cross-collation JOINs against the
+    # utf8mb3 tables and silently degrade query plans (the eq_ref-via-PK
+    # path is rejected by the optimizer under mismatched collations).
     conn = pymysql.connect(
         host=host, user=user, password=password,
-        database=database, autocommit=True, charset="utf8mb4",
+        database=database, autocommit=True, charset="utf8mb3",
     )
     with conn.cursor() as cur:
         cur.execute("SET SESSION wait_timeout = 86400")
@@ -5089,7 +5134,14 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
                     log.info(f"  [dry-run] ... and {len(pairs) - 5} more")
                 return 0
 
-            # Bulk update via temp table + JOIN
+            # Bulk update via temp table + JOIN.  Temp columns inherit
+            # the connection's collation (utf8mb3_general_ci via
+            # _open_db), which matches the persistent metrics tables —
+            # so w.host = d.host is a same-collation comparison and the
+            # optimizer can use d.host's PRIMARY KEY as eq_ref.
+            # Cross-collation here would silently degrade the plan to
+            # `_domain_tmp` ALL × web range (40 K × 700 K = 28 B probes
+            # per chunk, observed at 3-4 h on 2025-05).
             cur.execute(
                 "CREATE TEMPORARY TABLE _domain_tmp ("
                 "host VARCHAR(255) NOT NULL PRIMARY KEY, "
