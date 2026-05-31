@@ -2995,16 +2995,31 @@ def cmd_status(args):
     if mode == "rebuild":
         cursor = state.get("rebuild_cursor", "(unset)")
         try:
-            target = previous_month(date.today().strftime("%Y-%m"))
-            if cursor != "(unset)" and cursor <= target:
-                remaining = len(months_in_range(cursor, target))
-                log.info(f"  rebuild_cursor   : {cursor}  ({remaining} month(s) "
-                         f"remaining through {target})")
-            else:
-                log.info(f"  rebuild_cursor   : {cursor}  (past prev_month — "
-                         f"next tick will transition to normal)")
-        except Exception:
-            log.info(f"  rebuild_cursor   : {cursor}")
+            today_str = date.today().strftime("%Y-%m")
+            prev = previous_month(today_str)
+            phase = _rebuild_phase(state, prev)
+            log.info(f"  rebuild phase    : {phase}")
+            if phase == "walk":
+                if cursor != "(unset)" and cursor <= prev:
+                    remaining = len(months_in_range(cursor, prev))
+                    log.info(f"  rebuild_cursor   : {cursor}  ({remaining} month(s) "
+                             f"remaining through {prev})")
+                else:
+                    log.info(f"  rebuild_cursor   : {cursor}")
+            else:  # sweep — walk has passed prev_month
+                log.info(f"  rebuild_cursor   : {cursor}  (past prev_month, walk done)")
+                try:
+                    incomplete = period_incomplete_months(today_str)
+                except Exception as e:
+                    log.info(f"  sweep remaining  : (could not enumerate: {e})")
+                else:
+                    if incomplete:
+                        log.info(f"  sweep remaining  : {len(incomplete)} month(s) "
+                                 f"(oldest: {incomplete[0]})")
+                    else:
+                        log.info(f"  sweep remaining  : 0  (next tick → normal)")
+        except Exception as e:
+            log.info(f"  rebuild_cursor   : {cursor}  (phase derivation failed: {e})")
 
     log.info("=== pending import (all source dirs) ===")
     summarize_files(enumerate_log_sources("access"), "httpd access")
@@ -8712,24 +8727,47 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
     return False  # still in catchup after this tick
 
 
+def _rebuild_phase(state: dict, prev: str) -> str:
+    """Which rebuild sub-phase is `mode=rebuild` actually in right now?
+
+    `rebuild` is one orchestrator label that covers two distinct kinds of
+    work, in order — they aren't interchangeable, they don't even share a
+    cursor — and the distinction is invisible from `mode` alone.  This
+    helper derives it from state, so log lines and `status` can name the
+    current phase explicitly without storing a fourth pipeline_state key
+    that could drift from the cursor.
+
+    Returns 'walk' while the forward cursor walk still has months to
+    process (`rebuild_cursor` exists and points at-or-before `prev_month`),
+    otherwise 'sweep'.  Whether the sweep actually has work pending is a
+    DB question (`period_incomplete_months`) — `phase=='sweep'` only says
+    the *walk* is done and the next tick will run the sweep code path."""
+    cursor = state.get("rebuild_cursor") or state.get("catchup_started")
+    if cursor and cursor <= prev:
+        return "walk"
+    return "sweep"
+
+
 def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> bool:
     """Advance the rebuild phase by one unit of work per tick.  Two phases,
-    in order:
+    in order, distinguished by `_rebuild_phase(state, prev)` and surfaced
+    in every log line as `[rebuild:walk]` / `[rebuild:sweep]`:
 
-      Phase 1 — forward cursor walk.  Re-summarize one month per tick from
-      rebuild_cursor through prev_month with all six periods.  This is the
-      invalidation cascade: when catchup backfilled an older month, every
-      later month's long-window (12 / 13 / 14) cells were computed off a
-      window that didn't yet include that data, so they're stale and must
-      be recomputed.  The walk runs forward from the earliest backfilled
-      month (catchup_started), never re-touching months before it.
+      Phase 1 — forward cursor walk (`[rebuild:walk]`).  Re-summarize one
+      month per tick from `rebuild_cursor` through `prev_month` with all
+      six periods.  This is the invalidation cascade: when catchup
+      backfilled an older month, every later month's long-window
+      (12 / 13 / 14) cells were computed off a window that didn't yet
+      include that data, so they're stale and must be recomputed.  The
+      walk runs forward from the earliest backfilled month
+      (`catchup_started`), never re-touching months before it.
 
-      Phase 2 — completeness sweep.  Once the walk is done (cursor past
-      prev_month), resummarize any month that has summary rows but is
-      missing period codes — months the walk never reached because they
-      sit below the cursor (e.g. a pre-catchup_started auth backlog that
-      a catchup pass only ever period-1-summarized).  One month per tick,
-      oldest first.
+      Phase 2 — completeness sweep (`[rebuild:sweep]`).  Once the walk is
+      done (cursor past `prev_month`), resummarize any month that has
+      summary rows but is missing period codes — months the walk never
+      reached because they sit below the cursor (e.g. a
+      pre-`catchup_started` cmsauth backlog that a catchup pass only ever
+      period-1-summarized).  One month per tick, oldest first.
 
     Note: the walk currently resummarizes every month in [cursor, prev]
     unconditionally — it does NOT skip months that are already complete
@@ -8741,24 +8779,20 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
 
     Returns True only when the walk is done AND no incomplete months
     remain (caller transitions back to normal)."""
-    cursor = state.get("rebuild_cursor") or state.get("catchup_started")
+    phase = _rebuild_phase(state, prev)
 
     # --- Phase 1: forward cursor walk -------------------------------------
-    # Re-summarize one month per tick from the cursor through prev_month.
-    # This is the invalidation cascade: when catchup backfilled an older
-    # month, every later month's long-window (12 / 13 / 14) cells were
-    # computed off a window that didn't yet include that data, so they're
-    # stale and must be recomputed.  The walk runs forward from the
-    # earliest backfilled month (catchup_started), never re-touching
-    # months before it.
-    if cursor and cursor <= prev:
-        log.info(f"[rebuild] resummarizing {cursor} (all 6 periods)")
+    # See class-docstring above for why this exists (invalidation cascade
+    # of long-window cells in months ≥ catchup_started).
+    if phase == "walk":
+        cursor = state.get("rebuild_cursor") or state.get("catchup_started")
+        log.info(f"[rebuild:walk] resummarizing {cursor} (all 6 periods)")
         do_analyze(cursor, dry_run)
         do_summarize(cursor, dry_run)  # default = all periods
         next_cursor = next_month(cursor)
         if not dry_run:
             update_state(rebuild_cursor=next_cursor)
-        log.info(f"[rebuild] cursor advanced: {cursor} → {next_cursor}")
+        log.info(f"[rebuild:walk] cursor advanced: {cursor} → {next_cursor}")
         return False
 
     # --- Phase 2: completeness sweep --------------------------------------
@@ -8766,23 +8800,23 @@ def _do_rebuild_tick(today_str: str, prev: str, state: dict, dry_run: bool) -> b
     # declaring rebuild complete, look for any month that has summary rows
     # but is missing periods — months the walk never reached because they
     # sit below the cursor.  The canonical case: a catchup pass imported +
-    # period-1-summarized months older than catchup_started (the pre-2022
-    # cmsauth backlog), so they have period=1 but none of the long-window
-    # periods.  Rebuilding such a month fills its own missing periods and
-    # has NO downstream effect (it doesn't change any other month's
-    # windows), so this is targeted, minimal work — and because rebuild
-    # writes all periods, each swept month becomes complete and is never
-    # surfaced again (no re-process loop).
+    # period-1-summarized months older than catchup_started, so they have
+    # period=1 but none of the long-window periods.  Rebuilding such a
+    # month fills its own missing periods and has NO downstream effect (it
+    # doesn't change any other month's windows), so this is targeted,
+    # minimal work — and because rebuild writes all periods, each swept
+    # month becomes complete and is never surfaced again (no re-process
+    # loop).
     incomplete = period_incomplete_months(today_str)
     if incomplete:
         target = incomplete[0]
-        log.info(f"[rebuild] completeness sweep — {len(incomplete)} incomplete "
+        log.info(f"[rebuild:sweep] {len(incomplete)} incomplete "
                  f"month(s); resummarizing {target} (all 6 periods)")
         do_analyze(target, dry_run)
         do_summarize(target, dry_run)
         return False  # stay in rebuild; re-check on the next tick
 
-    log.info(f"[rebuild] cursor past prev_month and no incomplete months — done")
+    log.info(f"[rebuild] walk done and no incomplete months — done")
     return True
 
 

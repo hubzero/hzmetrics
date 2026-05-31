@@ -617,5 +617,42 @@ class CatchupStartedWatermarkTests(CmdRunTestBase):
         self.assertEqual(self.state.values["catchup_started"], "2022-01")
 
 
+# ---------------------------------------------------------------------------
+# rebuild phase derivation
+# ---------------------------------------------------------------------------
+
+class RebuildPhaseTests(unittest.TestCase):
+    """`_rebuild_phase` derives 'walk' vs 'sweep' from state alone.  No
+    cmd_run wiring needed — it's a pure function on (state, prev)."""
+
+    def setUp(self):
+        import importlib, hzmetrics
+        self.hz = importlib.reload(hzmetrics)
+
+    def test_walk_when_cursor_at_or_before_prev(self):
+        self.assertEqual(
+            self.hz._rebuild_phase({"rebuild_cursor": "2026-04"}, "2026-04"),
+            "walk")
+        self.assertEqual(
+            self.hz._rebuild_phase({"rebuild_cursor": "2025-06"}, "2026-04"),
+            "walk")
+
+    def test_sweep_when_cursor_past_prev(self):
+        self.assertEqual(
+            self.hz._rebuild_phase({"rebuild_cursor": "2026-05"}, "2026-04"),
+            "sweep")
+
+    def test_sweep_when_cursor_absent(self):
+        # No cursor, no catchup_started fallback → walk has nothing to do,
+        # phase is sweep.
+        self.assertEqual(self.hz._rebuild_phase({}, "2026-04"), "sweep")
+
+    def test_cursor_falls_back_to_catchup_started(self):
+        # rebuild_cursor missing, catchup_started present — the fallback
+        # path used on the very first rebuild tick after the transition.
+        self.assertEqual(
+            self.hz._rebuild_phase({"catchup_started": "2023-01"}, "2026-04"),
+            "walk")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -283,7 +283,7 @@ each tick does:
 |----------|----------------------------------------------------------------------------------------------------|--------------------------------|
 | `normal` | Import pending days for the current month; summarize the previous month when it's fully imported.  | → `catchup` when any month strictly before today has either a pending source log or DB rows with incomplete summary. |
 | `catchup`| Pick the oldest backlog month, apply the per-month decision matrix, summarize with `periods=(1,)`. | → `rebuild` when no backlog months remain. |
-| `rebuild`| Walk forward from `rebuild_cursor` through prev-month, re-summarize each with all six periods.     | → `normal` when cursor passes prev-month. |
+| `rebuild`| Two sub-phases (see "Rebuild has two sub-phases" below): **walk** advances `rebuild_cursor` one month per tick through prev-month with all six periods, then **sweep** picks off any remaining `period_incomplete_months` one per tick. | → `normal` when the walk is past prev-month **and** no incomplete months remain. |
 
 Mode transitions are computed at the start of every tick from
 filesystem + DB state — not stored.  So the orchestrator self-corrects
@@ -352,6 +352,40 @@ and `do_analyze` regenerates them from current `web` via
 `rebuild-webhits [--month YYYY-MM | --all]` CLI is the
 operator-driven repair path for filter-change retroactivity.
 
+### Rebuild has two sub-phases inside `mode=rebuild`
+
+`mode=rebuild` is one orchestrator label that covers two distinct
+kinds of work, in order.  `_rebuild_phase(state, prev)` derives which
+is active from `rebuild_cursor` alone (no separate state key), and
+log lines carry an explicit prefix so the phase is obvious in
+`manage.log`:
+
+| Phase | When | Work per tick | Log prefix |
+|---|---|---|---|
+| `walk`  | `rebuild_cursor <= prev_month` | Resummarize the cursor month with all 6 periods; advance cursor. | `[rebuild:walk]` |
+| `sweep` | `rebuild_cursor > prev_month`  | Pick the oldest month from `period_incomplete_months(today)`; resummarize with all 6 periods.  Cursor unused. | `[rebuild:sweep]` |
+
+The two phases handle *different* sources of incomplete state and
+are not interchangeable:
+
+- **Walk** fixes the **invalidation cascade**: when catchup imported
+  new data at month *M*, every month at-or-after `rebuild_cascade_from`
+  has period-12/13/14 cells computed against a window that didn't
+  include *M*.  Those cells are now wrong and the walk rewrites
+  them.  Range is `[rebuild_cursor, prev_month]`.
+- **Sweep** fills **completion gaps**: months catchup processed
+  (period-1 only) that sit *below* `rebuild_cascade_from` (so the
+  walk's range never reached them).  Each swept month has period-1
+  but no long-window cells; one tick fills it and it never resurfaces.
+  Sweep targets can be anywhere in time.
+
+`hzmetrics status` surfaces the active phase explicitly — for `walk`
+it shows cursor + months-remaining-through-prev; for `sweep` it
+shows the count of incomplete months and the oldest one.
+
+Transition to `normal` only fires when **both** the walk has passed
+`prev_month` **and** `period_incomplete_months` is empty.
+
 ### Source-log discovery
 
 `enumerate_log_sources(kind)` returns sorted `[(YYYYMMDD, Path), ...]`
@@ -370,7 +404,9 @@ convention, not pipeline policy — clean up as we drain them.
 ### Catching up manually
 
 `hzmetrics status` shows the current mode, `catchup_started` anchor,
-and (in rebuild mode) cursor + remaining-month count.
+and (in rebuild mode) the active sub-phase plus its specific progress
+indicator (cursor + remaining-month count during `walk`, incomplete-
+month count + oldest target during `sweep`).
 `hzmetrics rebuild-summaries --since YYYY-MM [--through YYYY-MM]
 [--periods 0,1,3,12,13,14] [--dry-run]` is a manual range
 resummarize; it does NOT touch `pipeline_state.mode`, so the
