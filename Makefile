@@ -2,7 +2,7 @@
 #
 # Production install (run on the target HUBzero host, as root):
 #   sudo make install                       # deps + tree + scripts (idempotent)
-#   sudo make uninstall                     # remove /opt/hubzero/metrics tree
+#   sudo make uninstall                     # remove only files install added; rmdir empty dirs
 #
 # `install` is one root-only step.  Everything it does needs root —
 # system-package install, `/opt` tree creation, chown to the service
@@ -73,8 +73,26 @@ install:  ## Install everything (deps + tree + scripts; run as root; idempotent)
 	@echo "  sudo -u $(INSTALL_OWNER) crontab $(HZMETRICS_HOME)/conf/cron.apache"
 	@echo "  sudo -u $(INSTALL_OWNER) $(HZMETRICS_HOME)/bin/hzmetrics.py init"
 
-uninstall:  ## Remove the install tree (leaves $(LOG_DIR) intact for postmortems)
-	rm -rf $(DESTDIR)$(HZMETRICS_HOME)
+uninstall:  ## Remove files install added; rmdir empty dirs (leaves operator config, runtime state, logs, system deps)
+	# Only the three files `install` lays down — symmetric to install,
+	# which doesn't place operator-supplied files (hzmetrics.conf) or
+	# touch runtime state (PID lock) or logs.
+	rm -f $(SCRIPT_DST) $(CRON_TEMPLATE_DST) $(CONF_SAMPLE_DST)
+	# Walk the install dirs bottom-up; rmdir succeeds only when empty,
+	# so operator config / runtime state / log files keep their dirs.
+	# The leading `-` tells make to ignore non-zero exits.
+	-@rmdir $(BIN_DST) 2>/dev/null && echo "  removed empty $(BIN_DST)/"   || true
+	-@rmdir $(CONF_DST) 2>/dev/null && echo "  removed empty $(CONF_DST)/" || true
+	-@rmdir $(STATE_DST) 2>/dev/null && echo "  removed empty $(STATE_DST)/" || true
+	-@rmdir $(LOG_DST) 2>/dev/null && echo "  removed empty $(LOG_DST)/"   || true
+	-@rmdir $(DESTDIR)$(HZMETRICS_HOME) 2>/dev/null && echo "  removed empty $(DESTDIR)$(HZMETRICS_HOME)/" || true
+	@echo
+	@echo "Uninstalled.  Preserved (if present):"
+	@echo "  $(CONF_DST)/hzmetrics.conf       — operator config"
+	@echo "  $(STATE_DST)/hzmetrics.pid        — PID lock (runtime)"
+	@echo "  $(LOG_DST)/manage.log             — logs"
+	@echo "  python3.11-PyMySQL RPM, aiodns pip module — system deps"
+	@echo "  any dir that still has any of the above in it"
 
 test:  ## Run the defensive A/B suite (no legacy required)
 	./tests/ab/run-defensive.sh

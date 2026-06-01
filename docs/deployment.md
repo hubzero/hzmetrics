@@ -98,7 +98,7 @@ From a checkout of this repo:
 ```
 sudo make install              # deps + /opt tree + scripts (idempotent)
 sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
-sudo make uninstall            # removes /opt/hubzero/metrics tree
+sudo make uninstall            # removes only files install added; rmdir empty dirs
 make help                      # list targets (lint, test, test-ab, …)
 ```
 
