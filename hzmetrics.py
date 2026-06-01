@@ -2569,6 +2569,82 @@ def cmd_audit(args):
             findings.append((table, column, ym, total, missing, pct, median,
                              remediate_tmpl.format(ym=ym)))
 
+    # Structural: period-14 cumulative monotonicity.
+    # The all-time cell (rowid=1 / colid=1 / period=14) is the count of
+    # distinct registered users with activity from 1995 through the end of
+    # the row's month.  It can only stay the same or grow; a drop is always
+    # a methodology change, data loss, or computation bug.  Period-12 has
+    # a sliding window and IS allowed to decrease when older traffic ages
+    # out, so it's excluded.
+    rows = mysql_query(
+        f"SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, CAST(value AS UNSIGNED) v "
+        f"FROM {metrics_db}.summary_user_vals "
+        f"WHERE period = 14 AND rowid = 1 AND colid = 1 "
+        f"  AND datetime <> '0000-00-00 00:00:00' "
+        f"  AND datetime >= %s AND datetime < %s "
+        f"  AND value REGEXP '^[0-9]+$' "
+        f"ORDER BY ym",
+        (start_iso, end_iso),
+    )
+    prev_ym = prev_v = None
+    monotonicity_drops: list[tuple] = []
+    for ym, v in rows:
+        v = int(v)
+        if prev_v is not None and v < prev_v:
+            monotonicity_drops.append((prev_ym, prev_v, ym, v))
+        prev_ym, prev_v = ym, v
+    if monotonicity_drops:
+        log.warning(f"[audit] WARN  summary_user_vals.period=14  "
+                    f"— {len(monotonicity_drops)} month-to-month drop(s) "
+                    f"in cumulative all-time count")
+        for p_ym, p_v, c_ym, c_v in monotonicity_drops:
+            log.warning(f"            {p_ym}: {p_v:>11,}  →  {c_ym}: {c_v:>11,}  "
+                        f"(Δ {c_v - p_v:+,})")
+        # One finding per affected month — surfaces as `summarize-month {ym}`
+        # under the existing remediation-grouping (the right fix: resummarize
+        # the months bracketing each drop with all six periods so legacy and
+        # new methodology converge).
+        for p_ym, p_v, c_ym, c_v in monotonicity_drops:
+            findings.append(("summary_user_vals", "(period-14 drop)",
+                             c_ym, None, None, None, None, None))
+
+    # Structural: asymmetric source coverage.
+    # `web` and `userlogin` are populated from independent source logs
+    # (apache access and cmsauth respectively).  A month where one has
+    # substantial data and the other has zero means one source's logs were
+    # lost or never imported.  Both being zero is a data-gap month, covered
+    # by the missing-period-1 check below — not flagged here.
+    web_counts = dict(mysql_query(
+        f"SELECT DATE_FORMAT(datetime,'%%Y-%%m') ym, COUNT(*) "
+        f"FROM {metrics_db}.web "
+        f"WHERE datetime >= %s AND datetime < %s GROUP BY ym",
+        (start_iso, end_iso)))
+    user_counts = dict(mysql_query(
+        f"SELECT DATE_FORMAT(datetime,'%%Y-%%m') ym, COUNT(*) "
+        f"FROM {metrics_db}.userlogin "
+        f"WHERE datetime >= %s AND datetime < %s GROUP BY ym",
+        (start_iso, end_iso)))
+    asymmetric: list[tuple] = []
+    for ym in sorted(set(web_counts) | set(user_counts)):
+        w = int(web_counts.get(ym, 0))
+        u = int(user_counts.get(ym, 0))
+        # `_AUDIT_MIN_ROWS` floor on web (avoids noise in tiny months).
+        # userlogin is sparse by nature so use a smaller absolute floor.
+        if w >= _AUDIT_MIN_ROWS and u == 0:
+            asymmetric.append((ym, "userlogin/cmsauth", w, u))
+        elif u >= 10 and w == 0:
+            asymmetric.append((ym, "web/apache", w, u))
+    if asymmetric:
+        log.warning(f"[audit] WARN  asymmetric source coverage  "
+                    f"— {len(asymmetric)} month(s) where one of "
+                    f"(apache, cmsauth) logs was lost or never imported")
+        for ym, missing_src, w, u in asymmetric:
+            log.warning(f"            {ym}: web={w:>9,}  userlogin={u:>5,}  "
+                        f"(missing: {missing_src})")
+        for ym, _missing_src, _w, _u in asymmetric:
+            findings.append(("source_coverage", "(asymmetric)",
+                             ym, None, None, None, None, None))
+
     # Structural: months with web data but no period-1 summary.
     rows = mysql_query(
         f"SELECT DISTINCT DATE_FORMAT(datetime, '%%Y-%%m') ym "
