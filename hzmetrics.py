@@ -6423,6 +6423,15 @@ IPCOUNTRY_URL     = "https://help.hubzero.org/ipinfo/v1"
 IPCOUNTRY_HUB_KEY = "_HUBZERO_OPNSRC_V1_"
 IPCOUNTRY_TIMEOUT = 5     # seconds; PHP relies on default_socket_timeout (~60s)
 
+# RFC1918 + loopback + link-local — no geo service can answer for these.
+# Used by fill-ipcountry to skip the HTTPS lookup and mark them `-`
+# directly.  Without this filter the same private-IP rows show up in every
+# tick's audit gap forever (the lookup never returns a country, the row
+# stays NULL, the next pass re-queries).
+_PRIVATE_IP_SQL_REGEXP = (
+    r"^(10|127|192\.168|169\.254|172\.(1[6-9]|2[0-9]|3[01]))\."
+)
+
 # Fallback chain tried in order if the primary endpoint times out / errors.
 # help.hubzero.org is the documented home; hubzero.org still serves a copy.
 # https is preferred but http remains as a final fallback for legacy plumbing.
@@ -6798,16 +6807,37 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
     try:
         total_select = 0
         total_update = 0
+        total_private = 0
+        total_noanswer = 0
         for c_start, c_end in chunks:
+            # First: mark RFC1918 / loopback / link-local IPs in this
+            # chunk's range with the `-` sentinel.  No geo service can
+            # answer for them; without this they'd stay NULL and the
+            # next pass would re-query them indefinitely.
+            if not dry_run:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {db_name}.{table} "
+                        f"SET ipcountry = '-' "
+                        f"WHERE {d_col} > %s AND {d_col} <= %s "
+                        f"  AND (ipcountry = '' OR ipcountry IS NULL) "
+                        f"  AND ip REGEXP %s",
+                        (c_start, c_end, _PRIVATE_IP_SQL_REGEXP),
+                    )
+                    total_private += cur.rowcount
+
             with conn.cursor() as cur:
-                # PHP SQL uses `> start AND <= end` (findWeeks boundary)
+                # PHP SQL uses `> start AND <= end` (findWeeks boundary).
+                # Excludes private IPs since we just marked them above —
+                # no point spending HTTPS calls on them.
                 cur.execute(
                     f"SELECT DISTINCT(ip) AS n_ip, COUNT(*) AS hits "
                     f"FROM {db_name}.{table} "
                     f"WHERE {d_col} > %s AND {d_col} <= %s "
                     f"AND (ipcountry = '' OR ipcountry IS NULL) "
+                    f"AND ip NOT REGEXP %s "
                     f"GROUP BY n_ip ORDER BY hits DESC",
-                    (c_start, c_end),
+                    (c_start, c_end, _PRIVATE_IP_SQL_REGEXP),
                 )
                 rows = cur.fetchall()
             total_select += len(rows)
@@ -6828,9 +6858,7 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
 
             for ip in ips:
                 geo = geos.get(ip)
-                if geo is None:
-                    continue
-                country = geo['countrySHORT']
+                country = geo['countrySHORT'] if geo else None
                 if country and country != '-':
                     with conn.cursor() as cur:
                         cur.execute(
@@ -6841,8 +6869,26 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
                             (country, ip),
                         )
                         total_update += cur.rowcount
-        log.info(f"[fill-ipcountry] done: {total_select} IP(s) considered, "
-            f"{total_update} row(s) updated")
+                else:
+                    # Service tried but returned no answer.  Persist the
+                    # `-` sentinel so the next pass doesn't re-query.
+                    # The audit (commit 4e2813c) excludes `-` from the
+                    # missing count, treating it as "resolved with no
+                    # country."
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"UPDATE {db_name}.{table} "
+                            f"SET ipcountry = '-' "
+                            f"WHERE (ipcountry = '' OR ipcountry IS NULL) "
+                            f"AND ip = %s",
+                            (ip,),
+                        )
+                        total_noanswer += cur.rowcount
+        log.info(
+            f"[fill-ipcountry] done: {total_select} IP(s) considered, "
+            f"{total_update} row(s) updated, "
+            f"{total_private} row(s) marked '-' (private/loopback), "
+            f"{total_noanswer} row(s) marked '-' (service no answer)")
         return 0
     finally:
         conn.close()
