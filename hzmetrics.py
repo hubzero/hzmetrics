@@ -1315,9 +1315,19 @@ class Migration:
 MIGRATIONS = [
     Migration(
         id=1,
-        description="Index web(dnload) — applied by backfill-dnload May 2026",
+        # Superseded by migration 43 (web_dnload_dt).  Kept for upgrade
+        # immutability: hosts that ran M1 before M43 existed still find
+        # `dnload` in information_schema and stay marked applied.  Fresh
+        # installs land on the new CREATE TABLE which already has
+        # web_dnload_dt — counting that index here makes M1 a no-op on
+        # those, avoiding an ADD-then-DROP cycle with M49.
+        description="Index web(dnload) — superseded by web_dnload_dt (migration 43)",
         sql="ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);",
-        check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema='{metrics_db}' AND table_name='web' "
+            "AND index_name IN ('dnload', 'web_dnload_dt');"
+        ),
         required=False,
     ),
     Migration(
@@ -1648,6 +1658,54 @@ MIGRATIONS.append(Migration(
     ),
     required=False,
 ))
+
+
+# Drop redundant secondary indexes on `web`.  At 48 M rows these cost
+# roughly 0.5–1 GB of InnoDB storage each and slow every INSERT by an
+# extra B-tree update.  Each drop has a strict replacement already
+# present:
+#
+#   elementid   (single col)        cardinality 1 — has only one
+#                                   distinct value across the entire
+#                                   table.  No code path queries it.
+#   dnload      (single col)        covered by web_dnload_dt
+#                                   (dnload, datetime) — leading
+#                                   column identical (migration 43).
+#   datetime    (single col)        covered by web_dt_ip
+#                                   (datetime, ip) — leading column
+#                                   identical (migration 42).
+#   sessionid   (single col)        covered by web_sessionid_dnload
+#                                   (sessionid, dnload) — leading
+#                                   column identical (migration 2).
+#
+# A composite index (a, b) serves every WHERE-on-a query that the
+# single-column (a) would have served, with identical plan cost; the
+# redundant single-column versions are pure tax on writes and storage.
+# Order matters: these run after migrations 2, 42, 43 (their composite
+# replacements), so the drop never removes the only index on a column.
+for _idx_id, _idx_name in (
+    (48, "elementid"),
+    (49, "dnload"),
+    (50, "datetime"),
+    (51, "sessionid"),
+):
+    MIGRATIONS.append(Migration(
+        id=_idx_id,
+        description=(
+            f"Drop redundant index web({_idx_name}) — covered by a "
+            f"composite or has cardinality 1; reclaims storage and "
+            f"speeds INSERT"
+        ),
+        sql=f"ALTER TABLE {{metrics_db}}.web DROP INDEX {_idx_name};",
+        check_sql=(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            f"WHERE table_schema='{{metrics_db}}' AND table_name='web' "
+            f"AND index_name='{_idx_name}';"
+        ),
+        check_expect=0,
+        required=False,
+    ))
+del _idx_id, _idx_name
 
 
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
@@ -2116,13 +2174,9 @@ METRICS_DB_DDL = [
   `item_name` varchar(120) NOT NULL DEFAULT '',
   `dnload` tinyint(4) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `datetime` (`datetime`),
-  KEY `sessionid` (`sessionid`),
-  KEY `elementid` (`elementid`),
   KEY `ipcountry` (`ipcountry`),
   KEY `ip` (`ip`),
   KEY `content` (`content`(255)),
-  KEY `dnload` (`dnload`),
   KEY `web_sessionid_dnload` (`sessionid`,`dnload`),
   KEY `web_host` (`host`(255)),
   KEY `web_dt_ip` (`datetime`,`ip`),
