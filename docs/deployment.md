@@ -160,14 +160,14 @@ for the documented form:
 ```ini
 [hub]
 site = <hub>
-hub_db = <hub>
-db_prefix = jos_
 hub_dir = /var/www/<hub>
 
 [db]
 host = localhost
 user = <hub>
 password = <secret>
+hub_db = <hub>
+hub_db_prefix = jos_
 metrics_db = <hub>_metrics
 
 [dns]

@@ -228,9 +228,9 @@ reset+resummarize finishes.
 
 ### `hzmetrics.conf`
 `/opt/hubzero/metrics/conf/hzmetrics.conf`.  Unified per-tenant INI
-config with three sections: `[hub]` (site, hub_db, db_prefix, hub_dir),
-`[db]` (host, user, password, metrics_db), and `[dns]` (optional —
-nameserver, concurrency, timeout).  Owned `apache:apache` mode 0600 —
+config with three sections: `[hub]` (site, hub_dir), `[db]` (host,
+user, password, hub_db, hub_db_prefix, metrics_db), and `[dns]`
+(optional — nameserver, concurrency, timeout).  Owned `apache:apache` mode 0600 —
 carries the DB password.  Read by `hzmetrics.py`; resolution chain is
 the `-c FILE` flag → `$HZMETRICS_CONFIG` env var → this default path.
 The legacy Perl/PHP scripts under `tests/legacy/` still read the older

@@ -66,14 +66,14 @@ _test_site_name="${HUB_DB%_test}"
 cat > "$HZMETRICS_INI" <<EOF
 [hub]
 site = ${_test_site_name:-test}
-hub_db = ${HUB_DB}
-db_prefix = ${DB_PREFIX:-jos_}
 hub_dir = ${HUB_DIR:-/tmp}
 
 [db]
 host = ${DB_HOST:-localhost}
 user = ${DB_USER}
 password = ${DB_PASS}
+hub_db = ${HUB_DB}
+hub_db_prefix = ${DB_PREFIX:-jos_}
 metrics_db = ${METRICS_DB}
 EOF
 chmod 600 "$HZMETRICS_INI"

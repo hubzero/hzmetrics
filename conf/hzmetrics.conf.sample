@@ -20,11 +20,6 @@
 # Required.
 site = theghub
 
-# CMS database name (read for jos_session, jos_resources, etc.) and the
-# table-name prefix the CMS uses.  Required.
-hub_db = vhub
-db_prefix = jos_
-
 # CMS document root.  Used by `whoisonline` to locate the Google Maps
 # widget's XML output dir (`<hub_dir>/app/site/stats/maps/`).  Required.
 hub_dir = /var/www/theghub
@@ -35,6 +30,14 @@ hub_dir = /var/www/theghub
 host = localhost
 user = vhub
 password = REPLACE_ME
+
+# Hub DB name (read for jos_session, jos_resources, etc.) and the
+# table-name prefix the CMS uses.  Required.
+hub_db = vhub
+hub_db_prefix = jos_
+
+# Metrics DB name (read/write, owned end-to-end by the pipeline).
+# Required.
 metrics_db = vhub_metrics
 
 [dns]

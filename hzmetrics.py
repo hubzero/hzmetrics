@@ -192,8 +192,8 @@ LOCK_FILE   = HZMETRICS_HOME / "state" / "hzmetrics.pid"
 # All host-tied identity, DB credentials, and DNS tuning live in a single
 # INI file with three sections:
 #
-#   [hub]   site, hub_db, db_prefix, hub_dir
-#   [db]    host, user, password, metrics_db
+#   [hub]   site, hub_dir
+#   [db]    host, user, password, hub_db, hub_db_prefix, metrics_db
 #   [dns]   nameserver, concurrency, timeout
 #
 # main() resolves -c (or HZMETRICS_CONFIG) once at startup and caches the
@@ -3507,17 +3507,22 @@ def cmd_process(args):
 def db_config() -> dict[str, str]:
     """Flatten the unified config's [hub] + [db] sections into the
     legacy dict shape callers expect:
-        hub_dir, hub_db, db_prefix    (from [hub])
+        hub_dir                       (from [hub])
         db_host, db_user, db_pass     (from [db] keys host, user, password)
-        metrics_db                    (from [db])
+        hub_db, metrics_db            (from [db])
+        db_prefix                     (from [db] key hub_db_prefix — the
+                                       internal dict key keeps the historic
+                                       name to avoid churn in the ~30
+                                       call sites that pass it as a
+                                       function parameter)
     Missing keys become empty strings; db_prefix defaults to 'jos_'."""
     cfg = _load_config()
     hub = cfg.get("hub", {})
     db  = cfg.get("db", {})
     return {
         "hub_dir":    hub.get("hub_dir", ""),
-        "hub_db":     hub.get("hub_db", ""),
-        "db_prefix":  hub.get("db_prefix", "jos_"),
+        "hub_db":     db.get("hub_db", ""),
+        "db_prefix":  db.get("hub_db_prefix", "jos_"),
         "db_host":    db.get("host", "localhost"),
         "db_user":    db.get("user", ""),
         "db_pass":    db.get("password", ""),
