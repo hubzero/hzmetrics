@@ -373,7 +373,7 @@ days, mostly testing.
 
 The every-5-min `hzmetrics.py tick` entry is installed into the
 apache user's crontab via `sudo -u apache crontab
-/opt/hubzero/metrics/conf/cron.apache` — on geodynamics this has
+/opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample` — on geodynamics this has
 been deliberately left un-registered during the audit so all ticks
 are manual.  Once steady-state is verified, register the crontab
 and let it drive.

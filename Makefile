@@ -14,8 +14,8 @@
 # preserves `/var/log/hubzero/metrics → apache:access-logs` when that
 # happens to be the host convention).
 #
-# `install` does NOT touch the conf/access.cfg secret or register the
-# crontab — those are operator-supplied / operator-actioned.  The
+# `install` does NOT touch the conf/hzmetrics.conf secret or register
+# the crontab — those are operator-supplied / operator-actioned.  The
 # install target prints the remaining manual steps at the end.
 #
 # Dev / CI:
@@ -39,7 +39,7 @@ CONF_DST           := $(DESTDIR)$(HZMETRICS_HOME)/conf
 STATE_DST          := $(DESTDIR)$(HZMETRICS_HOME)/state
 LOG_DST            := $(DESTDIR)$(LOG_DIR)
 SCRIPT_DST         := $(BIN_DST)/hzmetrics.py
-CRON_TEMPLATE_DST  := $(CONF_DST)/cron.apache
+CRON_TEMPLATE_DST  := $(CONF_DST)/hzmetrics.cron.apache.sample
 CONF_SAMPLE_DST    := $(CONF_DST)/hzmetrics.conf.sample
 
 .PHONY: help install uninstall test test-ab lint
@@ -65,12 +65,12 @@ install:  ## Install everything (deps + tree + scripts; run as root; idempotent)
 	# --- Project-shipped files (always overwritten; these are upgrade-tracked,
 	#     not operator-customized) ---
 	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 755 $(SCRIPT) $(SCRIPT_DST)
-	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 conf/hubzero-metrics.cron.apache $(CRON_TEMPLATE_DST)
+	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 conf/hzmetrics.cron.apache.sample $(CRON_TEMPLATE_DST)
 	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 conf/hzmetrics.conf.sample $(CONF_SAMPLE_DST)
 	@echo
 	@echo "Installed under $(HZMETRICS_HOME)/.  Remaining manual steps:"
-	@echo "  install -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0600 <your access.cfg> $(HZMETRICS_HOME)/conf/access.cfg"
-	@echo "  sudo -u $(INSTALL_OWNER) crontab $(HZMETRICS_HOME)/conf/cron.apache"
+	@echo "  install -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0600 <your hzmetrics.conf> $(HZMETRICS_HOME)/conf/hzmetrics.conf"
+	@echo "  sudo -u $(INSTALL_OWNER) crontab $(HZMETRICS_HOME)/conf/hzmetrics.cron.apache.sample"
 	@echo "  sudo -u $(INSTALL_OWNER) $(HZMETRICS_HOME)/bin/hzmetrics.py init"
 
 uninstall:  ## Remove files install added; rmdir empty dirs (leaves operator config, runtime state, logs, system deps)

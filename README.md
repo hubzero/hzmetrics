@@ -49,7 +49,7 @@ sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
 
 # 5. Register the cron line.
-sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+sudo -u apache crontab /opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample
 ```
 
 `make install`, `init`, and `doctor` are idempotent. The same `init`

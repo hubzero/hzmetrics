@@ -76,7 +76,7 @@ outside, at the conventional `/var/log/` location:
 /opt/hubzero/metrics/bin/hzmetrics.py            the pipeline
 /opt/hubzero/metrics/conf/hzmetrics.conf         unified per-tenant config (mode 600, apache)
 /opt/hubzero/metrics/conf/hzmetrics.conf.sample  reference config (the documented template)
-/opt/hubzero/metrics/conf/cron.apache            crontab template (apache crontab)
+/opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample            crontab template (apache crontab)
 /opt/hubzero/metrics/state/hzmetrics.pid         PID lock (created at runtime)
 /var/log/hubzero/metrics/manage.log              pipeline log (apache-writable)
 ```
@@ -97,7 +97,7 @@ From a checkout of this repo:
 
 ```
 sudo make install              # deps + /opt tree + scripts (idempotent)
-sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+sudo -u apache crontab /opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample
 sudo make uninstall            # removes only files install added; rmdir empty dirs
 make help                      # list targets (lint, test, test-ab, …)
 ```
@@ -115,7 +115,7 @@ is a no-op for the tree and a redundant overwrite for the files.
 What `install` copies (all owned `apache:apache`):
 
 - `hzmetrics.py` → `/opt/hubzero/metrics/bin/hzmetrics.py` (mode 755)
-- `conf/hubzero-metrics.cron.apache` → `/opt/hubzero/metrics/conf/cron.apache` (mode 644)
+- `conf/hzmetrics.cron.apache.sample` → `/opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample` (mode 644)
 - `conf/hzmetrics.conf.sample` → `/opt/hubzero/metrics/conf/hzmetrics.conf.sample` (mode 644)
 
 `install` deliberately does NOT drop `hzmetrics.conf` — it's an
@@ -146,7 +146,7 @@ user crontab:
 Register it via:
 
 ```
-sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
+sudo -u apache crontab /opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample
 ```
 
 cronie auto-detects the user-crontab change; no daemon restart needed.

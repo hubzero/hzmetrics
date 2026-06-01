@@ -486,7 +486,7 @@ still safe — it sees nothing to do).
 - `/opt/hubzero/metrics/conf/hzmetrics.conf` — *optional* runtime
   overrides (DNS nameserver, concurrency, timeout).  See
   [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample).
-- `/opt/hubzero/metrics/conf/cron.apache` — crontab template; operator
+- `/opt/hubzero/metrics/conf/hzmetrics.cron.apache.sample` — crontab template; operator
   registers it via `sudo -u apache crontab …`.
 - `/opt/hubzero/metrics/state/hzmetrics.pid` — PID lock file.  One
   line, three space-separated fields: `<pid> <init_start_epoch>
@@ -538,7 +538,7 @@ daily-state-already-completed guard on `run` / `process` / `analyze` /
 
 - **`hzmetrics.py`** — the entire pipeline.  ~6000 lines of Python.
 - **`conf/hzmetrics.conf.sample`** — optional runtime overrides.
-- **`conf/hubzero-metrics.cron.apache`** — apache user crontab template.
+- **`conf/hzmetrics.cron.apache.sample`** — apache user crontab template.
 - **`tests/legacy/`** — the original PHP/Perl/Bash pipeline preserved
   as the A/B parity reference.
 - **`tests/ab/`** — the A/B test harness (35 ports; see
