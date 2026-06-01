@@ -4707,7 +4707,21 @@ def do_clean_bots(table, date_spec=None, *, all_dates=False,
             # filter kinds for symmetry — domain filters use an
             # indexed equality and rarely hit the limit, but a
             # popular bot domain on a big month could.
-            _CHUNK = 50000
+            #
+            # _CHUNK sized for index-heavy tables.  `web` carries 12+
+            # secondary indexes (PRIMARY, datetime, sessionid,
+            # elementid, ipcountry, ip, content, dnload,
+            # web_sessionid_dnload, web_host, web_dt_ip,
+            # web_dnload_dt) and a DELETE locks every clustered + every
+            # secondary entry per row — 50_000 × 12 ≈ 600 K locks per
+            # DELETE statement, which exceeds the ~500 K lock-table
+            # ceiling at 128 MB innodb_buffer_pool.  Observed on
+            # 2026-05 clean-bots after fa0adc5 cleared 2026-02 (the
+            # earlier failure: 2026-02 didn't fill a 50 K batch on any
+            # single filter; 2026-05 did, exposing the index multiplier).
+            # 5_000 keeps the worst-case lock count to ~60 K with
+            # plenty of headroom for the smallest buffer pools we run.
+            _CHUNK = 5000
             def _delete_matching(where_pred, where_params):
                 deleted_local = 0
                 while True:
