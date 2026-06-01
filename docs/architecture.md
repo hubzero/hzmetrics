@@ -460,7 +460,7 @@ hands-off — but for the service user it does three things idempotently:
      `HZMETRICS_HOME/{bin,conf,state}`, the Apache `daily` /
      `imported` pair, the HUBzero `daily` / `imported` pair, plus the
      metrics-staging dir).  `PermissionError` becomes a fail-fast with
-     "run install-bootstrap once as root" guidance.
+     "run `sudo make install` once" guidance.
   3. **Database repair.**  Runs the baseline DDL (every statement is
      `CREATE TABLE IF NOT EXISTS`) which also brings the database
      itself into existence via `CREATE DATABASE IF NOT EXISTS`, then

@@ -16,8 +16,9 @@ How to install `hzmetrics.py` on a new HUBzero hub.
   cron entry is owned by `apache`.
 
 Production hosts get the deps as system packages (Rocky 8 names —
-adapt for other distros).  `sudo make install-deps` runs both of
-the commands below; do them by hand if you'd rather see each step:
+adapt for other distros).  `sudo make install` runs both of the
+commands below as its first step; do them by hand if you'd rather
+see each step:
 
 ```
 sudo dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
@@ -96,21 +97,21 @@ A/B-test parity reference.
 From a checkout of this repo:
 
 ```
-# One-time, on a fresh host (the only root step):
-sudo make install-bootstrap
-
-# Now and forever after, no root needed:
-sudo -u apache make install
+sudo make install              # deps + /opt tree + scripts (idempotent)
 sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
 sudo make uninstall            # removes /opt/hubzero/metrics tree
 make help                      # list targets (lint, test, test-ab, …)
 ```
 
-`install-bootstrap` creates `/opt/hubzero/metrics/{bin,conf,state}`
-and `/var/log/hubzero/metrics/` owned `apache:apache` mode 0750 —
-the only root-required step in the install, and only once per host.
-Subsequent installs and upgrades are pure `sudo -u apache make install`
-identity-switches; no actual root needed.
+`make install` is one root-only step that does everything that
+needs root: installs deps (`python3.11-PyMySQL` via dnf, `aiodns`
+via pip), creates `/opt/hubzero/metrics/{bin,conf,state}` and
+`/var/log/hubzero/metrics/` owned `apache:apache` mode 0750 if
+they don't already exist (only fixing perms when the service user
+can't reach the directory — preserves existing per-host groupings
+like `/var/log/hubzero/metrics → apache:access-logs`), and lays
+down the project-shipped files.  Re-running it on a healthy install
+is a no-op for the tree and a redundant overwrite for the files.
 
 What `install` copies (all owned `apache:apache`):
 
@@ -196,7 +197,7 @@ against Purdue's resolvers and produces ~4 ms/IP cold.
 
 ## First-time install
 
-After `install-bootstrap` has seated `/opt/hubzero/metrics` and you've
+After `make install` has seated `/opt/hubzero/metrics` and you've
 dropped a populated `conf/access.cfg` in place, the script can finish
 its own setup in one call:
 

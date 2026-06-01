@@ -35,30 +35,27 @@ bug-for-bug parity target the A/B test harness compares against.
 ## Quickstart
 
 ```sh
-# 1. Lay down the install tree and Python dependencies (root, once per host).
-sudo make install-bootstrap
-sudo make install-deps
-
-# 2. Install the script + cron + logrotate hook + sample conf.
+# 1. Deps + /opt tree + scripts (root; idempotent).
 sudo make install
 
-# 3. Drop your DB credentials in place.
-sudo -u apache install -m 640 access.cfg \
+# 2. Drop your DB credentials in place.
+sudo install -o apache -g apache -m 0600 access.cfg \
     /opt/hubzero/metrics/conf/access.cfg
 
-# 4. Create the metrics DB, run baseline DDL, apply migrations.
+# 3. Create the metrics DB, run baseline DDL, apply migrations.
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
 
-# 5. Confirm everything is healthy.
+# 4. Confirm everything is healthy.
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
 
-# 6. Register the cron line.
+# 5. Register the cron line.
 sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
 ```
 
-`init` and `doctor` are idempotent. The same machinery also runs
-automatically on the first cron tick when invoked as `apache` /
-`www-data`, so if you skip step 4 the next tick will catch up — see
+`make install`, `init`, and `doctor` are idempotent. The same `init`
+machinery also runs automatically on the first cron tick when invoked
+as `apache` / `www-data`, so if you skip step 3 the next tick will
+catch up — see
 [`docs/architecture.md → Self-bootstrap`](docs/architecture.md#self-bootstrap).
 
 The cron line is one entry, every five minutes:

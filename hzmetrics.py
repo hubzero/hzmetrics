@@ -1066,7 +1066,7 @@ def _bootstrap_dirs() -> None:
             log.error(
                 f"[bootstrap] cannot create {d} — permission denied.\n"
                 f"  Run once as root to seat the install:\n"
-                f"    sudo make install-bootstrap   "
+                f"    sudo make install   "
                 f"(creates {HZMETRICS_HOME} owned by the web-server user)\n"
                 f"  And ensure /var/log/hubzero/ exists and is writable by "
                 f"the web-server user."
