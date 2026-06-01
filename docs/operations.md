@@ -228,7 +228,8 @@ done
 
 If the underlying logrotate is wrong (not putting files in `daily/`
 at all), check `/etc/logrotate.d/httpd` and `/etc/logrotate.d/hubzero`
-and compare against `conf/hzmetrics-logrotate-postrotate.sh`.
+— they should rotate into `daily/` (with date-suffixed filenames the
+pipeline can parse, e.g. `<site>-access.log-YYYYMMDD[.gz]`).
 
 ## A tick says "still running" but nothing's progressing
 

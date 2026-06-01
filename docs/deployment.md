@@ -61,7 +61,6 @@ outside, at the conventional `/var/log/` location:
 
 ```
 /opt/hubzero/metrics/bin/hzmetrics.py            the pipeline
-/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh logrotate hook
 /opt/hubzero/metrics/conf/access.cfg             DB credentials (mode 600, apache)
 /opt/hubzero/metrics/conf/hzmetrics.conf         optional runtime overrides
 /opt/hubzero/metrics/conf/cron.apache            crontab template (apache crontab)
@@ -104,7 +103,6 @@ identity-switches; no actual root needed.
 What `install` copies (all owned `apache:apache`):
 
 - `hzmetrics.py` → `/opt/hubzero/metrics/bin/hzmetrics.py` (mode 755)
-- `conf/hzmetrics-logrotate-postrotate.sh` → `/opt/hubzero/metrics/bin/hzmetrics-postrotate.sh` (mode 755)
 - `conf/hubzero-metrics.cron.apache` → `/opt/hubzero/metrics/conf/cron.apache` (mode 644)
 - `conf/hzmetrics.conf.sample` → `/opt/hubzero/metrics/conf/hzmetrics.conf.sample` (mode 644)
 
@@ -264,9 +262,9 @@ markers.
 ## Logrotate
 
 The pipeline writes to a single log file in
-`/var/log/hubzero/metrics/`.  Add a logrotate stanza that invokes the
-postrotate hook so the pipeline picks up the new file without
-restarting (it reopens on the next `tick`):
+`/var/log/hubzero/metrics/manage.log`.  Each `tick` invocation creates
+a fresh logger and reopens the file by name, so logrotate doesn't need
+a postrotate hook — a plain stanza is sufficient:
 
 ```
 /var/log/hubzero/metrics/manage.log {
@@ -276,9 +274,6 @@ restarting (it reopens on the next `tick`):
     missingok
     notifempty
     create 640 apache apache
-    postrotate
-        /opt/hubzero/metrics/bin/hzmetrics-postrotate.sh
-    endscript
 }
 ```
 

@@ -29,12 +29,11 @@ CONF_DST           := $(DESTDIR)$(HZMETRICS_HOME)/conf
 STATE_DST          := $(DESTDIR)$(HZMETRICS_HOME)/state
 LOG_DST            := $(DESTDIR)$(LOG_DIR)
 SCRIPT_DST         := $(BIN_DST)/hzmetrics.py
-POSTROTATE_DST     := $(BIN_DST)/hzmetrics-postrotate.sh
 CRON_TEMPLATE_DST  := $(CONF_DST)/cron.apache
 CONF_SAMPLE_DST    := $(CONF_DST)/hzmetrics.conf.sample
 
 .PHONY: help install install-bootstrap install-deps uninstall test test-ab lint \
-        install-script install-logrotate install-cron-template install-conf-sample
+        install-script install-cron-template install-conf-sample
 
 help:  ## List all targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z][a-zA-Z0-9_-]*:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -47,7 +46,7 @@ install-bootstrap:  ## One-time root step: create HZMETRICS_HOME owned by INSTAL
 	    $(DESTDIR)$(HZMETRICS_HOME) \
 	    $(BIN_DST) $(CONF_DST) $(STATE_DST) $(LOG_DST)
 
-install: install-script install-logrotate install-cron-template install-conf-sample  ## Install everything (run as INSTALL_OWNER once bootstrap is done)
+install: install-script install-cron-template install-conf-sample  ## Install everything (run as INSTALL_OWNER once bootstrap is done)
 	@echo
 	@echo "Installed under $(HZMETRICS_HOME)/.  Remaining manual steps:"
 	@echo "  # if first install, run the one-time root bootstrap once per host:"
@@ -59,10 +58,6 @@ install: install-script install-logrotate install-cron-template install-conf-sam
 
 install-script:  ## Install hzmetrics.py to $(HZMETRICS_HOME)/bin/
 	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 755 $(SCRIPT) $(SCRIPT_DST)
-
-install-logrotate:  ## Install logrotate postrotate hook script
-	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 755 \
-	    conf/hzmetrics-logrotate-postrotate.sh $(POSTROTATE_DST)
 
 install-cron-template:  ## Install the cron template (operator registers it via `crontab`)
 	install -D -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 644 \
