@@ -74,10 +74,9 @@ outside, at the conventional `/var/log/` location:
 
 ```
 /opt/hubzero/metrics/bin/hzmetrics.py            the pipeline
-/opt/hubzero/metrics/conf/access.cfg             DB credentials (mode 600, apache)
-/opt/hubzero/metrics/conf/hzmetrics.conf         optional runtime overrides
+/opt/hubzero/metrics/conf/hzmetrics.conf         unified per-tenant config (mode 600, apache)
+/opt/hubzero/metrics/conf/hzmetrics.conf.sample  reference config (the documented template)
 /opt/hubzero/metrics/conf/cron.apache            crontab template (apache crontab)
-/opt/hubzero/metrics/conf/hzmetrics.conf.sample  reference config
 /opt/hubzero/metrics/state/hzmetrics.pid         PID lock (created at runtime)
 /var/log/hubzero/metrics/manage.log              pipeline log (apache-writable)
 ```
@@ -119,12 +118,13 @@ What `install` copies (all owned `apache:apache`):
 - `conf/hubzero-metrics.cron.apache` → `/opt/hubzero/metrics/conf/cron.apache` (mode 644)
 - `conf/hzmetrics.conf.sample` → `/opt/hubzero/metrics/conf/hzmetrics.conf.sample` (mode 644)
 
-`install` deliberately does NOT drop `access.cfg` — it's an operator-
-supplied secret.  After `make install`, the Makefile prints the
-remaining manual steps (the access.cfg copy, the `crontab`
-registration; `setup-db` and `migrate --apply` are now folded into
-`hzmetrics.py init` or the auto-bootstrap on cron's first tick —
-see [the First-time install section](#first-time-install) below).
+`install` deliberately does NOT drop `hzmetrics.conf` — it's an
+operator-supplied secret (carries the DB password).  After `make
+install`, the Makefile prints the remaining manual steps (the
+`hzmetrics.conf` copy, the `crontab` registration; `setup-db` and
+`migrate --apply` are now folded into `hzmetrics.py init` or the
+auto-bootstrap on cron's first tick — see
+[the First-time install section](#first-time-install) below).
 
 Cron-style default is `spool` — the install registers the apache
 user's crontab directly via `crontab(1)`, no `/etc/cron.d/`
@@ -151,55 +151,59 @@ sudo -u apache crontab /opt/hubzero/metrics/conf/cron.apache
 
 cronie auto-detects the user-crontab change; no daemon restart needed.
 
-## access.cfg
+## hzmetrics.conf
 
-The mandatory config file.  Bare `$var = 'value';` syntax (no
-`<?php`).  Read by `hzmetrics.py`:
+The mandatory per-tenant config file.  Standard INI with three
+sections.  See [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample)
+for the documented form:
 
-```
-$hub_dir    = '/var/www/<hub>';
-$hub_db     = '<hub>';
-$metrics_db = '<hub>_metrics';
-$db_host    = 'localhost';
-$db_user    = '<hub>';
-$db_pass    = '<secret>';
-$db_prefix  = 'jos_';
-```
+```ini
+[hub]
+site = <hub>
+hub_db = <hub>
+db_prefix = jos_
+hub_dir = /var/www/<hub>
 
-Drop it in place after the bootstrap step has created the conf dir:
+[db]
+host = localhost
+user = <hub>
+password = <secret>
+metrics_db = <hub>_metrics
 
-```
-sudo install -o apache -g apache -m 600 <your-cfg> \
-    /opt/hubzero/metrics/conf/access.cfg
-```
-
-The harness uses `HZMETRICS_ACCESS_CFG=<path>` to point at a test
-config — useful for one-off catch-up against a copy of production.
-
-## hzmetrics.conf (optional)
-
-Runtime tuning.  See [`conf/hzmetrics.conf.sample`](../conf/hzmetrics.conf.sample)
-for the documented form.  The two settings that matter:
-
-```
 [dns]
 nameserver = system        # or 127.0.0.1 with local unbound
 concurrency = 100          # raise to 500 with unbound in front
 timeout = 2.0
 ```
 
-Precedence (lowest to highest): built-in defaults → this file →
-`HZMETRICS_DNS_*` env vars → CLI flags.
+Drop it in place after `make install` has created the conf dir:
 
-If you don't deploy this file, the built-in defaults are fine —
-`concurrency=100` against the system resolver is benchmarked clean
-against Purdue's resolvers and produces ~4 ms/IP cold.
+```
+sudo install -o apache -g apache -m 0600 <your-config> \
+    /opt/hubzero/metrics/conf/hzmetrics.conf
+```
+
+The pipeline resolves the config file from (high → low):
+
+1. `hzmetrics.py -c FILE …` — explicit, used by multi-tenant
+   crontabs (`-c /etc/hzmetrics/<hub>.conf` per tenant).
+2. `$HZMETRICS_CONFIG` env var — handy for tests and ad-hoc
+   invocations.
+3. `/opt/hubzero/metrics/conf/hzmetrics.conf` — the default
+   single-tenant location.
+
+For DNS settings specifically, the chain extends further: built-in
+defaults → `[dns]` section → `HZMETRICS_DNS_*` env vars → CLI flags
+on `resolve-dns`.  If you don't include a `[dns]` section, the
+built-in defaults are fine — `concurrency=100` against the system
+resolver is benchmarked clean against Purdue's resolvers and
+produces ~4 ms/IP cold.
 
 ## First-time install
 
 After `make install` has seated `/opt/hubzero/metrics` and you've
-dropped a populated `conf/access.cfg` in place, the script can finish
-its own setup in one call:
+dropped a populated `conf/hzmetrics.conf` in place, the script can
+finish its own setup in one call:
 
 ```
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
@@ -222,7 +226,7 @@ The same machinery runs automatically on the first `cron` tick when
 the process is owned by `apache` / `www-data` (see
 [`_self_bootstrap` in architecture.md](architecture.md#self-bootstrap)) — so
 operators who'd rather skip `init` and let cron handle it can do so,
-provided `access.cfg` is in place before cron fires.
+provided `hzmetrics.conf` is in place before cron fires.
 
 The CMS-side tables created by metrics
 (`jos_resource_stats_tools_topvals`, `jos_session_geo`, etc.) are
@@ -251,7 +255,7 @@ sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor --fix
 
 Things `doctor` cannot fix from its own privileges (missing
 `/etc/hubzero.conf` `site` line, root-owned parent dirs, MySQL down,
-bad `access.cfg` credentials) are reported clearly so the operator
+bad `hzmetrics.conf` credentials) are reported clearly so the operator
 knows the next step.
 
 The traditional smoke-tests still work after `init`:

@@ -226,11 +226,16 @@ stale `websessions` rows pointing into the wiped data get
 rebuilt); the orchestrator auto-clears each entry once that month's
 reset+resummarize finishes.
 
-### `access.cfg`
-`/opt/hubzero/metrics/conf/access.cfg`.  Bare `$var = 'value';` PHP-style
-file with DB credentials.  Owned `root:apache` mode 640.  Read by
-`hzmetrics.py`, the legacy Perl scripts, and the test harness (via
-`HZMETRICS_ACCESS_CFG` env var).
+### `hzmetrics.conf`
+`/opt/hubzero/metrics/conf/hzmetrics.conf`.  Unified per-tenant INI
+config with three sections: `[hub]` (site, hub_db, db_prefix, hub_dir),
+`[db]` (host, user, password, metrics_db), and `[dns]` (optional —
+nameserver, concurrency, timeout).  Owned `apache:apache` mode 0600 —
+carries the DB password.  Read by `hzmetrics.py`; resolution chain is
+the `-c FILE` flag → `$HZMETRICS_CONFIG` env var → this default path.
+The legacy Perl/PHP scripts under `tests/legacy/` still read the older
+PHP-style `access.cfg` fixture for parity-test purposes only;
+production hosts no longer ship that file.
 
 ### exclude_list
 Per-hub table in the metrics DB.  Filters bots / scanners / utility

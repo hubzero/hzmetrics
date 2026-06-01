@@ -1,41 +1,57 @@
-# hzmetrics.py optional configuration overrides
+# hzmetrics unified per-tenant config.
 #
-# Install path:  /etc/hubzero-metrics/hzmetrics.conf
-# Owner:         root:apache  (mode 640)
+# Install paths (in resolution order, high → low):
+#   -c FILE flag                              — explicit, multi-tenant
+#   $HZMETRICS_CONFIG                         — env override
+#   /opt/hubzero/metrics/conf/hzmetrics.conf  — default, single-tenant
 #
-# This file is OPTIONAL.  hzmetrics.py works fine without it; values here
-# override the built-in defaults.  Precedence (lowest to highest):
-#     built-in defaults  →  this file  →  HZMETRICS_DNS_* env vars  →  CLI flags
+# Single-tenant operators drop this file at the default path and the
+# pipeline finds it without any flag.  Multi-tenant operators put each
+# tenant's config under /etc/hzmetrics/<hub>.conf and use -c (one cron
+# line per tenant).  Mode 0600 root:apache either way — it carries the
+# DB password.  Required for every subcommand that touches DB, DNS, or
+# any site-name-derived path.
 #
 # Inspect effective settings with:  hzmetrics.py status
 
+[hub]
+# Site/hub name — woven into staged-log filename patterns
+# (`${site}-access*log*`) and used in operator-facing log messages.
+# Required.
+site = theghub
+
+# CMS database name (read for jos_session, jos_resources, etc.) and the
+# table-name prefix the CMS uses.  Required.
+hub_db = vhub
+db_prefix = jos_
+
+# CMS document root.  Used by `whoisonline` to locate the Google Maps
+# widget's XML output dir (`<hub_dir>/app/site/stats/maps/`).  Required.
+hub_dir = /var/www/theghub
+
+[db]
+# Credentials for both the hub DB (read-mostly) and the metrics DB
+# (read/write).  Same MariaDB instance, same user.  Required.
+host = localhost
+user = vhub
+password = REPLACE_ME
+metrics_db = vhub_metrics
+
 [dns]
-# Where the resolve-dns subcommand should send queries.
+# Reverse-DNS resolver for `resolve-dns`.  Optional — built-in defaults
+# (system resolver, c=100, t=2.0s) work without this section.
+# Precedence (low → high): built-in → this file → HZMETRICS_DNS_* env
+# → CLI flag.
 #
-#   system        Use /etc/resolv.conf (no override).  Default — works on
-#                 any host without extra setup.  Polite to upstream because
-#                 the concurrency default below stays under typical
-#                 system-resolver rate-limit thresholds.
-#
-#   127.0.0.1     Local unbound on this host.  Requires `dnf install
-#                 unbound` plus a tuned drop-in at
-#                 /etc/unbound/conf.d/hzmetrics.conf.  With local unbound
-#                 deployed you can raise concurrency safely.
-#
-#   <internal-IP> Central hubzero unbound shared across hubs.
+#   nameserver  `system` to use /etc/resolv.conf; or an IP (local or
+#               central unbound).  unbound absorbs higher concurrency
+#               safely; direct-to-system above ~100 regressed in
+#               benchmarking.
+#   concurrency Max in-flight aiodns queries.  100 is the safe ceiling
+#               against the system resolver; 500 is recommended once a
+#               local or central unbound is in front.
+#   timeout     Per-query seconds.  Below ~1.0s loses slow legitimate
+#               resolutions; above ~3.0s just delays no-PTR detection.
 nameserver = system
-
-# Max parallel in-flight aiodns queries.
-#
-#   100   Safe ceiling against the system resolver — benchmarked clean
-#         against Purdue's 128.210.11.5/.57.  Default.
-#   500   Recommended once a local or central unbound is in front.
-#         Direct-to-system regressed at this level in benchmarking;
-#         unbound absorbs the burst cleanly.
-#  1000   No empirical gain over 500 — diminishing returns.
 concurrency = 100
-
-# Per-query timeout in seconds.  Below ~1.0 starts to lose legitimate
-# slow resolutions; above ~3.0 just delays no-PTR detection without
-# helping anything.
 timeout = 2.0

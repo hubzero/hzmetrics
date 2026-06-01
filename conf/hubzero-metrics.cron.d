@@ -1,9 +1,9 @@
 # HUBzero metrics pipeline (drop-in /etc/cron.d/ flavor — runs as apache).
 # Format: min hour dom month dow user command
 # Every 5 min: updates whoisonline map; at :30 past each hour also runs the
-# metrics pipeline under flock.  The script reads $HZMETRICS_HOME/conf/access.cfg
-# by default; override with HZMETRICS_ACCESS_CFG if the cfg lives elsewhere
-# (e.g. operators migrating from the pre-2026 /etc/hubzero-metrics/ layout).
+# metrics pipeline under flock.  Reads the unified config from
+# /opt/hubzero/metrics/conf/hzmetrics.conf by default.  For multi-tenant
+# hosts, add one line per tenant with `-c /etc/hzmetrics/<hub>.conf`.
 #
 # Cron mails command output by default.  The pipeline routes its own logs to
 # syslog LOG_LOCAL0 + /var/log/hubzero/metrics/manage.log + stderr (INFO+),

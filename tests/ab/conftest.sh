@@ -51,6 +51,32 @@ DB_PASS=$(cfg_value db_pass)
 DB_USER=$(cfg_value db_user)
 HUB_DB=$(cfg_value hub_db)
 METRICS_DB=$(cfg_value metrics_db)
+DB_HOST=$(cfg_value db_host)
+DB_PREFIX=$(cfg_value db_prefix)
+HUB_DIR=$(cfg_value hub_dir)
+
+# The new pipeline reads a unified INI; the legacy PHP scripts still parse
+# the PHP-syntax access.cfg.  Translate the PHP fixture into an INI on the
+# fly so operators maintain only the PHP file (which the legacy parity
+# tests still need verbatim).  Site name defaults to the basename of
+# `$HUB_DB` minus `_test`, which matches the conftest convention.
+HZMETRICS_INI="/tmp/hzmetrics-test-$$.conf"
+trap '[ -n "${HZMETRICS_INI:-}" ] && rm -f "$HZMETRICS_INI"' EXIT
+_test_site_name="${HUB_DB%_test}"
+cat > "$HZMETRICS_INI" <<EOF
+[hub]
+site = ${_test_site_name:-test}
+hub_db = ${HUB_DB}
+db_prefix = ${DB_PREFIX:-jos_}
+hub_dir = ${HUB_DIR:-/tmp}
+
+[db]
+host = ${DB_HOST:-localhost}
+user = ${DB_USER}
+password = ${DB_PASS}
+metrics_db = ${METRICS_DB}
+EOF
+chmod 600 "$HZMETRICS_INI"
 
 # Python that has pymysql / aiodns / aiohttp installed.  Tests run the
 # script-under-test in two ways:
@@ -85,7 +111,8 @@ _modern_py() {
 }
 PY="$(_modern_py)"
 
-export HZMETRICS_ACCESS_CFG="$ACCESS_CFG"
+export HZMETRICS_ACCESS_CFG="$ACCESS_CFG"   # legacy PHP scripts only
+export HZMETRICS_CONFIG="$HZMETRICS_INI"    # new Python pipeline
 export HZMETRICS_LOG="${HZMETRICS_LOG:-/tmp/hzmetrics-ab.log}"
 
 # Convenience wrappers.
@@ -173,9 +200,9 @@ run_legacy_sh() {
     HZMETRICS_ACCESS_CFG="$ACCESS_CFG" bash "$LEGACY_DIR/$script" "$@"
 }
 
-# Run the new hzmetrics.py with the test access.cfg in scope.
+# Run the new hzmetrics.py with the test config in scope (unified INI).
 run_new() {
-    HZMETRICS_ACCESS_CFG="$ACCESS_CFG" \
+    HZMETRICS_CONFIG="$HZMETRICS_INI" \
     HZMETRICS_LOG="$HZMETRICS_LOG" \
     "$PY" "$REPO/hzmetrics.py" "$@"
 }

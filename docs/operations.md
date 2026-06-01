@@ -18,7 +18,7 @@ A few ops-relevant defaults are overridable without editing
 | Env var | What it overrides | Default |
 |---|---|---|
 | `HZMETRICS_LOG` | Pipeline log file path | `/var/log/hubzero/metrics/manage.log` |
-| `HZMETRICS_ACCESS_CFG` | DB credentials cfg path | `/opt/hubzero/metrics/conf/access.cfg` |
+| `HZMETRICS_CONFIG` | DB credentials cfg path | `/opt/hubzero/metrics/conf/hzmetrics.conf` |
 | `HZMETRICS_DNS_NAMESERVER` | resolve-dns nameserver | from `[dns]` section of hzmetrics.conf, then `system` |
 | `HZMETRICS_DNS_CONCURRENCY` | aiodns concurrency | 100 |
 | `HZMETRICS_DNS_TIMEOUT` | aiodns per-IP timeout (seconds) | 2.0 |
@@ -39,8 +39,8 @@ sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py doctor
 
 Walks four phases and reports each:
 
-  - `/etc/hubzero.conf` resolved a `site = <hubname>` line
-  - `conf/access.cfg` present, parseable, and naming a metrics DB
+  - `[hub] site = <hubname>` resolved from the unified config
+  - `conf/hzmetrics.conf` present, parseable, and naming a metrics DB
   - every directory the pipeline writes into exists and is writable
     by the invoking user
   - MySQL reachable, `<hub>_metrics` exists, every known migration
@@ -57,7 +57,7 @@ reported but not attempted.
 
 The same machinery also runs automatically at the top of `cmd_tick`
 and `cmd_run` (gated on `os.geteuid()` mapping to `apache` /
-`www-data`), so a freshly-installed hub with `access.cfg` in place can
+`www-data`), so a freshly-installed hub with `hzmetrics.conf` in place can
 go from cron-not-running to working pipeline on the next tick without
 any manual setup-db / migrate step.
 

@@ -38,9 +38,9 @@ bug-for-bug parity target the A/B test harness compares against.
 # 1. Deps + /opt tree + scripts (root; idempotent).
 sudo make install
 
-# 2. Drop your DB credentials in place.
-sudo install -o apache -g apache -m 0600 access.cfg \
-    /opt/hubzero/metrics/conf/access.cfg
+# 2. Drop the unified per-tenant config in place (DB creds + DNS settings).
+sudo install -o apache -g apache -m 0600 hzmetrics.conf \
+    /opt/hubzero/metrics/conf/hzmetrics.conf
 
 # 3. Create the metrics DB, run baseline DDL, apply migrations.
 sudo -u apache python3 /opt/hubzero/metrics/bin/hzmetrics.py init
@@ -79,7 +79,7 @@ For everything else, `hzmetrics.py --help` and the
 .
 ├── hzmetrics.py                              the entire pipeline
 ├── Makefile                                  install / uninstall / test / lint
-├── conf/                                     templates: access.cfg, cron, logrotate
+├── conf/                                     templates: hzmetrics.conf.sample, cron
 ├── docs/                                     plain-markdown documentation
 ├── gh-pages/                                 static-site templates + builder
 └── tests/
@@ -95,7 +95,7 @@ Start at [`docs/README.md`](docs/README.md) (or the
 operational pages:
 
 - [`docs/deployment.md`](docs/deployment.md) — install, cron,
-  logrotate, access.cfg.
+  logrotate, hzmetrics.conf.
 - [`docs/operations.md`](docs/operations.md) — runbook: catch-up,
   stuck lock, bot inflation, DNS issues, crash recovery,
   ANALYZE TABLE, etc.

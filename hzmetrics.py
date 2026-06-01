@@ -133,33 +133,15 @@ log = logging.getLogger("hzmetrics")
 
 
 def _pipeline_paths():
-    """Detect site name and APACHELOGDIR from /etc/hubzero.conf and the
-    presence of /etc/apache2 vs /etc/httpd.  Falls back to safe defaults
-    so the module still imports outside a deployed hub host.
-
-    `site_explicit` is True iff `/etc/hubzero.conf` was readable and
-    contained a `site = …` line.  Self-bootstrap checks this and aborts
-    when running as apache without an explicit site (filename and DB
-    prefixes would all collide on the literal string "hub")."""
-    site = "hub"
-    site_explicit = False
-    try:
-        with open("/etc/hubzero.conf") as f:
-            for line in f:
-                m = re.match(r"\s*site\s*=\s*(\S+)", line)
-                if m:
-                    site = m.group(1).strip()
-                    site_explicit = True
-                    break
-    except (FileNotFoundError, PermissionError, OSError):
-        pass
+    """Detect APACHELOGDIR from the presence of /etc/apache2 vs /etc/httpd
+    and return the filesystem locations the pipeline needs.  Site name
+    comes from the unified config (`[hub] site = …`), not from here —
+    main() sets SITE / SITE_EXPLICIT after parsing `-c FILE`."""
     if Path("/etc/apache2").is_dir():
         apache_log_dir = Path("/var/log/apache2")
     else:
         apache_log_dir = Path("/var/log/httpd")
     return {
-        "site":            site,
-        "site_explicit":   site_explicit,
         "apache_log_dir": apache_log_dir,
         "cms_log_dir":    Path("/var/log/hubzero"),
         "metrics_log_dir": Path("/var/log/hubzero/metrics"),
@@ -167,8 +149,12 @@ def _pipeline_paths():
 
 
 _PIPELINE_PATHS    = _pipeline_paths()
-SITE               = _PIPELINE_PATHS["site"]
-SITE_EXPLICIT      = _PIPELINE_PATHS["site_explicit"]
+# SITE / SITE_EXPLICIT default to placeholders until main() reads the
+# unified config (`[hub] site = …`).  Anything that depends on a real
+# hub-specific path (e.g. `${SITE}-access*log*` filename patterns) must
+# only run after main() has resolved -c / HZMETRICS_CONFIG.
+SITE: str          = "hub"
+SITE_EXPLICIT: bool = False
 APACHE_LOG_DIR     = _PIPELINE_PATHS["apache_log_dir"]
 CMS_LOG_DIR        = _PIPELINE_PATHS["cms_log_dir"]
 HTTPD_DAILY        = APACHE_LOG_DIR / "daily"
@@ -198,6 +184,106 @@ HZMETRICS_HOME = Path(os.environ.get("HZMETRICS_HOME", "/opt/hubzero/metrics"))
 LOG         = HZ_METRICS_STAGING / "manage.log"
 
 LOCK_FILE   = HZMETRICS_HOME / "state" / "hzmetrics.pid"
+
+
+# ---------------------------------------------------------------------------
+# Unified per-tenant config (`-c FILE` or HZMETRICS_CONFIG env var).
+#
+# All host-tied identity, DB credentials, and DNS tuning live in a single
+# INI file with three sections:
+#
+#   [hub]   site, hub_db, db_prefix, hub_dir
+#   [db]    host, user, password, metrics_db
+#   [dns]   nameserver, concurrency, timeout
+#
+# main() resolves -c (or HZMETRICS_CONFIG) once at startup and caches the
+# parsed result; later calls to db_config() / _read_dns_config() read
+# from the cache.  Required for any subcommand that touches DB, DNS, or
+# site-name-derived paths — i.e. essentially all of them.
+# ---------------------------------------------------------------------------
+
+_CONFIG_PATH: Path | None = None
+_CONFIG_CACHE: dict[str, dict[str, str]] | None = None
+
+# Default config location for single-tenant installs.  Operators with
+# more than one hub on the same host pass `-c /etc/hzmetrics/<hub>.conf`
+# (or set HZMETRICS_CONFIG); single-tenant just relies on this default
+# being installed by `make install` alongside the script.
+_DEFAULT_CONFIG_PATH = HZMETRICS_HOME / "conf" / "hzmetrics.conf"
+
+
+def _set_config_path(p: Path) -> None:
+    """Pin the config path and clear any cached parse.  Called once by
+    main() after resolving `-c FILE` / HZMETRICS_CONFIG; tests can call
+    it to redirect at a fixture."""
+    global _CONFIG_PATH, _CONFIG_CACHE
+    _CONFIG_PATH = p
+    _CONFIG_CACHE = None
+
+
+def _load_config() -> dict[str, dict[str, str]]:
+    """Read the unified INI config and cache it as a nested dict
+    `{section: {key: value}}`.  Resolution order (high → low):
+
+      1. `_CONFIG_PATH`        — set by main() from the `-c FILE` flag.
+      2. `HZMETRICS_CONFIG` env — handy for tests, ad-hoc invocations.
+      3. `_DEFAULT_CONFIG_PATH` — the canonical single-tenant location
+                                  `${HZMETRICS_HOME}/conf/hzmetrics.conf`.
+
+    Raises SystemExit(2) with a helpful message if none of the three
+    is readable.  Multi-tenant operators set `-c`; single-tenant
+    operators rely on the default."""
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None:
+        return _CONFIG_CACHE
+    if _CONFIG_PATH is None:
+        env_path = os.environ.get("HZMETRICS_CONFIG")
+        if env_path:
+            _set_config_path(Path(env_path))
+        else:
+            # `is_file()` raises PermissionError when an ancestor dir
+            # isn't traversable (typical: invoker isn't the service
+            # user and /opt/hubzero/metrics/conf is 0750 apache:apache).
+            # Treat un-stat-able default the same as "not present".
+            try:
+                default_present = _DEFAULT_CONFIG_PATH.is_file()
+            except (PermissionError, OSError):
+                default_present = False
+            if default_present:
+                _set_config_path(_DEFAULT_CONFIG_PATH)
+            else:
+                raise SystemExit(
+                    f"hzmetrics: no config file found.  Looked for (in order):\n"
+                    f"  -c FILE flag\n"
+                    f"  $HZMETRICS_CONFIG\n"
+                    f"  {_DEFAULT_CONFIG_PATH}\n"
+                    f"  (per-tenant INI with [hub], [db], [dns] sections; see "
+                    f"conf/hzmetrics.conf.sample)"
+                )
+    try:
+        text = _CONFIG_PATH.read_text()
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        raise SystemExit(f"hzmetrics: cannot read config {_CONFIG_PATH}: {e}") from None
+    import configparser
+    cp = configparser.ConfigParser()
+    try:
+        cp.read_string(text)
+    except configparser.Error as e:
+        raise SystemExit(f"hzmetrics: config {_CONFIG_PATH} is not valid INI: {e}") from None
+    _CONFIG_CACHE = {section: dict(cp[section]) for section in cp.sections()}
+    return _CONFIG_CACHE
+
+
+def _refresh_site_from_config() -> None:
+    """Pull SITE / SITE_EXPLICIT from the loaded config.  Called by main()
+    after resolving `-c`; subcommands that don't load config keep the
+    module-level placeholder ("hub", False)."""
+    global SITE, SITE_EXPLICIT
+    hub = _load_config().get("hub", {})
+    site = hub.get("site", "").strip()
+    if site:
+        SITE = site
+        SITE_EXPLICIT = True
 
 
 # ---------------------------------------------------------------------------
@@ -1008,7 +1094,7 @@ def release_lock() -> None:
 # Self-bootstrap.  Run at the top of cron entry points (cmd_run, cmd_tick)
 # when the process is owned by the service user — creates any missing
 # install / log / staging directory and the metrics database if absent, so
-# a fresh access.cfg + an empty $HZMETRICS_HOME is enough to start a hub.
+# a fresh hzmetrics.conf + an empty $HZMETRICS_HOME is enough to start a hub.
 # Strictly gated to the apache (RHEL/Rocky) or www-data (Debian/Ubuntu)
 # UID: dev shells, root, and the A/B harness do nothing, which keeps
 # shared state out of their reach.
@@ -1085,7 +1171,7 @@ def _bootstrap_database() -> None:
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
-        log.error("[bootstrap] access.cfg has no metrics_db — set it and retry")
+        log.error("[bootstrap] hzmetrics.conf has no metrics_db — set it and retry")
         raise SystemExit(2)
 
     for stmt in METRICS_DB_DDL:
@@ -2141,7 +2227,7 @@ def cmd_init(args):
     _bootstrap_dirs()
     _bootstrap_database()
     log.info("[init] done — pipeline is ready, register cron and "
-             "drop access.cfg into HZMETRICS_HOME/conf/ if not already.")
+             "drop hzmetrics.conf into HZMETRICS_HOME/conf/ if not already.")
     return 0
 
 
@@ -2152,11 +2238,11 @@ def cmd_doctor(args):
 
     Checks:
       - site name resolved from /etc/hubzero.conf
-      - access.cfg present and parseable
+      - hzmetrics.conf present and parseable
       - every directory in _expected_dirs() exists AND is writable by
         the invoking user (catches a chown drift between operator
         installs)
-      - DB reachable with the access.cfg credentials
+      - DB reachable with the hzmetrics.conf credentials
       - metrics_db exists, has the baseline tables, and is migrated up
         to the latest known MIGRATIONS id"""
     fix = bool(getattr(args, "fix", False))
@@ -2172,24 +2258,24 @@ def cmd_doctor(args):
         )
         log.error("[doctor] FAIL  site name unresolved")
 
-    # --- 2. access.cfg --------------------------------------------------
+    # --- 2. hzmetrics.conf --------------------------------------------------
     try:
         cfg = db_config()
     except (FileNotFoundError, PermissionError, OSError) as e:
-        problems.append(f"access.cfg unreadable: {e} (not fixable from here)")
-        log.error(f"[doctor] FAIL  cannot read access.cfg: {e}")
+        problems.append(f"hzmetrics.conf unreadable: {e} (not fixable from here)")
+        log.error(f"[doctor] FAIL  cannot read hzmetrics.conf: {e}")
         cfg = {}
     else:
         missing_keys = [k for k in ("db_host", "db_user", "db_pass", "metrics_db")
                         if not cfg.get(k)]
         if missing_keys:
             problems.append(
-                f"access.cfg missing required key(s): {', '.join(missing_keys)} "
+                f"hzmetrics.conf missing required key(s): {', '.join(missing_keys)} "
                 "(operator must populate)"
             )
-            log.error(f"[doctor] FAIL  access.cfg missing: {', '.join(missing_keys)}")
+            log.error(f"[doctor] FAIL  hzmetrics.conf missing: {', '.join(missing_keys)}")
         else:
-            log.info(f"[doctor] OK    access.cfg parsed "
+            log.info(f"[doctor] OK    hzmetrics.conf parsed "
                      f"(metrics_db={cfg.get('metrics_db')})")
 
     # --- 3. Directories -------------------------------------------------
@@ -3237,13 +3323,8 @@ def cmd_status(args):
     summarize_dir(HTTPD_IMPORTED, f"{SITE}-access*log*", "httpd  ")
     summarize_dir(HZ_IMPORTED,    "cmsauth*log*",        "hubzero")
 
-    log.info("=== resolve-dns settings ===")
-    try:
-        conf_present = HZMETRICS_CONF.is_file()
-        conf_src = str(HZMETRICS_CONF) if conf_present else "(not present — using defaults / env)"
-    except PermissionError:
-        conf_src = f"{HZMETRICS_CONF} (no read access — using defaults / env)"
-    log.info(f"  config file: {conf_src}")
+    log.info("=== config + DNS settings ===")
+    log.info(f"  config file: {_CONFIG_PATH if _CONFIG_PATH else '(none — required)'}")
     log.info(f"  nameserver : {DNS_NAMESERVER}")
     log.info(f"  concurrency: {DNS_CONCURRENCY}")
     log.info(f"  timeout    : {DNS_TIMEOUT}s")
@@ -3423,24 +3504,29 @@ def cmd_process(args):
 # fill-geo
 # ---------------------------------------------------------------------------
 
-ACCESS_CFG = HZMETRICS_HOME / "conf" / "access.cfg"
-
 def db_config() -> dict[str, str]:
-    """Parse every $name = '…'; assignment in the access.cfg PHP file
-    into a dict.  Defined variables typically include hub_dir, hub_db,
-    metrics_db, db_host, db_user, db_pass, db_prefix.
-
-    The cfg path defaults to {HZMETRICS_HOME}/conf/access.cfg.  Override
-    via the HZMETRICS_ACCESS_CFG environment variable — used by the
-    A/B test harness to point at a cfg that names the test DBs."""
-    cfg_path = Path(os.environ.get("HZMETRICS_ACCESS_CFG", str(ACCESS_CFG)))
-    text = cfg_path.read_text()
-    return {m.group(1): m.group(2)
-            for m in re.finditer(r"\$([\w_]+)\s*=\s*'([^']*)'", text)}
+    """Flatten the unified config's [hub] + [db] sections into the
+    legacy dict shape callers expect:
+        hub_dir, hub_db, db_prefix    (from [hub])
+        db_host, db_user, db_pass     (from [db] keys host, user, password)
+        metrics_db                    (from [db])
+    Missing keys become empty strings; db_prefix defaults to 'jos_'."""
+    cfg = _load_config()
+    hub = cfg.get("hub", {})
+    db  = cfg.get("db", {})
+    return {
+        "hub_dir":    hub.get("hub_dir", ""),
+        "hub_db":     hub.get("hub_db", ""),
+        "db_prefix":  hub.get("db_prefix", "jos_"),
+        "db_host":    db.get("host", "localhost"),
+        "db_user":    db.get("user", ""),
+        "db_pass":    db.get("password", ""),
+        "metrics_db": db.get("metrics_db", ""),
+    }
 
 def db_credentials() -> tuple[str, str, str, str]:
-    """Returns (db_host, db_user, db_pass, metrics_db) for backwards compat.
-    Use db_config() for the full set including hub_db, db_prefix, etc."""
+    """Returns (db_host, db_user, db_pass, metrics_db).  Use db_config()
+    for the full set including hub_db, db_prefix, etc."""
     c = db_config()
     return c.get("db_host", ""), c.get("db_user", ""), c.get("db_pass", ""), c.get("metrics_db", "")
 
@@ -4047,7 +4133,7 @@ def do_whoisonline(*, dry_run=False):
     hub_dir   = cfg.get('hub_dir', '')
     metrics_db = cfg.get('metrics_db', '')
     if not hub_db or not hub_dir:
-        log.info("[whoisonline] missing hub_db / hub_dir in access.cfg")
+        log.info("[whoisonline] missing hub_db / hub_dir in hzmetrics.conf")
         return 2
 
     map_dir = Path(hub_dir) / "app/site/stats/maps"
@@ -4092,7 +4178,7 @@ def cmd_tick(args):
     # Self-repair before any DB-touching work.  No-op for non-apache
     # users (dev shells, root, A/B harness); on apache it lazy-creates
     # the install tree + metrics DB + tables on a fresh hub so cron can
-    # take a brand-new access.cfg straight to a working pipeline
+    # take a brand-new hzmetrics.conf straight to a working pipeline
     # without an operator-driven setup-db / migrate sequence.
     if not args.dry_run:
         _self_bootstrap()
@@ -4132,34 +4218,35 @@ _DEFAULT_DNS_NAMESERVER  = "system"
 _DEFAULT_DNS_CONCURRENCY = 100
 _DEFAULT_DNS_TIMEOUT     = 2.0
 
-HZMETRICS_CONF = HZMETRICS_HOME / "conf" / "hzmetrics.conf"
-
 
 def _read_dns_config():
-    """Resolve DNS-related settings from config file → env vars → defaults.
-
-    Tolerant of an unreadable config: PermissionError / FileNotFoundError
-    silently fall through to env vars and built-in defaults (so the script
-    keeps working when invoked by a user without conf-dir access)."""
+    """Resolve DNS-related settings from the unified config's [dns]
+    section, then env vars, then built-in defaults.  Tolerant of missing
+    config: if `-c` / HZMETRICS_CONFIG wasn't set (so `_load_config()`
+    would error), this falls through to env + defaults so the module can
+    finish importing for tooling that doesn't need DB / DNS at all
+    (e.g. `--help`)."""
     ns          = _DEFAULT_DNS_NAMESERVER
     concurrency = _DEFAULT_DNS_CONCURRENCY
     timeout     = _DEFAULT_DNS_TIMEOUT
 
     try:
-        text = HZMETRICS_CONF.read_text()
-    except (FileNotFoundError, PermissionError):
-        text = None
-    if text is not None:
-        import configparser, io
-        cp = configparser.ConfigParser()
+        dns_section = _load_config().get("dns", {})
+    except SystemExit:
+        dns_section = {}
+
+    if "nameserver" in dns_section:
+        ns = dns_section["nameserver"].strip() or ns
+    if "concurrency" in dns_section:
         try:
-            cp.read_file(io.StringIO(text))
-            if cp.has_section("dns"):
-                ns          = cp.get("dns", "nameserver",  fallback=ns).strip()
-                concurrency = cp.getint("dns", "concurrency", fallback=concurrency)
-                timeout     = cp.getfloat("dns", "timeout",  fallback=timeout)
-        except (configparser.Error, ValueError) as e:
-            log.info(f"[warn] {HZMETRICS_CONF}: {e}; using defaults")
+            concurrency = int(dns_section["concurrency"])
+        except ValueError:
+            pass
+    if "timeout" in dns_section:
+        try:
+            timeout = float(dns_section["timeout"])
+        except ValueError:
+            pass
 
     ns = os.environ.get("HZMETRICS_DNS_NAMESERVER", ns)
     try:
@@ -4173,7 +4260,21 @@ def _read_dns_config():
 
     return ns, concurrency, timeout
 
-DNS_NAMESERVER, DNS_CONCURRENCY, DNS_TIMEOUT = _read_dns_config()
+
+# Module-level DNS settings — populated by `_refresh_dns_from_config()`,
+# which main() calls after resolving `-c`.  Until then they hold the
+# built-in defaults (which is what tooling like `--help` sees).
+DNS_NAMESERVER  = _DEFAULT_DNS_NAMESERVER
+DNS_CONCURRENCY = _DEFAULT_DNS_CONCURRENCY
+DNS_TIMEOUT     = _DEFAULT_DNS_TIMEOUT
+
+
+def _refresh_dns_from_config() -> None:
+    """Re-read DNS settings from the loaded config and env vars.  Called
+    by main() once `-c` is parsed; updates the module-level DNS_*
+    globals that `do_resolve_dns` / `cmd_status` read."""
+    global DNS_NAMESERVER, DNS_CONCURRENCY, DNS_TIMEOUT
+    DNS_NAMESERVER, DNS_CONCURRENCY, DNS_TIMEOUT = _read_dns_config()
 
 def hub_db_name():
     """Convenience alias for db_config()['hub_db']."""
@@ -4183,7 +4284,7 @@ _CONN_CHARSET = None  # lazy-set on first _open_db (probes installed pymysql)
 
 
 def _open_db(database=None):
-    """Open a pymysql connection from access.cfg.  Lazy import so other
+    """Open a pymysql connection from hzmetrics.conf.  Lazy import so other
     hzmetrics.py commands don't pay the dep if they don't need it.
 
     Sets long server-side session timeouts on every connection:
@@ -4369,8 +4470,17 @@ def parse_date_range(spec):
     return start, end
 
 def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
-                   nameserver=DNS_NAMESERVER, concurrency=DNS_CONCURRENCY,
-                   timeout=DNS_TIMEOUT, dry_run=False):
+                   nameserver=None, concurrency=None,
+                   timeout=None, dry_run=False):
+    # Late-bind from the module-level globals (which `_refresh_dns_from_config()`
+    # sets at startup) so a config-driven update reaches callers that
+    # invoke the function without explicit overrides.
+    if nameserver is None:
+        nameserver = DNS_NAMESERVER
+    if concurrency is None:
+        concurrency = DNS_CONCURRENCY
+    if timeout is None:
+        timeout = DNS_TIMEOUT
     """
     Reverse-DNS resolve unresolved IPs in <db>.<table>.  Replaces the
     PHP/shell xlogfix_dns_v2.sh + xlogfix_dns_worker.php fan-out with
@@ -4405,7 +4515,7 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
         log.info(msg)
         return 2
     if not db_name:
-        msg = f"[resolve-dns] could not resolve DB name for db_key={db_key!r} from access.cfg"
+        msg = f"[resolve-dns] could not resolve DB name for db_key={db_key!r} from hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -4785,7 +4895,7 @@ def do_import_hub_data(*, dry_run=False):
     hub_db     = cfg.get("hub_db", "")
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not metrics_db or not hub_db:
-        msg = f"[import-hub-data] missing metrics_db / hub_db in access.cfg"
+        msg = f"[import-hub-data] missing metrics_db / hub_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -4886,7 +4996,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None):
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
-        msg = "[import-auth] missing metrics_db in access.cfg"
+        msg = "[import-auth] missing metrics_db in hzmetrics.conf"
         log.info(msg)
         return (2, None, None, 0) if conn is not None else 2
 
@@ -5051,7 +5161,7 @@ def do_fill_user_info(db_key, table, date_spec=None, *, all_dates=False,
     hub_db     = cfg.get("hub_db", "")
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not metrics_db or not hub_db:
-        msg = "[fill-user-info] missing metrics_db / hub_db in access.cfg"
+        msg = "[fill-user-info] missing metrics_db / hub_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -5159,7 +5269,7 @@ def do_identify_bots(input_file, *, dry_run=False, conn=None):
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
-        msg = "[identify-bots] missing metrics_db in access.cfg"
+        msg = "[identify-bots] missing metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -5342,7 +5452,7 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
     metrics_db = cfg.get("metrics_db", "")
     hub_db     = cfg.get("hub_db", "")
     if not metrics_db:
-        msg = "[fill-domain] missing metrics_db in access.cfg"
+        msg = "[fill-domain] missing metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -5782,7 +5892,7 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     cfg = db_config()
     metrics_db = cfg.get("metrics_db", "")
     if not metrics_db:
-        msg = "[import-apache] missing metrics_db in access.cfg"
+        msg = "[import-apache] missing metrics_db in hzmetrics.conf"
         log.info(msg)
         return (2, None, None, 0) if conn is not None else 2
 
@@ -6213,7 +6323,7 @@ def do_andmore_usage(yearmonth=None, *, dry_run=False):
     metrics_db = cfg.get("metrics_db", "")
     db_prefix  = cfg.get("db_prefix", "jos_")
     if not hub_db or not metrics_db:
-        msg = "[andmore-usage] missing hub_db / metrics_db in access.cfg"
+        msg = "[andmore-usage] missing hub_db / metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -6635,7 +6745,7 @@ def do_fill_ipcountry(db_key, table, date_spec=None, *, all_dates=False,
     metrics_db = cfg.get("metrics_db", "")
     hub_db     = cfg.get("hub_db", "")
     if not metrics_db:
-        msg = "[fill-ipcountry] missing metrics_db in access.cfg"
+        msg = "[fill-ipcountry] missing metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -6945,7 +7055,7 @@ def do_gen_tool_stats(yearmonth=None, *, dry_run=False):
     hub_db    = cfg.get('hub_db', '')
     db_prefix = cfg.get('db_prefix', 'jos_')
     if not hub_db:
-        msg = "[gen-tool-stats] missing hub_db in access.cfg"
+        msg = "[gen-tool-stats] missing hub_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -7099,7 +7209,7 @@ def do_gen_tool_tops(yearmonth=None, *, dry_run=False):
     metrics_db = cfg.get('metrics_db', '')
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
-        msg = "[gen-tool-tops] missing hub_db / metrics_db in access.cfg"
+        msg = "[gen-tool-tops] missing hub_db / metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -7189,7 +7299,7 @@ def do_gen_tool_toplists(yearmonth=None, *, dry_run=False):
     metrics_db = cfg.get('metrics_db', '')
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
-        msg = "[gen-tool-toplists] missing hub_db / metrics_db in access.cfg"
+        msg = "[gen-tool-toplists] missing hub_db / metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -7304,7 +7414,7 @@ def _do_middleware_copy(metric, *, dry_run=False):
     hub_db     = cfg.get('hub_db', '')
     metrics_db = cfg.get('metrics_db', '')
     if not hub_db or not metrics_db:
-        msg = f"[middleware-{metric}] missing hub_db / metrics_db in access.cfg"
+        msg = f"[middleware-{metric}] missing hub_db / metrics_db in hzmetrics.conf"
         log.info(msg)
         return 2
 
@@ -7582,7 +7692,7 @@ def do_logfix_session(month=None, *, dry_run=False):
 
     metrics_db = db_config().get('metrics_db', '')
     if not metrics_db:
-        log.info("[logfix-session] missing metrics_db in access.cfg")
+        log.info("[logfix-session] missing metrics_db in hzmetrics.conf")
         return 2
 
     conn_read  = _open_db(metrics_db)
@@ -8570,7 +8680,7 @@ def do_summarize_month(yearmonth=None, *, only=None, periods=None,
     metrics_db = cfg.get('metrics_db', '')
     db_prefix  = cfg.get('db_prefix', 'jos_')
     if not hub_db or not metrics_db:
-        log.info("[summarize-month] missing hub_db / metrics_db in access.cfg")
+        log.info("[summarize-month] missing hub_db / metrics_db in hzmetrics.conf")
         return 2
 
     log.info(f"[summarize-month] month={yearmonth} sections={','.join(sections)} "
@@ -8665,12 +8775,18 @@ def cmd_summarize_month(args):
 
 
 def cmd_resolve_dns(args):
+    # Operator-supplied CLI flags win; otherwise fall back to the module
+    # globals (which carry config-resolved values once main() ran
+    # `_refresh_dns_from_config()`).
+    ns      = args.nameserver  if args.nameserver  is not None else DNS_NAMESERVER
+    conc    = args.concurrency if args.concurrency is not None else DNS_CONCURRENCY
+    timeout = args.timeout     if args.timeout     is not None else DNS_TIMEOUT
     return do_resolve_dns(
         args.db_key, args.table, args.date_spec,
         all_dates=args.all,
-        nameserver=args.nameserver,
-        concurrency=args.concurrency,
-        timeout=args.timeout,
+        nameserver=ns,
+        concurrency=conc,
+        timeout=timeout,
         dry_run=args.dry_run,
     )
 
@@ -9266,7 +9382,33 @@ def cmd_forget_import(args):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Resolve `-c FILE` (or HZMETRICS_CONFIG env) BEFORE building the
+    # full parser, so the subparsers' default values can reflect what
+    # the operator's config says.  argparse's add_help=False keeps the
+    # first pass from short-circuiting on `--help`.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("-c", "--config", metavar="FILE")
+    pre_args, _ = pre.parse_known_args()
+    if pre_args.config:
+        _set_config_path(Path(pre_args.config))
+    # Config-driven refreshes are tolerant of "no config provided" —
+    # they no-op so `--help`, `--version`, etc. still work without
+    # a config file in scope.  Subcommands that actually need config
+    # will trigger a clear SystemExit from `db_config()` when they try.
+    try:
+        _refresh_site_from_config()
+    except SystemExit:
+        pass
+    try:
+        _refresh_dns_from_config()
+    except SystemExit:
+        pass
+
     parser = argparse.ArgumentParser(description="Metrics pipeline manager")
+    parser.add_argument("-c", "--config", metavar="FILE",
+        help="Per-tenant INI config with [hub], [db], [dns] sections "
+             "(falls back to $HZMETRICS_CONFIG; required by any subcommand "
+             "that touches DB, DNS, or site-name-derived paths)")
     sub = parser.add_subparsers(dest="command")
 
     p_tick = sub.add_parser("tick", help="Every-5-min cron entry: whoisonline always, metrics run at :30")
@@ -9388,7 +9530,7 @@ def main() -> None:
     p_audit = sub.add_parser(
         "audit",
         help="Per-month enrichment + summary health audit (lookback "
-             "window).  Flags months whose %missing for host / domain / "
+             "window).  Flags months whose %%missing for host / domain / "
              "ipcountry materially exceeds the rolling median, and "
              "prints copy-paste backfill commands for each finding.")
     p_audit.set_defaults(func=cmd_audit)
@@ -9644,13 +9786,20 @@ def main() -> None:
     p_dns.add_argument("--all", action="store_true",
         help="Resolve every unresolved IP in the table regardless of date "
              "(for cross-month backfill)")
-    p_dns.add_argument("--nameserver", "-n", default=DNS_NAMESERVER,
-        help=f"DNS server IP — set to a local/central unbound for max speed "
-             f"(default '{DNS_NAMESERVER}')")
-    p_dns.add_argument("--concurrency", "-c", type=int, default=DNS_CONCURRENCY,
-        help=f"aiodns concurrency (default {DNS_CONCURRENCY})")
-    p_dns.add_argument("--timeout", "-t", type=float, default=DNS_TIMEOUT,
-        help=f"DNS timeout seconds (default {DNS_TIMEOUT})")
+    # Defaults left as None so config [dns] settings (resolved into the
+    # module-level DNS_* globals by main() after `-c`) flow through when
+    # the operator doesn't pass an explicit flag.  cmd_resolve_dns falls
+    # back to the globals; the help text documents the resolution chain.
+    p_dns.add_argument("--nameserver", "-n", default=None,
+        help="DNS server IP — set to a local/central unbound for max speed "
+             "(default: config [dns] nameserver, env HZMETRICS_DNS_NAMESERVER, "
+             f"or built-in '{_DEFAULT_DNS_NAMESERVER}')")
+    p_dns.add_argument("--concurrency", "-c", type=int, default=None,
+        help="aiodns concurrency (default: config [dns] concurrency, "
+             f"env HZMETRICS_DNS_CONCURRENCY, or built-in {_DEFAULT_DNS_CONCURRENCY})")
+    p_dns.add_argument("--timeout", "-t", type=float, default=None,
+        help="DNS timeout seconds (default: config [dns] timeout, "
+             f"env HZMETRICS_DNS_TIMEOUT, or built-in {_DEFAULT_DNS_TIMEOUT})")
     p_dns.add_argument("--dry-run", action="store_true",
         help="Just count unresolved IPs; don't resolve or update")
 

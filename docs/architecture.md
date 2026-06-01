@@ -13,7 +13,7 @@ Every HUBzero hub has two MariaDB schemas, both named after the hub:
 
 For a hub named `foo`, these are `foo` and `foo_metrics`
 respectively.  Credentials are in
-`/opt/hubzero/metrics/conf/access.cfg` (owned `root:apache`, mode 640).
+`/opt/hubzero/metrics/conf/hzmetrics.conf` (owned `root:apache`, mode 640).
 The config file uses a bare `$var = 'value';` syntax that is read by
 both the Python pipeline and the Perl scripts under
 [`tests/legacy/`](../tests/legacy/).
@@ -472,7 +472,7 @@ machinery, no apache-uid gate) and `hzmetrics.py doctor [--fix]`
 repair).  Tests live in `tests/ab/port_bootstrap/`.
 
 A common consequence: on a fresh hub, dropping a populated
-`access.cfg` in place and waiting one cron tick is enough to get a
+`hzmetrics.conf` in place and waiting one cron tick is enough to get a
 working pipeline.  Operators who prefer to drive the steps manually
 can run `init` once and skip cron's auto-repair (the cron call is
 still safe — it sees nothing to do).
@@ -481,7 +481,7 @@ still safe — it sees nothing to do).
 
 - `/opt/hubzero/metrics/bin/hzmetrics.py` — the pipeline binary.
   Owned `apache:apache`, mode 0755.
-- `/opt/hubzero/metrics/conf/access.cfg` — DB credentials, paths.
+- `/opt/hubzero/metrics/conf/hzmetrics.conf` — DB credentials, paths.
   Owned `apache:apache`, mode 0600.
 - `/opt/hubzero/metrics/conf/hzmetrics.conf` — *optional* runtime
   overrides (DNS nameserver, concurrency, timeout).  See
