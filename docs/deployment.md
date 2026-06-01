@@ -16,12 +16,24 @@ How to install `hzmetrics.py` on a new HUBzero hub.
   cron entry is owned by `apache`.
 
 Production hosts get the deps as system packages (Rocky 8 names —
-adapt for other distros):
+adapt for other distros).  `sudo make install-deps` runs both of
+the commands below; do them by hand if you'd rather see each step:
 
 ```
-dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
-pip3.11 install --user aiodns                       # not packaged on Rocky 8
+sudo dnf install python3.11 python3.11-PyMySQL unbound  # unbound optional
+sudo bash -c 'umask 022 && python3.11 -m pip install aiodns'
 ```
+
+Notes:
+- `aiodns` has no `python3.11-*` RPM in any reachable repo, so pip is
+  unavoidable for that one dep.  `umask 022` keeps the installed
+  files world-readable; on RHEL the parent `/usr/local/lib/python3.11`
+  and its `site-packages/` are sometimes pre-created `0700 root:root`
+  by an earlier root pip run — verify they're `0755` after install or
+  apache's `site.py` will silently skip the dir and `import aiodns`
+  will fail.
+- Don't use `pip install --user` — `--user` puts files under the
+  invoking user's `~/.local`, which apache can't import from.
 
 Versions required:
 - `aiodns` >= 3.x (the c-ares-based async resolver used by

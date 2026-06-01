@@ -38,8 +38,15 @@ CONF_SAMPLE_DST    := $(CONF_DST)/hzmetrics.conf.sample
 help:  ## List all targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z][a-zA-Z0-9_-]*:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install-deps:  ## Install Python dependencies system-wide (run as root; sets umask 022 so files are world-readable)
-	umask 022 && python3.11 -m pip install aiodns pymysql
+install-deps:  ## Install Python dependencies (pymysql via dnf, aiodns via pip; run as root)
+	# pymysql ships as an RPM (distro-signed, version-pinned, no perms quirk).
+	dnf install -y python3.11-PyMySQL
+	# aiodns has no python3.11-* RPM in any reachable repo, so pip is the
+	# only option for it.  umask 022 keeps the installed files world-readable
+	# so apache can import them; check that /usr/local/lib/python3.11/{,site-packages}
+	# is mode 0755 (RHEL's pip can leave it 0700 root, which hides the package
+	# from non-root site.py — see deployment.md).
+	umask 022 && python3.11 -m pip install aiodns
 
 install-bootstrap:  ## One-time root step: create HZMETRICS_HOME owned by INSTALL_OWNER
 	install -d -o $(INSTALL_OWNER) -g $(INSTALL_GROUP) -m 0750 \
