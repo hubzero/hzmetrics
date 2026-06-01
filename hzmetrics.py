@@ -5419,10 +5419,20 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
             # Cross-collation here would silently degrade the plan to
             # `_domain_tmp` ALL × web range (40 K × 700 K = 28 B probes
             # per chunk, observed at 3-4 h on 2025-05).
+            # ENGINE=InnoDB rather than Memory: Memory stores VARCHAR
+            # fixed-length, so `host VARCHAR(255)` reserves 255 bytes
+            # per row regardless of actual content.  On big-month
+            # data (250 K distinct hosts on 2026-02) that's ~130 MB
+            # sitting in mariadbd's heap, contributing to the host's
+            # tight RAM budget and recently OOM-killing mariadbd
+            # under combined php-fpm + pipeline pressure.  InnoDB's
+            # Dynamic row format stores actual lengths (~20 MB for
+            # the same data) and lives in the buffer pool / temp
+            # tablespace rather than anon heap.
             cur.execute(
                 "CREATE TEMPORARY TABLE _domain_tmp ("
                 "host VARCHAR(255) NOT NULL PRIMARY KEY, "
-                "domain VARCHAR(255)) ENGINE=Memory"
+                "domain VARCHAR(255)) ENGINE=InnoDB"
             )
             cur.executemany(
                 "INSERT INTO _domain_tmp (host, domain) VALUES (%s, %s)",
@@ -5499,7 +5509,7 @@ def do_fill_domain(db_key, table, date_spec=None, *, all_dates=False,
                     "CREATE TEMPORARY TABLE _id_dom ("
                     "id BIGINT NOT NULL PRIMARY KEY, "
                     "domain VARCHAR(255) NOT NULL"
-                    ") ENGINE=Memory"
+                    ") ENGINE=InnoDB"          # see _domain_tmp note above
                 )
                 select_id_host_sql = (
                     f"SELECT id, host FROM {table} "
@@ -7463,7 +7473,7 @@ def _emit_websession(conn_write, s_id, s_datetime, s_ip, s_host,
         # CREATE is a no-op after the first time.
         cur.execute(
             "CREATE TEMPORARY TABLE IF NOT EXISTS _logfix_emit_eids "
-            "(id BIGINT UNSIGNED NOT NULL PRIMARY KEY) ENGINE=Memory"
+            "(id BIGINT UNSIGNED NOT NULL PRIMARY KEY) ENGINE=InnoDB"
         )
         cur.execute("DELETE FROM _logfix_emit_eids")
         for i in range(0, len(event_ids), _EMIT_UPDATE_INSERT_BATCH):
