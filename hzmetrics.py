@@ -520,13 +520,22 @@ def _arg_sql_identifier(s: str) -> str:
     return s
 
 def _open_input(path: str):
-    """Open `path` for reading, with `"-"` treated as stdin.
+    """Open `path` for reading, with `"-"` treated as stdin and `.gz`
+    auto-decompressed in text mode.  Lets `hzmetrics.py import-auth FILE`
+    (and the other import subcommands that share this helper) accept
+    archived logs directly without an external `zcat | … -` pipeline.
+    The per-file atomic-import path (`_import_apache_file_atomic` /
+    `_import_auth_file_atomic`) already decompresses to a staged copy
+    before calling do_import_* — that path is unaffected because the
+    staged file has no `.gz` suffix.
 
     Returns a context manager so callers can write
     `with _open_input(path) as src:` regardless of which branch they got
     — `nullcontext` keeps stdin from being closed when the `with` exits."""
     if path == "-":
         return nullcontext(sys.stdin)
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", errors="replace")
     return open(path, "r", errors="replace")
 
 def check_order(date_str: str, force: bool) -> None:
