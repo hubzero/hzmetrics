@@ -5213,20 +5213,36 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None):
         return 0
 
     inserted = 0
+    pre_max_id: int | None = None
     pk_start: int | None = None
+    pk_end: int | None = None
     _owns_conn = (conn is None)
     if _owns_conn:
         conn = _open_db(metrics_db)
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT IFNULL(MAX(id), 0) FROM userlogin")
+            pre_max_id = int(cur.fetchone()[0])
             sql = ("INSERT IGNORE INTO userlogin "
                    "(datetime, uidNumber, user, ip, action) "
                    "VALUES (%s, %s, %s, %s, %s)")
             for i in range(0, len(rows), batch_size):
                 cur.executemany(sql, rows[i:i + batch_size])
-                if pk_start is None and cur.lastrowid:
-                    pk_start = cur.lastrowid
                 inserted += cur.rowcount
+            # See do_import_apache for the rationale: cur.lastrowid is
+            # unreliable after a split executemany.  MIN/MAX(id) > the
+            # pre-insert watermark gives the exact inserted bounding
+            # range — with INSERT IGNORE the range may have internal
+            # gaps where duplicate rows were ignored, but the bounds
+            # are correct for audit / forget-import.
+            if inserted:
+                cur.execute(
+                    "SELECT MIN(id), MAX(id) FROM userlogin WHERE id > %s",
+                    (pre_max_id,))
+                _row = cur.fetchone()
+                if _row and _row[0] is not None:
+                    pk_start = int(_row[0])
+                    pk_end = int(_row[1])
     finally:
         if _owns_conn:
             conn.close()
@@ -5247,7 +5263,7 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None):
         log.info(f"[import-auth] rows span {sorted(months_seen)} "
                  f"(normal midnight/TZ-bleed)")
 
-    pk_end = (pk_start + inserted - 1) if (pk_start is not None and inserted) else None
+    # pk_start / pk_end were derived inside the transaction.
     if not _owns_conn:
         return 0, pk_start, pk_end, inserted
     return 0
@@ -6102,9 +6118,24 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     _owns_conn = (conn is None)
     if _owns_conn:
         conn = _open_db(metrics_db)
+    # Capture pre-insert MAX(id) so the inserted pk range can be
+    # derived reliably after the import.  cur.lastrowid is NOT
+    # trustworthy after a multi-batch executemany: pymysql splits a
+    # large multi-row INSERT when it would exceed max_allowed_packet,
+    # and lastrowid then reports the first id of the LAST internal
+    # split, not the first id of the first split.  Observed on
+    # mygeohub May–June 2026 (silent pk_start corruption for every
+    # import whose payload exceeded the packet limit).  Under
+    # single-writer flock the inserted block is guaranteed contiguous
+    # from pre_max + 1 onward, so pre_max is the source of truth.
+    pre_max_id: int | None = None
     pk_start: int | None = None
+    pk_end: int | None = None
     try:
         with conn.cursor() as cur:
+            if not dry_run:
+                cur.execute("SELECT IFNULL(MAX(id), 0) FROM web")
+                pre_max_id = int(cur.fetchone()[0])
             with _open_input(input_file) as src:
                 for line in src:
                     total += 1
@@ -6230,16 +6261,27 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
 
                     if len(rows_buf) >= batch_size and not dry_run:
                         cur.executemany(insert_sql, rows_buf)
-                        if pk_start is None and cur.lastrowid:
-                            pk_start = cur.lastrowid
                         inserted += cur.rowcount
                         rows_buf = []
 
             if rows_buf and not dry_run:
                 cur.executemany(insert_sql, rows_buf)
-                if pk_start is None and cur.lastrowid:
-                    pk_start = cur.lastrowid
                 inserted += cur.rowcount
+
+            # Derive the actual inserted pk range now, before the
+            # cursor goes out of scope.  WHERE id > pre_max_id picks
+            # up exactly the rows this transaction added — gaps from
+            # earlier deletions are below pre_max_id and don't reappear
+            # (AUTO_INCREMENT is monotonic across inserts even when
+            # deletions exist), so MIN/MAX here is the truth.
+            if not dry_run and inserted and pre_max_id is not None:
+                cur.execute(
+                    "SELECT MIN(id), MAX(id) FROM web WHERE id > %s",
+                    (pre_max_id,))
+                _row = cur.fetchone()
+                if _row and _row[0] is not None:
+                    pk_start = int(_row[0])
+                    pk_end = int(_row[1])
 
             # webhits — one row per day with the kept-row count.  webhits
             # has no UNIQUE key per legacy semantics, so concurrent or
@@ -6278,10 +6320,10 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
         log.info(f"[import-apache] rows span {sorted(months_seen)} "
                  f"(normal midnight/TZ-bleed)")
 
-    # Under single-writer flock, the inserted PKs are contiguous from
-    # pk_start through pk_start + inserted - 1.  Return the range so
-    # the caller can record it in imported_sources for crash recovery.
-    pk_end = (pk_start + inserted - 1) if (pk_start is not None and inserted) else None
+    # pk_start / pk_end were derived inside the transaction from the
+    # post-insert MIN/MAX(id) > pre_max_id watermark; no further math
+    # is needed here.  Return the range so the caller can record it
+    # in imported_sources for crash recovery.
     if not _owns_conn:
         return 0, pk_start, pk_end, inserted
     return 0
@@ -9558,6 +9600,100 @@ def cmd_forget_import(args):
     return 0
 
 
+def cmd_repair_imported_sources(args):
+    """One-shot fixup for imported_sources rows whose pk_start/pk_end
+    were corrupted by the pre-fix do_import_apache / do_import_auth.
+    Those used cur.lastrowid after executemany, which is unreliable
+    when pymysql silently splits a large multi-row INSERT across the
+    max_allowed_packet boundary — lastrowid then reflects the first id
+    of the LAST internal split, not the first split.  Observed on
+    mygeohub for every import larger than the packet limit.
+
+    Repair algorithm: walk imported_sources entries in DESCending
+    insertion order anchored at MAX(id) of the target table.  Under
+    single-writer flock each import's pk range is exactly row_count
+    contiguous ids ending where the next import started, so chaining
+    backwards from MAX(id) yields the correct range for every entry
+    whose data is still in place.
+
+    The walk doesn't depend on row datetime at all — log files
+    overlap day boundaries (TZ-bleed) but each import still gets a
+    clean contiguous block of AUTO_INCREMENT IDs assigned in INSERT
+    order.
+
+    Default is dry-run; pass --apply to write corrections back.
+    """
+    _, _, _, metrics_db = db_credentials()
+    # (src_id, target, filename, recorded_pk_start, recorded_pk_end,
+    #  derived_pk_start, derived_pk_end)
+    plan: list[tuple] = []
+    for target in ("web", "userlogin"):
+        rows = mysql_query(
+            f"SELECT id, filename, pk_start, pk_end, row_count "
+            f"FROM {metrics_db}.imported_sources "
+            f"WHERE target_table = %s "
+            f"  AND pk_start IS NOT NULL AND pk_end IS NOT NULL "
+            f"  AND row_count > 0 "
+            f"ORDER BY id DESC",
+            (target,))
+        if not rows:
+            log.info(f"[repair-imported-sources] {target}: nothing "
+                     f"to consider")
+            continue
+        max_row = mysql_query(f"SELECT MAX(id) FROM {metrics_db}.{target}")
+        if not max_row or max_row[0][0] is None:
+            log.warning(f"[repair-imported-sources] {target}: table "
+                        f"empty, skipping")
+            continue
+        cursor_id = int(max_row[0][0])
+        diff = 0
+        for src_id, filename, rec_start, rec_end, row_count in rows:
+            row_count = int(row_count)
+            derived_end = cursor_id
+            derived_start = derived_end - row_count + 1
+            if derived_start <= 0:
+                log.error(f"[repair-imported-sources] {target}: "
+                          f"backward walk produced non-positive "
+                          f"pk_start ({derived_start}) at {filename}. "
+                          f"SUM(row_count) > MAX(id) — non-tracked "
+                          f"inserts interleaved.  Aborting {target}.")
+                diff = -1
+                break
+            if int(rec_start) != derived_start or int(rec_end) != derived_end:
+                diff += 1
+                plan.append((src_id, target, filename,
+                             int(rec_start), int(rec_end),
+                             derived_start, derived_end))
+            cursor_id = derived_start - 1
+        if diff >= 0:
+            log.info(f"[repair-imported-sources] {target}: {diff} "
+                     f"row(s) need correction (of {len(rows)} scanned)")
+
+    if not plan:
+        log.info("[repair-imported-sources] no corrections needed")
+        return 0
+
+    log.info(f"[repair-imported-sources] {len(plan)} row(s) to update:")
+    for src_id, target, filename, rs, re_, ds, de in plan[:30]:
+        log.info(f"    {target}/{filename}: "
+                 f"pk_start {rs} -> {ds},  pk_end {re_} -> {de}")
+    if len(plan) > 30:
+        log.info(f"    (... and {len(plan) - 30} more)")
+
+    if not args.apply:
+        log.info("[repair-imported-sources] dry-run.  Pass --apply to "
+                 "write the corrections.")
+        return 0
+
+    for src_id, _target, _filename, _rs, _re, ds, de in plan:
+        mysql_exec(
+            f"UPDATE {metrics_db}.imported_sources "
+            f"SET pk_start=%s, pk_end=%s WHERE id=%s",
+            (ds, de, src_id))
+    log.info(f"[repair-imported-sources] applied {len(plan)} update(s)")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -9637,6 +9773,13 @@ def main() -> None:
         help="Target table to forget (default: all targets for this filename)")
     p_fi.add_argument("--dry-run", action="store_true",
         help="Show what would be deleted without doing it")
+
+    p_repair = sub.add_parser("repair-imported-sources",
+        help="One-shot: rebuild imported_sources.pk_start/pk_end after the "
+             "pre-fix pymysql executemany-split bug")
+    p_repair.set_defaults(func=cmd_repair_imported_sources)
+    p_repair.add_argument("--apply", action="store_true",
+        help="Write the corrected ranges (default: dry-run only)")
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     p_process.set_defaults(func=cmd_process)
