@@ -2671,13 +2671,65 @@ def cmd_audit(args):
             findings.append(("summary_user_vals", "(periods)", ym, None, None,
                              None, None, f"summarize-month {ym}"))
 
-    if not findings:
+    # Structural: import-integrity drift.  For each imported_sources
+    # row that recorded a non-zero row_count and a pk_start..pk_end
+    # range, verify that at least half of those rows still exist in
+    # the target table.  Catches partial / failed imports that
+    # slipped past atomic-import — most notably the legacy gzip-cat
+    # regression in May 2026, where row_count was recorded but the
+    # gzipped input produced 0 actual rows, leaving 10 months of web
+    # data silently missing.
+    #
+    # clean-bots legitimately deletes 5–15% of imported rows in
+    # practice, so the 50% drift threshold is the conservative cut
+    # that ignores normal bot-cleanup while still firing on
+    # wholesale data loss.  The per-row subquery is a bounded PK
+    # range scan on the target — cheap even when imported_sources
+    # has thousands of rows.
+    # The natural form — a correlated subquery joining imp.pk_start /
+    # pk_end against the target's PK — defeats the optimizer: with the
+    # range bounds as unknown correlation variables it picks a small
+    # secondary index for a full scan per outer row (observed: 16 min
+    # per row on web).  Run as two passes instead — one cheap scan of
+    # imported_sources, then literal-value PK range scans per row
+    # (~40 ms each at 48 M rows).
+    integrity_findings: list[tuple[str, str, int, int]] = []
+    for _target in ("web", "userlogin", "webhits"):
+        suspects = mysql_query(
+            f"SELECT filename, pk_start, pk_end, row_count "
+            f"FROM {metrics_db}.imported_sources "
+            f"WHERE target_table = %s "
+            f"  AND pk_start IS NOT NULL AND pk_end IS NOT NULL "
+            f"  AND row_count > 0 "
+            f"ORDER BY filename",
+            (_target,),
+        )
+        for filename, pk_start, pk_end, expected in suspects:
+            expected = int(expected)
+            row = mysql_query(
+                f"SELECT COUNT(*) FROM {metrics_db}.{_target} "
+                f"WHERE id BETWEEN %s AND %s",
+                (pk_start, pk_end),
+            )
+            actual = int(row[0][0]) if row else 0
+            if actual >= expected * 0.5:
+                continue
+            pct = (100.0 * actual / expected) if expected else 0.0
+            log.warning(
+                f"[audit] WARN  {_target}/{filename}: imported_sources "
+                f"records {expected:,} row(s) but only {actual:,} present "
+                f"({pct:.1f}%)"
+            )
+            integrity_findings.append((_target, filename, expected, actual))
+
+    if not findings and not integrity_findings:
         scope_label = ("all months" if args.all
                        else f"{max(1, args.months)} month(s)")
         log.info(f"[audit] all checks passed — {scope_label} clean")
         return 0
 
-    log.error(f"[audit] {len(findings)} finding(s).  Recommended backfills:")
+    total_findings = len(findings) + len(integrity_findings)
+    log.error(f"[audit] {total_findings} finding(s).  Recommended backfills:")
     # Group findings by remediation command (collapse runs of consecutive
     # months for the same check into a range form when the subcommand
     # supports it — resolve-dns / fill-ipcountry / fill-domain all accept
@@ -2712,6 +2764,16 @@ def cmd_audit(args):
                 log.error(f"    hzmetrics.py " +
                           tmpl.format(ym=f"{yms[i]}..{yms[j]}"))
             i = j + 1
+
+    if integrity_findings:
+        log.error("  Import integrity — files with > 50% of imported rows "
+                  "missing (clean-bots typically removes 5–15%):")
+        for target, filename, expected, actual in integrity_findings:
+            pct = 100.0 * actual / expected if expected else 0.0
+            log.error(f"    {target}/{filename}  "
+                      f"({actual:,}/{expected:,} rows present, {pct:.1f}%)")
+            log.error(f"      hzmetrics.py forget-import {filename}  "
+                      f"# then re-import from /var/log/httpd/imported/")
 
     return 1
 
