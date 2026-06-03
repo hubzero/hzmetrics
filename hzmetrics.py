@@ -2680,6 +2680,176 @@ def cmd_audit(args):
             findings.append(("summary_user_vals", "(periods)", ym, None, None,
                              None, None, f"summarize-month {ym}"))
 
+    # ---------------------------------------------------------------
+    # A. Orphan sessionid stamps: web.sessionid / toolstart.sessionid
+    # pointing at a non-existent websessions.id.  The orchestrator
+    # already invokes month_has_orphaned_stamps() per month at catchup
+    # — this audit lifts it across the whole scope, catching drift the
+    # per-tick check would only see if that month were dirty.
+    # ---------------------------------------------------------------
+    for base, alias in (("web", "w"), ("toolstart", "t")):
+        rows = mysql_query(
+            f"SELECT DATE_FORMAT({alias}.datetime, '%%Y-%%m') ym, COUNT(*) n "
+            f"FROM {metrics_db}.{base} {alias} "
+            f"WHERE {alias}.datetime >= %s AND {alias}.datetime < %s "
+            f"  AND {alias}.sessionid IS NOT NULL AND {alias}.sessionid <> '0' "
+            f"  AND NOT EXISTS ("
+            f"    SELECT 1 FROM {metrics_db}.websessions ws "
+            f"    WHERE ws.id = {alias}.sessionid) "
+            f"GROUP BY ym HAVING n > 0 ORDER BY ym",
+            (start_iso, end_iso),
+        )
+        for ym, n in rows:
+            log.warning(f"[audit] WARN  {ym}: {n} orphan {base}.sessionid "
+                        f"stamp(s) reference missing websessions.id")
+            findings.append((f"{base}_orphans", "(orphan_stamps)", ym,
+                             None, None, None, None,
+                             f"mark-dirty {ym}"))
+
+    # ---------------------------------------------------------------
+    # B. web ↔ webhits SUM parity per month.  webhits is derived from
+    # `web` (one row per day = COUNT(*) of kept web rows for that day),
+    # populated inline by import-apache.  Any per-month drift between
+    # COUNT(web) and SUM(webhits.hits) indicates the inline counter
+    # missed rows or webhits has stale historical aggregates.
+    # ---------------------------------------------------------------
+    rows = mysql_query(
+        f"SELECT ym, web_rows, wh_sum FROM ("
+        f"  SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, COUNT(*) web_rows "
+        f"  FROM {metrics_db}.web "
+        f"  WHERE datetime >= %s AND datetime < %s "
+        f"  GROUP BY ym "
+        f") w "
+        f"LEFT JOIN ("
+        f"  SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, SUM(hits) wh_sum "
+        f"  FROM {metrics_db}.webhits "
+        f"  WHERE datetime >= %s AND datetime < %s "
+        f"  GROUP BY ym "
+        f") wh USING (ym) "
+        f"WHERE web_rows <> COALESCE(wh_sum, 0) "
+        f"ORDER BY ym",
+        (start_iso, end_iso, start_iso, end_iso),
+    )
+    for ym, web_rows, wh_sum in rows:
+        log.warning(f"[audit] WARN  {ym}: web↔webhits drift "
+                    f"(web={web_rows:,} wh_sum={wh_sum or 0:,})")
+        findings.append(("webhits", "(parity)", ym, web_rows,
+                         (wh_sum or 0), None, None,
+                         f"rebuild-webhits --month {ym}"))
+
+    # ---------------------------------------------------------------
+    # C. Summary freshness: most-recent datetime in each summary_*_vals
+    # should be prev_month-00.  If summarize-month silently stopped
+    # running at month close, we'd see the max datetime stuck on a
+    # past month even though `web` has rows for the closed month.
+    # ---------------------------------------------------------------
+    # prev_month relative to today.
+    py, pm = today.year, today.month - 1
+    if pm == 0:
+        py, pm = py - 1, 12
+    expected_max = f"{py:04d}-{pm:02d}-00 00:00:00"
+    for tbl in ("summary_user_vals", "summary_misc_vals", "summary_simusage_vals"):
+        rows = mysql_query(
+            f"SELECT MAX(datetime) FROM {metrics_db}.{tbl} WHERE value <> ''",
+        )
+        max_dt = rows[0][0] if rows and rows[0] else None
+        if max_dt is None:
+            log.warning(f"[audit] WARN  {tbl}: no non-empty cells at all "
+                        f"(expected at least {expected_max[:7]})")
+            findings.append((tbl, "(stale)", expected_max[:7],
+                             None, None, None, None,
+                             f"summarize-month {expected_max[:7]}"))
+            continue
+        # Normalise to "YYYY-MM-00 00:00:00" string for comparison.
+        max_str = max_dt.strftime("%Y-%m-%d %H:%M:%S") if hasattr(max_dt, "strftime") else str(max_dt)
+        if max_str[:7] < expected_max[:7]:
+            log.warning(f"[audit] WARN  {tbl}: most-recent datetime {max_str[:7]} "
+                        f"trails prev_month {expected_max[:7]}")
+            findings.append((tbl, "(stale)", expected_max[:7],
+                             None, None, None, None,
+                             f"summarize-month {expected_max[:7]}"))
+
+    # ---------------------------------------------------------------
+    # D. summary_user_vals[rowid=1] = SUM([6,7,8]) per cell.  The
+    # total-users row is by construction registered (6) + unregistered
+    # (7) + bot/other (8).  Already pinned by port_invariants on the
+    # test DB; running the same query on prod catches formula drift
+    # end-to-end.
+    # ---------------------------------------------------------------
+    rows = mysql_query(
+        f"SELECT s1.datetime, s1.period, s1.colid, s1.valfmt "
+        f"FROM {metrics_db}.summary_user_vals s1 "
+        f"LEFT JOIN {metrics_db}.summary_user_vals s2 "
+        f"  ON s2.datetime = s1.datetime AND s2.period = s1.period "
+        f" AND s2.colid = s1.colid AND s2.valfmt = s1.valfmt "
+        f" AND s2.rowid IN (6, 7, 8) "
+        f"WHERE s1.rowid = 1 AND s1.value <> '' AND s1.datetime >= %s "
+        f"GROUP BY s1.datetime, s1.period, s1.colid, s1.valfmt, s1.value "
+        f"HAVING CAST(s1.value AS DECIMAL(20,4)) <> "
+        f"       COALESCE(SUM(CAST(s2.value AS DECIMAL(20,4))), 0)",
+        (start_iso,),
+    )
+    invariant_months = sorted({r[0].strftime("%Y-%m") for r in rows
+                                if hasattr(r[0], "strftime")})
+    for ym in invariant_months:
+        log.warning(f"[audit] WARN  {ym}: summary_user_vals[1] ≠ SUM([6,7,8])")
+        findings.append(("summary_user_vals", "(invariant)", ym,
+                         None, None, None, None,
+                         f"summarize-month {ym}"))
+
+    # ---------------------------------------------------------------
+    # E. dirty_months stuck >48h.  pipeline_state.dirty_months gets
+    # cleared when catchup finishes the month.  If it's been set for
+    # more than 48h, catchup is hung or wedged on the marked month.
+    # ---------------------------------------------------------------
+    rows = mysql_query(
+        f"SELECT v, updated_at FROM {metrics_db}.pipeline_state "
+        f"WHERE k = 'dirty_months' "
+        f"  AND v <> '' "
+        f"  AND updated_at < NOW() - INTERVAL 48 HOUR",
+    )
+    for v, updated_at in rows:
+        log.warning(f"[audit] WARN  dirty_months stuck: '{v}' "
+                    f"unchanged since {updated_at} (>48h)")
+        findings.append(("pipeline_state", "(dirty_stuck)", v,
+                         None, None, None, None,
+                         f"(investigate manage.log; catchup may be wedged on {v})"))
+
+    # ---------------------------------------------------------------
+    # F. Period 14 (all-time) monotonicity for cumulative metrics.
+    # Period 14 is "everything from 1995 through this month" — its
+    # numeric value should never decrease month-to-month for any
+    # rowid/colid/valfmt where the metric is genuinely cumulative
+    # (total users, total hits, total domains, etc.).  A regression
+    # implies a data wipe or bad rebuild.  Skips non-numeric-format
+    # cells (e.g. the rowid=7 "N users on YYYY-MM-DD" sentinel).
+    # ---------------------------------------------------------------
+    for tbl in ("summary_user_vals", "summary_misc_vals", "summary_simusage_vals"):
+        rows = mysql_query(
+            f"SELECT s1.datetime, s1.rowid, s1.colid, s1.valfmt, "
+            f"       CAST(s1.value AS DECIMAL(30,4)) v, "
+            f"       CAST(s2.value AS DECIMAL(30,4)) prev_v "
+            f"FROM {metrics_db}.{tbl} s1 "
+            f"JOIN {metrics_db}.{tbl} s2 "
+            f"  ON s2.rowid = s1.rowid AND s2.colid = s1.colid "
+            f" AND s2.valfmt = s1.valfmt AND s2.period = 14 "
+            f" AND s2.datetime = DATE_SUB(s1.datetime, INTERVAL 1 MONTH) "
+            f"WHERE s1.period = 14 AND s1.datetime >= %s "
+            f"  AND s1.value <> '' AND s2.value <> '' "
+            f"  AND s1.value REGEXP '^[0-9]+(\\\\.[0-9]+)?$' "
+            f"  AND s2.value REGEXP '^[0-9]+(\\\\.[0-9]+)?$' "
+            f"  AND CAST(s1.value AS DECIMAL(30,4)) < CAST(s2.value AS DECIMAL(30,4))",
+            (start_iso,),
+        )
+        for dt, rowid, colid, valfmt, v, prev_v in rows:
+            ym = dt.strftime("%Y-%m") if hasattr(dt, "strftime") else str(dt)[:7]
+            log.warning(f"[audit] WARN  {ym}: {tbl}[rowid={rowid},colid={colid},"
+                        f"valfmt={valfmt}] period-14 regressed "
+                        f"{prev_v} → {v}")
+            findings.append((tbl, "(period14_regression)", ym,
+                             None, None, None, None,
+                             f"(investigate {tbl}; period-14 should never decrease)"))
+
     if not findings:
         scope_label = ("all months" if args.all
                        else f"{max(1, args.months)} month(s)")
@@ -2706,8 +2876,25 @@ def cmd_audit(args):
                 tmpl = r
                 break
         if tmpl is None:
+            # Checks not in _AUDIT_CHECKS (the new A-F structural checks
+            # and the existing (missing)/(periods) ones) carry their own
+            # per-finding remediation cmd in the 8th tuple field.  Emit
+            # each distinct cmd once; if any finding lacks a cmd, fall
+            # back to summarize-month for that ym.
+            cmds = []
+            seen_cmd_yms = set()
+            for f in findings:
+                if f[0] != table or f[1] != column:
+                    continue
+                cmd = f[7] if len(f) > 7 else None
+                if cmd:
+                    cmds.append(cmd)
+                    seen_cmd_yms.add(f[2])
+            for c in sorted(set(cmds)):
+                log.error(f"    hzmetrics.py {c}")
             for ym in yms:
-                log.error(f"    summarize-month {ym}")
+                if ym not in seen_cmd_yms:
+                    log.error(f"    hzmetrics.py summarize-month {ym}")
             continue
         # Emit ranges where consecutive months collapse
         i = 0
