@@ -2543,7 +2543,14 @@ def cmd_audit(args):
             f") t"
         )
         start_dt = probe[0][0] if probe and probe[0] else None
-        start_iso = (start_dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Snap to midnight of the probe day.  Without this, a `web` MIN
+        # of e.g. `2022-01-01 00:00:01` would set start_iso 1 second
+        # past midnight, and check B's WHERE clause would EXCLUDE the
+        # webhits row at `2022-01-01 00:00:00` (which is the per-day
+        # aggregate for that calendar day).  The resulting phantom
+        # 1-day gap shows up as a false-positive web↔webhits drift
+        # for whatever the earliest month is.
+        start_iso = (start_dt.strftime("%Y-%m-%d 00:00:00")
                      if start_dt else "2014-01-01 00:00:00")
         # Compute lookback from the data-driven start so the success
         # log line reports a meaningful month count (the `--all` path
