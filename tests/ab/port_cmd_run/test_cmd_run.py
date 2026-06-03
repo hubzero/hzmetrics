@@ -439,6 +439,27 @@ class CatchupRoutingTests(CmdRunTestBase):
         self.assertEqual(self.state.values.get("rebuild_cascade_from", ""), "",
                          "resummarize-only must not trigger an invalidation cascade")
 
+    def test_mark_dirty_reset_path_records_cascade_origin(self):
+        # mark-dirty triggers catchup down the source ✗ data ✓ branch
+        # with needs_reset=True.  The reset deletes+rebuilds derived
+        # state (websessions / webhits / summary cells) for THIS
+        # month — which invalidates long-window cells in every LATER
+        # month, since their period 0/3/12/13/14 cells read from the
+        # just-changed derived tables.  cascade_from must be lowered
+        # so the rebuild walk picks them up; otherwise mark-dirty
+        # silently leaves stale numbers in later months.
+        self.fakedb.base_table_rows[("2024-07", "web")] = True
+        self.fakedb.web_months = ["2024-07"]
+        self.state.update(dirty_months="2024-07")
+        self.hz.cmd_run(self._args())
+        self.assertEqual(self.state.values.get("rebuild_cascade_from"), "2024-07",
+                         "mark-dirty must lower the cascade marker — the "
+                         "reset invalidates downstream long-window cells")
+        # And of course reset itself ran.
+        self.assertTrue(
+            any(c[0] == "_reset_month_for_resummarize" for c in self.calls),
+            "_reset_month_for_resummarize should have fired on dirty marker")
+
     def test_source_and_data_with_zero_new_rows_skips_cascade_marker(self):
         # Crash-recovery scenario: source file is back in daily/ but
         # its `imported_sources` row is still present (atomic helper

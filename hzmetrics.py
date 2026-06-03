@@ -9502,6 +9502,18 @@ def _do_catchup_tick(today_str: str, state: dict, dry_run: bool) -> bool:
             log.info(f"[catchup] {target}: source ✗ data ✓ — DB-only, resummarize")
         do_analyze(target, dry_run)
         do_summarize(target, dry_run, periods=_CATCHUP_PERIODS)
+        # The reset path deletes+rebuilds derived state for THIS
+        # month, which invalidates long-window cells (periods 0, 3,
+        # 12, 13, 14) in EVERY later month — those windows read from
+        # websessions / webhits / etc. that just changed.  Without
+        # this, mark-dirty triggers catchup → period-1 only, and
+        # later months' period-14 cells stay frozen on pre-reset
+        # values until something else fires the rebuild cascade.
+        # (The has_source branches' `inserted > 0` gate is correct
+        # for them: if no new base rows came in, reset+rebuild is
+        # idempotent and downstream sees the same numbers.)
+        if needs_reset:
+            _record_rebuild_cascade_from(target, state, dry_run)
     else:
         log.warning(f"[catchup] {target}: source ✗ data ✗ — true gap, skipping")
         # Skip — but the backlog probe will keep returning this month
