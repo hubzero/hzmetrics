@@ -184,6 +184,11 @@ HZMETRICS_HOME = Path(os.environ.get("HZMETRICS_HOME", "/opt/hubzero/metrics"))
 LOG         = HZ_METRICS_STAGING / "manage.log"
 
 LOCK_FILE   = HZMETRICS_HOME / "state" / "hzmetrics.pid"
+# Separate advisory lock for migration application.  _self_bootstrap runs
+# _apply_pending_migrations on EVERY cron tick, before the PID lock — so a
+# long-running (required) migration must be guarded against being re-launched
+# concurrently every 5 minutes.  See _apply_pending_migrations.
+MIGRATE_LOCK_FILE = HZMETRICS_HOME / "state" / "hzmetrics-migrate.lock"
 
 
 # ---------------------------------------------------------------------------
@@ -1332,10 +1337,29 @@ def clear_dirty_month(month: str) -> None:
 class Migration:
     id: int
     description: str
-    sql: str                         # uses {metrics_db} placeholder
+    # A migration is EITHER a single SQL statement (`sql`, may use the
+    # {metrics_db} placeholder) OR a Python callable (`fn`) for steps a
+    # single query can't express: chunked/large-table backfills, logic that
+    # needs the application's own classifiers (get_domain, the ipgeo/DNS
+    # resolvers), or a backfill that must also flag months dirty so the
+    # orchestrator re-summarizes them.  Exactly one of sql/fn is set.
+    #
+    # `fn` contract: fn(metrics_db: str, dry_run: bool) -> int  (0 = success,
+    # nonzero = fail → migration aborts).  It MUST be idempotent and pair with
+    # a `check_sql` (so a partial/re-run converges and _automark_applied can
+    # recognise an already-satisfied state) — function migrations follow the
+    # current code's logic rather than a frozen SQL string, so idempotency is
+    # what keeps them safe to re-run across code versions.
+    sql: str | None = None           # single statement; uses {metrics_db}
+    fn: Any = None                   # Callable[[str, bool], int]; see above
     check_sql: str | None = None
     check_expect: int | None = None  # if set, "already applied" means count == this
     required: bool = True            # False = performance/optional; skipped by init/bootstrap
+
+    def __post_init__(self):
+        if (self.sql is None) == (self.fn is None):
+            raise ValueError(
+                f"Migration {self.id}: exactly one of sql=/fn= must be set")
 
 MIGRATIONS = [
     Migration(
@@ -1733,6 +1757,129 @@ for _idx_id, _idx_name in (
 del _idx_id, _idx_name
 
 
+def _migrate_backfill_dnload(metrics_db: str, dry_run: bool = False) -> int:
+    """Migration #52 body (function-migration; see the Migration class).
+
+    `web.dnload` is set inline by import-apache on every row it ingests, so
+    on a normally-grown hub it's never NULL and this is a no-op (caught by
+    check_expect=0 before it even runs).  It exists for the restore /
+    bulk-import provenance — a metrics DB seeded with historical `web` rows
+    that predate the column — where 10s of millions of rows can land with
+    dnload IS NULL, silently zeroing the download-user metric (rowid=8) for
+    every affected month.  A single 50M-row UPDATE would be an enormous
+    transaction, so this delegates to the chunked, per-month backfill, and
+    flags those months dirty so the orchestrator re-summarizes them."""
+    return do_backfill_dnload(None, dry_run=dry_run, mark_dirty=True)
+
+
+MIGRATIONS.append(Migration(
+    id=52,
+    description=("Backfill web.dnload from the request URL for pre-dnload "
+                 "rows (restore / bulk-import); chunked, and marks affected "
+                 "months dirty so download metrics get re-summarized"),
+    fn=_migrate_backfill_dnload,
+    check_sql=(
+        "SELECT COUNT(*) FROM {metrics_db}.web WHERE dnload IS NULL;"
+    ),
+    check_expect=0,
+    required=True,
+))
+
+
+# --- Enrichment backfill migrations (#53-#55) ------------------------------
+# host / domain / ipcountry are normally filled inline by do_analyze as each
+# month is processed.  These function-migrations exist for the restore /
+# bulk-import provenance, where historical web/websessions rows can arrive
+# un-enriched in months the orchestrator already considers "done".  Each
+# backfills both tables across all history (the do_* helpers only touch rows
+# still missing the column — '?' for no-PTR host and '-' for no-answer
+# ipcountry are NOT gaps) and flags the affected months dirty so the
+# orchestrator re-summarizes them.  check_expect=0 means a normally-grown hub
+# (enriched inline, sentinels aside) auto-marks these applied and skips them.
+#
+# Order matters: #53 (host, via reverse DNS) runs before #54 (domain), which
+# derives from host.  #55 (ipcountry) is independent.
+#
+# These call the network resolvers (reverse DNS / ipgeo HTTPS), so on a fresh
+# restore `migrate --apply` can be a long, network-bound run — hence
+# required=False (never run by init / cron self-bootstrap; operator-initiated
+# only).  The per-month, lock-guarded analyze path remains the steady-state
+# mechanism; these are the one-shot catch-up for bulk-loaded history.
+_CUR_MONTH_GUARD = "datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01')"
+
+def _backfill_enrichment(metrics_db, dry_run, *, label, gap_pred, do_fn):
+    months = set()
+    for tbl in ("web", "websessions"):
+        ms = mysql_column(
+            f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') "
+            f"FROM {metrics_db}.{tbl} WHERE {gap_pred};")
+        months.update(m for m in (ms or []) if m)
+    if not months:
+        log.info(f"  [{label}] nothing to backfill")
+        return 0
+    log.info(f"  [{label}] {len(months)} affected month(s); "
+             f"backfilling web + websessions across all history")
+    rc = 0
+    for tbl in ("web", "websessions"):
+        if do_fn("metrics", tbl, all_dates=True, dry_run=dry_run):
+            rc = 1
+    if not dry_run:
+        add_dirty_months(sorted(months))
+        log.info(f"  [{label}] marked {len(months)} month(s) dirty for re-summarize")
+    return rc
+
+def _migrate_backfill_host(metrics_db, dry_run=False):
+    return _backfill_enrichment(
+        metrics_db, dry_run, label="resolve-dns", do_fn=do_resolve_dns,
+        gap_pred=f"(host IS NULL OR host = '') AND {_CUR_MONTH_GUARD}")
+
+def _migrate_backfill_domain(metrics_db, dry_run=False):
+    return _backfill_enrichment(
+        metrics_db, dry_run, label="fill-domain", do_fn=do_fill_domain,
+        gap_pred=("(domain IS NULL OR domain = '' OR domain = '?') "
+                  f"AND host IS NOT NULL AND host <> '' AND {_CUR_MONTH_GUARD}"))
+
+def _migrate_backfill_ipcountry(metrics_db, dry_run=False):
+    return _backfill_enrichment(
+        metrics_db, dry_run, label="fill-ipcountry", do_fn=do_fill_ipcountry,
+        gap_pred=f"(ipcountry IS NULL OR ipcountry = '') AND {_CUR_MONTH_GUARD}")
+
+MIGRATIONS.append(Migration(
+    id=53,
+    description=("Backfill web/websessions.host via reverse DNS for un-enriched "
+                 "rows (restore / bulk-import); marks affected months dirty"),
+    fn=_migrate_backfill_host,
+    check_sql=("SELECT COUNT(*) FROM {metrics_db}.web "
+               "WHERE (host IS NULL OR host = '') "
+               "AND datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01');"),
+    check_expect=0,
+    required=True,
+))
+MIGRATIONS.append(Migration(
+    id=54,
+    description=("Backfill web/websessions.domain from host for un-enriched "
+                 "rows (restore / bulk-import); marks affected months dirty"),
+    fn=_migrate_backfill_domain,
+    check_sql=("SELECT COUNT(*) FROM {metrics_db}.web "
+               "WHERE (domain IS NULL OR domain = '' OR domain = '?') "
+               "AND host IS NOT NULL AND host <> '' "
+               "AND datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01');"),
+    check_expect=0,
+    required=True,
+))
+MIGRATIONS.append(Migration(
+    id=55,
+    description=("Backfill web/websessions.ipcountry via ipgeo for un-enriched "
+                 "rows (restore / bulk-import); marks affected months dirty"),
+    fn=_migrate_backfill_ipcountry,
+    check_sql=("SELECT COUNT(*) FROM {metrics_db}.web "
+               "WHERE (ipcountry IS NULL OR ipcountry = '') "
+               "AND datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01');"),
+    check_expect=0,
+    required=True,
+))
+
+
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
 # size free, the direct ALTER TABLE in migration #41 can overflow the
 # datadir transient (old MyISAM + new InnoDB live side-by-side during
@@ -1784,7 +1931,8 @@ def applied_migration_ids(metrics_db: str) -> set[int]:
     return set(mysql_column(f"SELECT id FROM {metrics_db}.migrations ORDER BY id;"))
 
 def _apply_pending_migrations(metrics_db: str, *, source: str = "migrate",
-                               required_only: bool = False) -> None:
+                               required_only: bool = False,
+                               dry_run: bool = False) -> None:
     """Apply every MIGRATIONS entry not yet recorded in the tracker
     table.  Shared by cmd_migrate (operator-driven) and _self_bootstrap
     (cron-driven on the first tick of a fresh install).  `source` only
@@ -1795,33 +1943,80 @@ def _apply_pending_migrations(metrics_db: str, *, source: str = "migrate",
     applied — used by init/bootstrap so that long-running optional
     performance migrations (large-table InnoDB conversions, index builds)
     don't block the initial install.  Run `migrate --apply` afterwards to
-    apply the remainder at a convenient time."""
+    apply the remainder at a convenient time.
+
+    Each migration is either a single SQL statement (`m.sql`) or a Python
+    callable (`m.fn(metrics_db, dry_run) -> int`); see the Migration class.
+    A migration is recorded in the ledger only on rc==0, and never recorded
+    under dry_run.
+
+    Guarded by a non-blocking advisory flock: _self_bootstrap calls this on
+    every cron tick (before the PID lock), and a `required` function-migration
+    can run for hours, so without the guard each tick would re-launch the
+    same unfinished migration concurrently.  A caller that can't get the lock
+    skips this pass — the holder will finish it."""
     ensure_migrations_table(metrics_db)
-    applied = applied_migration_ids(metrics_db)
-    candidates = [m for m in MIGRATIONS if m.id not in applied]
-    if required_only:
-        candidates = [m for m in candidates if m.required]
-    if not candidates:
+
+    def _pending() -> list:
+        applied = applied_migration_ids(metrics_db)
+        cands = [m for m in MIGRATIONS if m.id not in applied]
+        if required_only:
+            cands = [m for m in cands if m.required]
+        return cands
+
+    if not _pending():
         return
-    log.info(f"[{source}] {len(candidates)} pending migration(s)"
-             + (" (required only)" if required_only else ""))
-    for m in candidates:
-        sql = m.sql.format(metrics_db=metrics_db)
-        log.info(f"[{source}] [{m.id}] {m.description}")
-        log.info(f"    {sql}")
-        rc = mysql_exec(sql)
-        if rc == 0:
-            mysql_exec(
-                f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
-                f"VALUES (%s, %s);",
-                (m.id, m.description),
-            )
-            log.info(f"    done.")
-            log.debug(f"migration {m.id}: {m.description}")
-        else:
-            log.error(f"    FAILED (rc={rc}) — stopping.")
-            log.debug(f"migration {m.id} FAILED")
-            raise SystemExit(1)
+
+    import fcntl
+    lock_fd = None
+    try:
+        MIGRATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(MIGRATE_LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        log.info(f"[{source}] another migration apply is in progress; skipping this pass")
+        return
+    except PermissionError:
+        lock_fd = None  # best-effort: proceed unguarded (single-operator case)
+
+    try:
+        # Re-read under the lock — a prior holder may have just applied some.
+        candidates = _pending()
+        if not candidates:
+            return
+        log.info(f"[{source}] {len(candidates)} pending migration(s)"
+                 + (" (required only)" if required_only else "")
+                 + (" [dry-run]" if dry_run else ""))
+        for m in candidates:
+            log.info(f"[{source}] [{m.id}] {m.description}")
+            if m.fn is not None:
+                # Function migration: owns its own logging / dry-run handling.
+                rc = m.fn(metrics_db, dry_run)
+            else:
+                sql = m.sql.format(metrics_db=metrics_db)
+                log.info(f"    {sql}")
+                rc = 0 if dry_run else mysql_exec(sql)
+            if rc == 0:
+                if not dry_run:
+                    mysql_exec(
+                        f"INSERT IGNORE INTO {metrics_db}.migrations (id, description) "
+                        f"VALUES (%s, %s);",
+                        (m.id, m.description),
+                    )
+                log.info("    done." + (" (dry-run)" if dry_run else ""))
+                log.debug(f"migration {m.id}: {m.description}")
+            else:
+                log.error(f"    FAILED (rc={rc}) — stopping.")
+                log.debug(f"migration {m.id} FAILED")
+                raise SystemExit(1)
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
 
 
 def cmd_migrate(args):
@@ -1851,7 +2046,8 @@ def cmd_migrate(args):
 
     log.debug(f"=== hzmetrics.py migrate --apply  @ {datetime.now()} ===")
     _apply_pending_migrations(metrics_db, source="migrate",
-                              required_only=args.required_only)
+                              required_only=args.required_only,
+                              dry_run=args.dry_run)
     log.info(">>> done")
 
 
@@ -3979,7 +4175,17 @@ def cmd_fill_geo(args):
 # backfill-dnload  (populate web.dnload for historical rows)
 # ---------------------------------------------------------------------------
 
-def do_backfill_dnload(start_month, dry_run=False):
+def do_backfill_dnload(start_month, dry_run=False, *, mark_dirty=False):
+    """Populate web.dnload from the request URL for rows where it's NULL,
+    chunked one month at a time so each UPDATE is a bounded transaction.
+
+    Returns 0 if every chunk succeeded (or there was nothing to do), 1 if
+    any chunk failed.  When `mark_dirty` is True (operator backfill / the
+    function-migration), the months whose rows were (re)classified are
+    flagged dirty so the orchestrator re-summarizes their download metrics
+    — derived `dnload` changing makes existing summaries for those months
+    stale.  do_analyze's inline calls leave it False (the month is already
+    being processed)."""
     _, _, _, metrics_db = db_credentials()
 
     ext_pattern = "|".join(re.escape(e) for e in DOWNLOAD_EXTS)
@@ -4001,10 +4207,11 @@ def do_backfill_dnload(start_month, dry_run=False):
     )
     if not months:
         log.info("  No months with unprocessed rows found.")
-        return
+        return 0
 
     log.info(f"  Will backfill {len(months)} month(s): {months[0]} .. {months[-1]}")
 
+    failures = 0
     for month in months:
         m = datetime.strptime(month + "-01", "%Y-%m-%d")
         next_m = (m.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -4033,26 +4240,42 @@ def do_backfill_dnload(start_month, dry_run=False):
             if rc == 0:
                 log.info(f"{label} done")
             else:
+                failures += 1
                 log.error(f"{label} FAILED (rc={rc}); continuing with next month")
 
+    # dnload is served by the composite web_dnload_dt (migration #43); the
+    # legacy single-column `dnload` index (migration #1) was dropped as
+    # redundant by migration #49.  Only add the single-col index if NEITHER
+    # exists (pre-#43 schema) — never re-create the index #49 just removed.
     if not dry_run:
         count = mysql_scalar(
             f"SELECT COUNT(*) FROM information_schema.statistics "
-            f"WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='dnload';"
+            f"WHERE table_schema='{metrics_db}' AND table_name='web' "
+            f"AND index_name IN ('dnload', 'web_dnload_dt');"
         )
         if count == 0:
             rc = mysql_exec(f"ALTER TABLE {metrics_db}.web ADD INDEX dnload (dnload);")
             if rc == 0:
                 log.info(f"  Adding index on {metrics_db}.web(dnload) ... done")
             else:
+                failures += 1
                 log.error(f"  Adding index on {metrics_db}.web(dnload) FAILED (rc={rc})")
         else:
-            log.info(f"  Index on {metrics_db}.web(dnload) already exists.")
+            log.info(f"  dnload already indexed (dnload / web_dnload_dt); not re-adding.")
+
+    if mark_dirty and not dry_run and months:
+        add_dirty_months(months)
+        log.info(f"  marked {len(months)} month(s) dirty for re-summarize: "
+                 f"{months[0]} .. {months[-1]}")
+
+    return 1 if failures else 0
 
 
 def cmd_backfill_dnload(args):
     dry_run = args.dry_run
-    do_backfill_dnload(args.start, dry_run)
+    # Operator-driven backfill: flag the months it touches dirty so the
+    # orchestrator re-summarizes their (now-corrected) download metrics.
+    do_backfill_dnload(args.start, dry_run, mark_dirty=True)
     log.info(">>> done")
 
 
@@ -10063,6 +10286,8 @@ def main() -> None:
     p_migrate.add_argument("--apply", action="store_true", help="Apply pending migrations")
     p_migrate.add_argument("--required-only", action="store_true",
                            help="With --apply: skip optional performance migrations")
+    p_migrate.add_argument("--dry-run", action="store_true",
+                           help="With --apply: show what each migration would do without writing")
 
     p_init = sub.add_parser(
         "init",
