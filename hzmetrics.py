@@ -834,9 +834,10 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
     end = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
     dt_summary = f"{month_str}-00"
 
-    log.info(f"[reset] {month_str}: resetting web.sessionid + wiping derived tables")
+    log.info(f"[reset] {month_str}: resetting sessionid + wiping derived tables")
     if dry_run:
         log.info(f"  [dry-run] UPDATE web SET sessionid=NULL WHERE datetime in [{start},{end})")
+        log.info(f"  [dry-run] UPDATE toolstart SET sessionid=NULL WHERE datetime in [{start},{end})")
         log.info(f"  [dry-run] DELETE FROM websessions WHERE datetime in [{start},{end})")
         log.info(f"  [dry-run] DELETE FROM webhits WHERE datetime in [{start},{end})")
         for table in _SUMMARY_VALS_TABLES + ("summary_andmore_vals",):
@@ -845,7 +846,8 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
 
     # web.sessionid reset is chunked — a 1.4 M-row update on the
     # geodynamics hub took ~3 min at 100 k/chunk; doing it in one
-    # statement risks the undo log + replication lag.
+    # statement risks the undo log + replication lag.  toolstart is
+    # tiny so a single UPDATE is fine.
     conn = _open_db()
     try:
         chunk = 100_000
@@ -866,6 +868,20 @@ def _reset_month_for_resummarize(month_str: str, dry_run: bool = False) -> None:
         log.info(f"[reset] {month_str}: cleared sessionid on {total} web row(s)")
 
         with conn.cursor() as cur:
+            # toolstart.sessionid reset matches web.sessionid: _iphost_jobs
+            # only re-stamps rows where sessionid IS NULL OR sessionid='0',
+            # so without this any stale stamps from a prior run (whose
+            # websessions.id no longer exists after the DELETE below)
+            # would persist as orphans across the rebuild.  Caught on
+            # 2024-09 by the new audit's check A.
+            cur.execute(
+                f"UPDATE {metrics_db}.toolstart SET sessionid = NULL "
+                f"WHERE datetime >= %s AND datetime < %s "
+                f"  AND sessionid IS NOT NULL AND sessionid <> '0';",
+                (start, end),
+            )
+            log.info(f"[reset] {month_str}: cleared sessionid on "
+                     f"{cur.rowcount} toolstart row(s)")
             cur.execute(
                 f"DELETE FROM {metrics_db}.websessions "
                 f"WHERE datetime >= %s AND datetime < %s;",
