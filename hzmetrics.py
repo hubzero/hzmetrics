@@ -3165,6 +3165,38 @@ def cmd_audit(args):
                              None, None, None, None,
                              f"(investigate {tbl}; period-14 should never decrease)"))
 
+    # ---------------------------------------------------------------
+    # G. userlogin / cmsauth source coverage.  Every month with web
+    # data should also have at least some userlogin rows — the two
+    # streams are independent imports (apache logs → web; cmsauth
+    # logs → userlogin) but on a healthy hub both run together.  A
+    # month with web rows but zero userlogin rows is a cmsauth-side
+    # import gap.  Scope = start_iso..end_iso, so this only triggers
+    # in the web era; pre-web months with userlogin-only data (real
+    # historical residue on hubs that ran cmsauth ingestion before
+    # apache ingestion) are correctly NOT flagged.
+    rows = mysql_query(
+        f"SELECT w.ym, w.web_n FROM ("
+        f"  SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, COUNT(*) web_n "
+        f"  FROM {metrics_db}.web "
+        f"  WHERE datetime >= %s AND datetime < %s GROUP BY ym "
+        f") w "
+        f"LEFT JOIN ("
+        f"  SELECT DATE_FORMAT(datetime, '%%Y-%%m') ym, COUNT(*) user_n "
+        f"  FROM {metrics_db}.userlogin "
+        f"  WHERE datetime >= %s AND datetime < %s GROUP BY ym "
+        f") u USING (ym) "
+        f"WHERE COALESCE(u.user_n, 0) = 0 AND w.web_n > 0 "
+        f"ORDER BY w.ym",
+        (start_iso, end_iso, start_iso, end_iso),
+    )
+    for ym, web_n in rows:
+        log.warning(f"[audit] WARN  {ym}: web has {web_n:,} rows but "
+                    f"userlogin has 0 — cmsauth import gap")
+        findings.append(("userlogin", "(missing_source)", ym,
+                         web_n, 0, None, None,
+                         f"(investigate cmsauth daily/{ym}*.log import)"))
+
     if not findings:
         scope_label = ("all months" if args.all
                        else f"{max(1, args.months)} month(s)")
