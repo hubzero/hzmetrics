@@ -1861,26 +1861,67 @@ def _backfill_enrichment(metrics_db, dry_run, *, label, gap_pred, do_fn):
     # that actually have un-enriched rows — and uniform across the three
     # resolvers (do_fill_ipcountry rejects --all, unlike resolve-dns /
     # fill-domain, so a single all_dates path can't serve all three).
+    #
+    # Only mark months dirty where do_fn ACTUALLY UPDATED rows.  Earlier
+    # versions marked every month that *had candidate rows* (i.e. rows
+    # matching gap_pred) regardless of whether the resolver could actually
+    # fill them — the do_fill_domain run on geodynamics 2026-06-03 found
+    # 10-28 candidate hosts per month but produced 0 updates for every
+    # month (host strings that don't yield a parseable domain), then
+    # marked all 53 months dirty anyway, triggering a ~5h spurious
+    # rebuild cascade.  Pre/post COUNT(*) per month detects the real
+    # signal: rows that no longer match gap_pred after do_fn ran.
     all_months = set()
     rc = 0
     for tbl in ("web", "websessions"):
+        # Initial discovery still uses the _CUR_MONTH_GUARD-augmented
+        # predicate so we don't try to backfill the in-progress current
+        # month (its data is incomplete; analyze will fill it in normal
+        # mode anyway).
         tmonths = sorted(m for m in (mysql_column(
             f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') "
             f"FROM {metrics_db}.{tbl} WHERE {gap_pred};") or []) if m)
         if not tmonths:
             continue
-        all_months.update(tmonths)
-        log.info(f"  [{label}] {tbl}: {len(tmonths)} month(s) with gaps "
+        log.info(f"  [{label}] {tbl}: {len(tmonths)} month(s) with gap candidates "
                  f"({tmonths[0]} .. {tmonths[-1]})")
+        # Per-month pre/post predicate strips _CUR_MONTH_GUARD (the
+        # explicit datetime range below already enforces that) so we
+        # don't break the regex when month_str matches the guard.
+        per_month_pred = gap_pred.replace(_CUR_MONTH_GUARD, "1=1")
         for mo in tmonths:
+            y, m = int(mo[:4]), int(mo[5:7])
+            mo_start = f"{mo}-01"
+            mo_end = (f"{y + 1:04d}-01-01" if m == 12
+                      else f"{y:04d}-{m + 1:02d}-01")
+            pre = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.{tbl} "
+                f"WHERE {per_month_pred} "
+                f"  AND datetime >= %s AND datetime < %s",
+                (mo_start, mo_end)) or 0
             if do_fn("metrics", tbl, mo, dry_run=dry_run):
                 rc = 1
+            if dry_run:
+                # Dry-run: no UPDATE happened, can't measure progress.
+                # Be conservative and don't mark.  (The migration's
+                # check_expect=0 will keep this from auto-rerunning.)
+                continue
+            post = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.{tbl} "
+                f"WHERE {per_month_pred} "
+                f"  AND datetime >= %s AND datetime < %s",
+                (mo_start, mo_end)) or 0
+            if post < pre:
+                all_months.add(mo)
+                log.info(f"  [{label}] {tbl} {mo}: filled {pre - post} row(s)")
     if not all_months:
-        log.info(f"  [{label}] nothing to backfill")
-        return 0
+        log.info(f"  [{label}] no rows actually backfilled — "
+                 f"not marking any month dirty")
+        return rc
     if not dry_run:
         add_dirty_months(sorted(all_months))
-        log.info(f"  [{label}] marked {len(all_months)} month(s) dirty for re-summarize")
+        log.info(f"  [{label}] marked {len(all_months)} month(s) dirty for "
+                 f"re-summarize (only months with row updates)")
     return rc
 
 def _migrate_backfill_host(metrics_db, dry_run=False):
