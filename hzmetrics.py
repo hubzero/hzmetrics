@@ -1857,24 +1857,30 @@ MIGRATIONS.append(Migration(
 _CUR_MONTH_GUARD = "datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01')"
 
 def _backfill_enrichment(metrics_db, dry_run, *, label, gap_pred, do_fn):
-    months = set()
-    for tbl in ("web", "websessions"):
-        ms = mysql_column(
-            f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') "
-            f"FROM {metrics_db}.{tbl} WHERE {gap_pred};")
-        months.update(m for m in (ms or []) if m)
-    if not months:
-        log.info(f"  [{label}] nothing to backfill")
-        return 0
-    log.info(f"  [{label}] {len(months)} affected month(s); "
-             f"backfilling web + websessions across all history")
+    # Iterate per gap-month per table (not all_dates): precise — only months
+    # that actually have un-enriched rows — and uniform across the three
+    # resolvers (do_fill_ipcountry rejects --all, unlike resolve-dns /
+    # fill-domain, so a single all_dates path can't serve all three).
+    all_months = set()
     rc = 0
     for tbl in ("web", "websessions"):
-        if do_fn("metrics", tbl, all_dates=True, dry_run=dry_run):
-            rc = 1
+        tmonths = sorted(m for m in (mysql_column(
+            f"SELECT DISTINCT DATE_FORMAT(datetime,'%Y-%m') "
+            f"FROM {metrics_db}.{tbl} WHERE {gap_pred};") or []) if m)
+        if not tmonths:
+            continue
+        all_months.update(tmonths)
+        log.info(f"  [{label}] {tbl}: {len(tmonths)} month(s) with gaps "
+                 f"({tmonths[0]} .. {tmonths[-1]})")
+        for mo in tmonths:
+            if do_fn("metrics", tbl, mo, dry_run=dry_run):
+                rc = 1
+    if not all_months:
+        log.info(f"  [{label}] nothing to backfill")
+        return 0
     if not dry_run:
-        add_dirty_months(sorted(months))
-        log.info(f"  [{label}] marked {len(months)} month(s) dirty for re-summarize")
+        add_dirty_months(sorted(all_months))
+        log.info(f"  [{label}] marked {len(all_months)} month(s) dirty for re-summarize")
     return rc
 
 def _migrate_backfill_host(metrics_db, dry_run=False):
