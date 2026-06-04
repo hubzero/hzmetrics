@@ -1377,21 +1377,21 @@ MIGRATIONS = [
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "AND index_name IN ('dnload', 'web_dnload_dt');"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=2,
         description="Composite index web(sessionid, dnload) — covering index for download_users JOIN",
         sql="ALTER TABLE {metrics_db}.web ADD INDEX web_sessionid_dnload (sessionid, dnload);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='web' AND index_name='web_sessionid_dnload';",
-        required=False,
+        required=True,
     ),
     Migration(
         id=3,
         description="Composite index websessions(datetime, jobs, duration, ipcountry) — filter pushdown for int/download_users",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_datetime_jobs_dur_country (datetime, jobs, duration, ipcountry);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_datetime_jobs_dur_country';",
-        required=False,
+        required=True,
     ),
     Migration(
         id=4,
@@ -1399,21 +1399,21 @@ MIGRATIONS = [
         sql="DELETE FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
         check_sql="SELECT COUNT(*) FROM {metrics_db}.userlogin WHERE action NOT IN ('login', 'simulation');",
         check_expect=0,
-        required=False,
+        required=True,
     ),
     Migration(
         id=5,
         description="Index websessions(domain) — speeds up domainclass JOIN in download org queries",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_domain (domain);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_domain';",
-        required=False,
+        required=True,
     ),
     Migration(
         id=6,
         description="Index websessions(jobs, ipcountry, duration) — period-14 all-time download_users filter",
         sql="ALTER TABLE {metrics_db}.websessions ADD INDEX ws_jobs_country_dur (jobs, ipcountry, duration);",
         check_sql="SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='{metrics_db}' AND table_name='websessions' AND index_name='ws_jobs_country_dur';",
-        required=False,
+        required=True,
     ),
     Migration(
         id=7,
@@ -1493,9 +1493,55 @@ for _i, _tbl in enumerate(_INNODB_CONVERT_TABLES):
             f"WHERE table_schema='{{metrics_db}}' "
             f"AND table_name='{_tbl}' AND engine='InnoDB';"
         ),
-        required=False,
+        required=True,
     ))
 del _i, _tbl
+
+
+# Disk-safe web MyISAM→InnoDB conversion (migration #41 body).  A direct
+# `ALTER TABLE web ENGINE=InnoDB` rebuilds the clustered index PLUS every
+# secondary into one intermediate copy that lives in the datadir alongside
+# the old table — ~3-4× the MyISAM size, which overflows a tight datadir
+# volume (the documented cdmhub incident).  Dropping the secondaries first
+# makes the intermediate clustered-only (~½ the footprint), then they're
+# re-added INPLACE (sort scratch only, no second full copy).  This is the
+# proven recipe from the ops runbook, now codified so a `required` #41 is
+# safe to auto-run at bootstrap.  No-op once web is already InnoDB.
+_WEB_SECONDARY_INDEXES = [
+    ("ipcountry",            "(`ipcountry`)"),
+    ("ip",                   "(`ip`)"),
+    ("content",              "(`content`(255))"),
+    ("web_sessionid_dnload", "(`sessionid`,`dnload`)"),
+    ("web_host",             "(`host`(255))"),
+    ("web_dt_ip",            "(`datetime`,`ip`)"),
+    ("web_dnload_dt",        "(`dnload`,`datetime`)"),
+]
+
+def _migrate_web_to_innodb(metrics_db, dry_run=False):
+    eng = mysql_scalar(
+        f"SELECT engine FROM information_schema.tables "
+        f"WHERE table_schema='{metrics_db}' AND table_name='web';")
+    if (eng or "").lower() == "innodb":
+        log.info("  [web→InnoDB] already InnoDB; nothing to do")
+        return 0
+    present = mysql_column(
+        f"SELECT DISTINCT index_name FROM information_schema.statistics "
+        f"WHERE table_schema='{metrics_db}' AND table_name='web' "
+        f"AND index_name <> 'PRIMARY';")
+    if dry_run:
+        log.info(f"  [web→InnoDB] would drop {len(present)} secondary index(es), "
+                 f"convert to InnoDB, re-add {len(_WEB_SECONDARY_INDEXES)}")
+        return 0
+    # 1. Drop all present secondaries AND change engine in one COPY → the
+    #    intermediate carries only the clustered index (fits tight datadir).
+    clauses = [f"DROP INDEX `{n}`" for n in present] + ["ENGINE=InnoDB"]
+    log.info(f"  [web→InnoDB] dropping {len(present)} secondary index(es) + converting")
+    if mysql_exec(f"ALTER TABLE {metrics_db}.web " + ", ".join(clauses)) != 0:
+        return 1
+    # 2. Re-add the canonical secondary set INPLACE (no full-table copy).
+    add = ", ".join(f"ADD INDEX `{n}` {d}" for n, d in _WEB_SECONDARY_INDEXES)
+    log.info(f"  [web→InnoDB] re-adding {len(_WEB_SECONDARY_INDEXES)} secondary index(es)")
+    return 0 if mysql_exec(f"ALTER TABLE {metrics_db}.web {add}") == 0 else 1
 
 
 # Performance — fill-domain bottleneck.  fill-domain's JOIN-UPDATE was
@@ -1515,7 +1561,7 @@ MIGRATIONS.extend([
                    "WHERE host IS NOT NULL AND host <> '' "
                    "  AND BINARY host <> BINARY LOWER(host);"),
         check_expect=0,
-        required=False,
+        required=True,
     ),
     Migration(
         id=37,
@@ -1526,7 +1572,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_host';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=38,
@@ -1538,7 +1584,7 @@ MIGRATIONS.extend([
                    "WHERE host IS NOT NULL AND host <> '' "
                    "  AND BINARY host <> BINARY LOWER(host);"),
         check_expect=0,
-        required=False,
+        required=True,
     ),
     Migration(
         id=39,
@@ -1549,7 +1595,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
             "  AND index_name='ws_host';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=40,
@@ -1561,20 +1607,21 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='websessions' "
             "  AND engine='InnoDB';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=41,
-        description=("Convert web to InnoDB — concurrent reads via MVCC, "
-                     "faster random updates for fill-domain / fill-ipcountry "
-                     "than 10 GB MyISAM (web is the largest table, ~16 M rows)"),
-        sql="ALTER TABLE {metrics_db}.web ENGINE=InnoDB;",
+        description=("Convert web to InnoDB (disk-safe: drop secondaries → "
+                     "convert → re-add) — concurrent reads via MVCC, faster "
+                     "random updates for fill-domain / fill-ipcountry than "
+                     "10 GB MyISAM (web is the largest table)"),
+        fn=_migrate_web_to_innodb,
         check_sql=(
             "SELECT COUNT(*) FROM information_schema.tables "
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND engine='InnoDB';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=42,
@@ -1587,7 +1634,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_dt_ip';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=43,
@@ -1602,7 +1649,7 @@ MIGRATIONS.extend([
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
             "  AND index_name='web_dnload_dt';"
         ),
-        required=False,
+        required=True,
     ),
     Migration(
         id=44,
@@ -1673,7 +1720,7 @@ for _i, _tbl in enumerate(_UTF8MB3_NORMALISE_TABLES):
             f"AND table_collation <> 'utf8mb3_general_ci';"
         ),
         check_expect=0,
-        required=False,
+        required=True,
     ))
 del _i, _tbl
 
@@ -1705,7 +1752,7 @@ MIGRATIONS.append(Migration(
         "WHERE SCHEMA_NAME='{metrics_db}' "
         "AND DEFAULT_COLLATION_NAME='utf8mb3_general_ci';"
     ),
-    required=False,
+    required=True,
 ))
 
 
@@ -1752,7 +1799,7 @@ for _idx_id, _idx_name in (
             f"AND index_name='{_idx_name}';"
         ),
         check_expect=0,
-        required=False,
+        required=True,
     ))
 del _idx_id, _idx_name
 
@@ -1801,10 +1848,12 @@ MIGRATIONS.append(Migration(
 # derives from host.  #55 (ipcountry) is independent.
 #
 # These call the network resolvers (reverse DNS / ipgeo HTTPS), so on a fresh
-# restore `migrate --apply` can be a long, network-bound run — hence
-# required=False (never run by init / cron self-bootstrap; operator-initiated
-# only).  The per-month, lock-guarded analyze path remains the steady-state
-# mechanism; these are the one-shot catch-up for bulk-loaded history.
+# restore `migrate --apply` (or the first cron self-bootstrap) can be a long,
+# network-bound run.  They are required=True but safe to auto-run: the
+# migrate-apply flock serialises them (no per-tick storm), they're idempotent
+# (check_expect=0 → instant skip on a normally-grown or empty hub), and the
+# per-month lock-guarded analyze path stays the steady-state mechanism — these
+# are the one-shot catch-up for bulk-loaded history.
 _CUR_MONTH_GUARD = "datetime < DATE_FORMAT(CURDATE(), '%Y-%m-01')"
 
 def _backfill_enrichment(metrics_db, dry_run, *, label, gap_pred, do_fn):
