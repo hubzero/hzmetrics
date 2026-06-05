@@ -1628,7 +1628,15 @@ MIGRATIONS.extend([
         description=("Covering index web(datetime, ip) — lets resolve-dns's "
                      "SELECT DISTINCT ip … WHERE datetime range be served "
                      "entirely from the index, skipping the 8 GB heap"),
-        sql="CREATE INDEX web_dt_ip ON {metrics_db}.web (datetime, ip);",
+        # ADD INDEX IF NOT EXISTS (not bare CREATE INDEX): migration #41's
+        # disk-safe web→InnoDB rebuild re-adds the full current secondary
+        # set, which already includes web_dt_ip (_WEB_SECONDARY_INDEXES).  On
+        # a fresh install #41 runs before #42 in the same pass, so the index
+        # is already present and a bare CREATE INDEX would die with errno
+        # 1061 (duplicate key name) before _automark_applied — which runs
+        # once at pass start, before #41 — could mark it.  The MariaDB
+        # IF NOT EXISTS clause makes the statement a no-op-with-warning.
+        sql="ALTER TABLE {metrics_db}.web ADD INDEX IF NOT EXISTS web_dt_ip (datetime, ip);",
         check_sql=(
             "SELECT COUNT(*) FROM information_schema.statistics "
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
@@ -1643,7 +1651,10 @@ MIGRATIONS.extend([
                      "heap-fetch-and-filter into an index-only seek across "
                      "the dnload=1 slice.  Cut per-month rebuild ticks from "
                      "~45 min back to a few minutes on the geodynamics audit"),
-        sql="CREATE INDEX web_dnload_dt ON {metrics_db}.web (dnload, datetime);",
+        # ADD INDEX IF NOT EXISTS for the same reason as #42: #41's re-add
+        # set includes web_dnload_dt, so on a fresh install it already exists
+        # by the time this migration runs in the same pass.
+        sql="ALTER TABLE {metrics_db}.web ADD INDEX IF NOT EXISTS web_dnload_dt (dnload, datetime);",
         check_sql=(
             "SELECT COUNT(*) FROM information_schema.statistics "
             "WHERE table_schema='{metrics_db}' AND table_name='web' "
