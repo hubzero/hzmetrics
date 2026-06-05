@@ -8,6 +8,9 @@ these patterns AND the Referer header is empty/dash/null:
   - /citations/browse...    (citations catalog walk; 2026-02 audit:
                              113 k hits in 3 months from the same
                              distributed-bot UA family)
+  - /members/browse...      (member-directory walk; 2025-05 plantingscience
+                             survey caught the same empty-Referer /
+                             browser-UA signature as the browse variants)
 
 Slash variants (`/login/?return=`, `/resources/browse/?...`) route to
 the same CMS actions and are hit by the same crawlers, so the regexes
@@ -98,6 +101,40 @@ class IsRefererSpamTests(unittest.TestCase):
         self.assertFalse(self.hz._is_referer_spam(
             "/citations/12345", referrer=""))
 
+    # --- /members/browse positive cases ------------------------------
+
+    def test_members_browse_no_slash_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/members/browse", referrer=""))
+
+    def test_members_browse_with_slash_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/members/browse/", referrer=""))
+
+    def test_members_browse_with_query_empty_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/members/browse?page=4&sort=name", referrer=""))
+
+    def test_members_browse_dash_referer_is_spam(self):
+        self.assertTrue(self.hz._is_referer_spam(
+            "/members/browse?page=4", referrer="-"))
+
+    def test_members_browse_with_referer_is_not_spam(self):
+        # Real user reached the member directory via an on-site link — keep.
+        self.assertFalse(self.hz._is_referer_spam(
+            "/members/browse?page=4",
+            referrer="https://plantingscience.org/"))
+
+    def test_members_profile_subpath_is_not_spam(self):
+        # /members/<id> (specific profile) — never filter.
+        self.assertFalse(self.hz._is_referer_spam(
+            "/members/15682", referrer=""))
+
+    def test_members_browselook_is_not_spam(self):
+        # Guard the word boundary: /members/browselook must not match.
+        self.assertFalse(self.hz._is_referer_spam(
+            "/members/browselook", referrer=""))
+
     # --- negative cases: real users with Referer ---------------------
 
     def test_login_with_referer_is_not_spam(self):
@@ -157,6 +194,15 @@ class IsRefererSpamTests(unittest.TestCase):
         # Specific-citation paths must NOT match.
         self.assertFalse(self.hz._CITATIONS_BROWSE_RE.match("/citations/12345"))
         self.assertFalse(self.hz._CITATIONS_BROWSE_RE.match("/citations/browselook"))
+
+    def test_members_browse_re_accepts_bare_and_query_variants(self):
+        self.assertTrue(self.hz._MEMBERS_BROWSE_RE.match("/members/browse"))
+        self.assertTrue(self.hz._MEMBERS_BROWSE_RE.match("/members/browse/"))
+        self.assertTrue(self.hz._MEMBERS_BROWSE_RE.match("/members/browse?x=1"))
+        self.assertTrue(self.hz._MEMBERS_BROWSE_RE.match("/members/browse/?x=1"))
+        # Specific-profile paths must NOT match.
+        self.assertFalse(self.hz._MEMBERS_BROWSE_RE.match("/members/15682"))
+        self.assertFalse(self.hz._MEMBERS_BROWSE_RE.match("/members/browselook"))
 
 
 if __name__ == "__main__":

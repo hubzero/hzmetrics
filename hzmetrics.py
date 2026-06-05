@@ -5980,6 +5980,21 @@ BOT_UA_FILTERS = [
     "prtg",        # PRTG Network Monitor probes (per-minute health checks)
     "pycurl",      # PycURL/* — typical health-check / curl-based monitor
     "yeti",        # Naver Yeti search-engine bot (+https://naver.me/spd)
+    # Added after the 2025-05 plantingscience survey: bare programmatic
+    # HTTP clients are never interactive browsers, but carry no
+    # bot/crawl/spider token so the substrings above miss them.  All
+    # below are unambiguous library default UAs with no browser overlap.
+    # ("curl" also subsumes the older "pycurl" entry; both kept for
+    # clarity.)  Deliberately NOT added: "okhttp" / "java" — those appear
+    # in legitimate mobile-app and middleware traffic on some hubs, so
+    # they need a per-hub decision rather than a blanket filter.
+    "python-requests",  # Python-requests/2.x
+    "python-urllib",    # Python-urllib/3.x
+    "curl",             # curl/8.x
+    "wget",             # Wget/1.x
+    "go-http",          # Go-http-client/1.1
+    "node-fetch",       # node-fetch/1.x
+    "libwww",           # libwww-perl/6.x
 ]
 # Whitelist overrides — remove these false positives after flagging.
 BOT_UA_WHITELIST_LIKE = ["%searchtool%", "% feed/%"]
@@ -6466,6 +6481,13 @@ _SVN_RE       = re.compile(r'/projects/.+?/svn/\!svn/', re.IGNORECASE)
 # happens to share the domain; they contribute no hub-usage signal.
 _PIPERMAIL_RE = re.compile(r'^/pipermail/',        re.IGNORECASE)
 _RESOURCES_RE = re.compile(r'^/resources/',        re.IGNORECASE)
+# /robots.txt — bot politeness fetch.  Served 200-with-bytes so it clears
+# the status/size gate, but it carries no hub-usage signal: 100 % empty-
+# Referer at ~2.7 k hits/day in the 2025-05 plantingscience survey.
+# Unconditional (not Referer-gated): no human navigates to /robots.txt.
+# `_SLASH_COLLAPSE` already folds //robots.txt → /robots.txt before this
+# runs, so the leading-double-slash scanner variant is covered too.
+_ROBOTS_RE    = re.compile(r'^/robots\.txt(?:[?#]|$)', re.IGNORECASE)
 # /register registration-form crawler probes.  2026-02..05 audit: 629 k
 # hits in 3 months; top 2 UAs hit at 145 k and 100 k distinct IPs with
 # ≈1 hit/IP — the same distributed-bot signature as the MSIE wave, just
@@ -6500,6 +6522,14 @@ _BROWSE_QUERY_RE = re.compile(r'^/resources/browse/?\?',     re.IGNORECASE)
 # users reach the catalog landing page with a Referer set, so the
 # empty-Referer gate alone separates bots from browsers.
 _CITATIONS_BROWSE_RE = re.compile(r'^/citations/browse(?:[/?]|$)', re.IGNORECASE)
+# /members/browse — same paginated directory-walk shape as
+# /resources/browse? and /citations/browse.  The distributed-bot family
+# rotates targets over time (the 2026-02 MSIE wave moved through
+# citations/files/groups/outreach), and the 2025-05 plantingscience
+# survey caught /members/browse with the same empty-Referer / browser-UA
+# signature.  Empty-Referer gated like the others so a real user reaching
+# the member directory via on-site navigation is preserved.
+_MEMBERS_BROWSE_RE = re.compile(r'^/members/browse(?:[/?]|$)', re.IGNORECASE)
 
 # /events/<year> archive walks.  2026-02..05 audit: a uniform ≈17-18 k
 # hits per archive year going back to 2006, all with empty Referer.
@@ -6553,20 +6583,22 @@ def _is_excluded_url(url):
     if _CRON_RE.match(url):            return True
     if _SVN_RE.search(url):            return True
     if _PIPERMAIL_RE.match(url):       return True
+    if _ROBOTS_RE.match(url):          return True
     return False
 
 
 def _is_referer_spam(url, referrer):
     """True iff the row is a crawler hit identifiable by URL pattern +
     empty Referer.  See _LOGIN_RETURN_RE / _BROWSE_QUERY_RE /
-    _CITATIONS_BROWSE_RE / _REGISTER_RE for the patterns and the
-    2025-05 / 2026-02 measurements that justified them."""
+    _CITATIONS_BROWSE_RE / _MEMBERS_BROWSE_RE / _REGISTER_RE for the
+    patterns and the 2025-05 / 2026-02 measurements that justified them."""
     if referrer and referrer != '-':
         return False
     return bool(
         _LOGIN_RETURN_RE.match(url)
         or _BROWSE_QUERY_RE.match(url)
         or _CITATIONS_BROWSE_RE.match(url)
+        or _MEMBERS_BROWSE_RE.match(url)
         or _REGISTER_RE.match(url)
     )
 
