@@ -4351,6 +4351,29 @@ def do_backfill_dnload(start_month, dry_run=False, *, mark_dirty=False):
     log.info(f"  Will backfill {len(months)} month(s): {months[0]} .. {months[-1]}")
 
     failures = 0
+    # Bound each UPDATE by a primary-key range so a single statement never
+    # locks more than CHUNK_ROWS rows.  A whole-month UPDATE on a bot-flood
+    # month (10M+ rows — exactly the bulk-import/restore case this migration
+    # exists for) overflows InnoDB's lock table with error 1206 ("total
+    # number of locks exceeds the lock table size") on a small
+    # innodb_buffer_pool.  250k chunks stay safe against the 128 MB default
+    # pool; classification is unchanged, so the result is identical to a
+    # single per-month UPDATE — just split across bounded transactions.
+    CHUNK_ROWS = 250_000
+
+    # Same %->%% caveat as the months query above: LIKE pattern's '%'
+    # must be doubled when params=tuple is passed.
+    regex = f"^/resources/.*\\.({ext_pattern})([?#]|$)"
+    sql = (
+        f"UPDATE {metrics_db}.web "
+        f"SET dnload = IF("
+        f"content LIKE '/resources/%%/download/%%' OR "
+        f"content REGEXP %s, "
+        f"1, 0) "
+        f"WHERE datetime >= %s AND datetime < %s AND dnload IS NULL "
+        f"AND id >= %s AND id < %s;"
+    )
+
     for month in months:
         m = datetime.strptime(month + "-01", "%Y-%m-%d")
         next_m = (m.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -4360,27 +4383,36 @@ def do_backfill_dnload(start_month, dry_run=False, *, mark_dirty=False):
         label = f"  {month}"
         log.debug(f"backfill-dnload {month}")
 
-        # Same %->%% caveat as the months query above: LIKE pattern's '%'
-        # must be doubled when params=tuple is passed.
-        regex = f"^/resources/.*\\.({ext_pattern})([?#]|$)"
-        sql = (
-            f"UPDATE {metrics_db}.web "
-            f"SET dnload = IF("
-            f"content LIKE '/resources/%%/download/%%' OR "
-            f"content REGEXP %s, "
-            f"1, 0) "
-            f"WHERE datetime >= %s AND datetime < %s AND dnload IS NULL;"
-        )
-
         if dry_run:
             log.info(f"{label}  [dry-run]")
+            continue
+
+        # PK span of this month's still-NULL rows; step through it in
+        # CHUNK_ROWS-sized id windows so each UPDATE is a bounded
+        # transaction.  An id window bounds the row count from above even if
+        # ids are sparse (gaps from deletes).
+        bounds = mysql_query(
+            f"SELECT MIN(id), MAX(id) FROM {metrics_db}.web "
+            f"WHERE datetime >= %s AND datetime < %s AND dnload IS NULL;",
+            (m_start, m_end),
+        )
+        lo, hi = (bounds[0][0], bounds[0][1]) if bounds else (None, None)
+        if lo is None:
+            log.info(f"{label} (nothing to do)")
+            continue
+
+        rc = 0
+        cur_id = lo
+        while cur_id <= hi:
+            rc = mysql_exec(sql, (regex, m_start, m_end, cur_id, cur_id + CHUNK_ROWS))
+            if rc != 0:
+                break
+            cur_id += CHUNK_ROWS
+        if rc == 0:
+            log.info(f"{label} done")
         else:
-            rc = mysql_exec(sql, (regex, m_start, m_end))
-            if rc == 0:
-                log.info(f"{label} done")
-            else:
-                failures += 1
-                log.error(f"{label} FAILED (rc={rc}); continuing with next month")
+            failures += 1
+            log.error(f"{label} FAILED (rc={rc}); continuing with next month")
 
     # dnload is served by the composite web_dnload_dt (migration #43); the
     # legacy single-column `dnload` index (migration #1) was dropped as
