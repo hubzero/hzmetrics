@@ -1803,7 +1803,12 @@ for _idx_id, _idx_name in (
             f"composite or has cardinality 1; reclaims storage and "
             f"speeds INSERT"
         ),
-        sql=f"ALTER TABLE {{metrics_db}}.web DROP INDEX {_idx_name};",
+        # IF EXISTS: migration 41's InnoDB conversion re-adds only
+        # _WEB_SECONDARY_INDEXES, so on a legacy MyISAM web it already
+        # drops these redundant single-col indexes mid-run — a bare DROP
+        # here would then fail 1091.  Mirrors the ADD INDEX IF NOT EXISTS
+        # idempotency on migrations 42/43.
+        sql=f"ALTER TABLE {{metrics_db}}.web DROP INDEX IF EXISTS {_idx_name};",
         check_sql=(
             "SELECT COUNT(*) FROM information_schema.statistics "
             f"WHERE table_schema='{{metrics_db}}' AND table_name='web' "
