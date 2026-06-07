@@ -1997,9 +1997,13 @@ def _migrate_clear_orphan_stamps(metrics_db, dry_run=False):
     stamps (web/toolstart rows pointing at a deleted websessions).  Going
     forward, do_analyze's per-month reconciliation keeps them clean; this
     sweeps the history once.  Nulls only true orphans, so it's safe; no
-    re-summarize needed (summaries count distinct websessions, not stamps)."""
+    re-summarize needed (summaries count distinct websessions, not stamps).
+
+    Lower bound is '0000-00-00' deliberately: some toolstart rows carry a
+    zero datetime (unknown launch time), and a 2000-01-01 floor would skip
+    those orphans."""
     return 0 if _clear_orphan_session_stamps(
-        "2000-01-01", "2100-01-01", dry_run=dry_run) >= 0 else 1
+        "0000-00-00 00:00:00", "2100-01-01", dry_run=dry_run) >= 0 else 1
 
 MIGRATIONS.append(Migration(
     id=56,
