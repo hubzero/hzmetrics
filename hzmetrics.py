@@ -3848,6 +3848,14 @@ def _do_usage_metrics_stage(month_str, dry_run, *, sessions=True):
             do_fill_domain("metrics", "toolstart", month_str, dry_run=dry_run)
         with _timed_stage("  clean-bots web"):
             do_clean_bots("web",         month_str, dry_run=dry_run)
+        # webhits is written inline by import-apache BEFORE clean-bots
+        # ran, so it still counts the bot rows (and midnight-bleed dupes)
+        # that clean-bots just deleted from web.  Regenerate it from the
+        # now-cleaned web so SUM(hits) matches the kept-row count — the
+        # web↔webhits parity the audit enforces.  Cheap: one GROUP BY per
+        # month + a single misc-hits summary-cell refresh.
+        with _timed_stage("  rebuild-webhits"):
+            do_rebuild_webhits(month_str, dry_run=dry_run)
         with _timed_stage("  fill-user-info toolstart"):
             do_fill_user_info("metrics", "toolstart",   month_str, dry_run=dry_run)
         with _timed_stage("  fill-ipcountry web"):
