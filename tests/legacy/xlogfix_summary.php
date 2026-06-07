@@ -1264,9 +1264,14 @@ function misc_usage(&$db_hub, $dthis, $dstart, $dstop, $period) {
 
     # -------------------------- 
     # web server hits
+    # `datetime >=` (was `>`): webhits stores one row/day at midnight, so a
+    # strict `> dstart` against the inclusive first-of-month dstart dropped
+    # the window's first calendar day.  Corrected here to match hzmetrics.py;
+    # an intentional fix to the original bug, kept in sync so the A/B parity
+    # harness still validates the (now-correct) hits cell.
     $rowid = 8;
     $valfmt = 1;
-    $sql = 'SELECT SUM(hits) AS hits FROM '.$metrics_db.'.webhits WHERE datetime > '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
+    $sql = 'SELECT SUM(hits) AS hits FROM '.$metrics_db.'.webhits WHERE datetime >= '.dbquote($dstart).' AND datetime < '.dbquote($dstop);
     $hits = db_fetch($db_hub, $sql);
     delete_record($db_hub, $rowid, $colid, $dthis, $period, $table);
     insert_record($db_hub, $rowid, $colid, $dthis, $period, $hits, $valfmt, $table);

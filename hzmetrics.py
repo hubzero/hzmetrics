@@ -4611,8 +4611,12 @@ def _refresh_misc_hits_for_months(oldest_touched: str, dry_run: bool) -> None:
                 for period in periods:
                     dstart, dstop = period_dates(ym, period)
                     cur.execute(
+                        # `>=` matches the corrected boundary in
+                        # do_summarize_month's hits cell — include the
+                        # window's first day (webhits rows are at
+                        # midnight, so legacy `>` dropped day-1).
                         f"SELECT SUM(hits) FROM {metrics_db}.webhits "
-                        f"WHERE datetime > %s AND datetime < %s",
+                        f"WHERE datetime >= %s AND datetime < %s",
                         (dstart, dstop))
                     r = cur.fetchone()
                     # Same NULL→'' coercion as _summary_build_misc_main:
@@ -9526,8 +9530,15 @@ def _summary_misc_usage(cur, metrics_db, db_prefix,
     _summary_write_cell(cur, table, 7, colid, dthis, period, data, 6)
 
     one(8, 1,
+        # `>=` (not the legacy `>`): webhits stores one row per day at
+        # day-granularity midnight, so a strict `> dstart` drops the
+        # window's first calendar day entirely (period_dates returns an
+        # INCLUSIVE first-of-month dstart).  Legacy func_misc used `>`
+        # here and silently lost day-1 hits every period; we diverge to
+        # the correct half-open [dstart, dstop) interval.  This is an
+        # intentional A/B divergence for summary_misc_vals[rowid=8].
         f"SELECT SUM(hits) FROM {metrics_db}.webhits "
-        f"WHERE datetime > %s AND datetime < %s",
+        f"WHERE datetime >= %s AND datetime < %s",
         (dstart, dstop))
 
 

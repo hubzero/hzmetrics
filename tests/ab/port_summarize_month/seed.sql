@@ -159,6 +159,12 @@ INSERT INTO websessions (id, datetime, ip, host, duration, domain, jobs, webeven
 
 -- webhits across multiple days — misc_usage rowid=8 SUM
 INSERT INTO webhits (datetime, hits) VALUES
+  -- 1st-of-month row: period_dates returns an INCLUSIVE first-of-month
+  -- start, so rowid=8 must use `datetime >= dstart` to count this day in
+  -- period 1 (month) and period 3 (quarter).  Guards the >/>= hits-window
+  -- boundary fix — a regression to strict `>` drops this row, and the
+  -- period-1/3 hits cells diff against legacy + golden.
+  ('2025-07-01', 700),
   ('2025-07-10', 1000),
   ('2025-07-12', 1200),
   ('2025-07-15', 1500),
