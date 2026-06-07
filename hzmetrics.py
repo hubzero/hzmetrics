@@ -4024,52 +4024,48 @@ def _clear_orphan_session_stamps(start, end, *, dry_run=False):
 
     Only ever nulls a *true* orphan (the joined websessions is absent), so it
     can never disturb a valid stamp.  Scoped to [start, end) on the stamped
-    row's datetime; chunked on `web` (the large table)."""
+    row's datetime.
+
+    Locking: a bare `UPDATE … WHERE NOT EXISTS … LIMIT n` locks every row it
+    *scans*, not just the n it changes — on the full table that overflows the
+    InnoDB lock table (error 1206).  So, like clean-bots / fill-domain, we
+    SELECT orphan ids in bounded batches under a lock-free consistent read,
+    then `UPDATE … WHERE id IN (batch)`, which locks only the matched PKs."""
     _, _, _, metrics_db = db_credentials()
-    if dry_run:
-        for t in ("web", "toolstart"):
-            n = mysql_scalar(
-                f"SELECT COUNT(*) FROM {metrics_db}.{t} x "
-                f"WHERE x.datetime >= %s AND x.datetime < %s "
-                f"  AND x.sessionid IS NOT NULL AND x.sessionid <> '0' "
-                f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
-                f"                  WHERE s.id = x.sessionid)",
-                (start, end))
-            log.info(f"  [orphan-stamps] [dry-run] {t}: {n or 0} orphan stamp(s) "
-                     f"in [{start}, {end})")
-        return 0
     total = 0
     conn = _open_db()
     try:
-        with conn.cursor() as cur:
-            while True:  # web: chunked (LIMIT works on single-table UPDATE)
-                cur.execute(
-                    f"UPDATE {metrics_db}.web w SET w.sessionid = NULL "
-                    f"WHERE w.datetime >= %s AND w.datetime < %s "
-                    f"  AND w.sessionid IS NOT NULL AND w.sessionid <> '0' "
-                    f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
-                    f"                  WHERE s.id = w.sessionid) "
-                    f"LIMIT 50000;",
-                    (start, end))
-                n = cur.rowcount
-                conn.commit()
-                total += n
-                if n < 50000:
+        for tbl in ("web", "toolstart"):
+            sel = (f"SELECT x.id FROM {metrics_db}.{tbl} x "
+                   f"WHERE x.datetime >= %s AND x.datetime < %s "
+                   f"  AND x.sessionid IS NOT NULL AND x.sessionid <> '0' "
+                   f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
+                   f"                  WHERE s.id = x.sessionid) "
+                   f"LIMIT 10000")
+            tbl_total = 0
+            while True:
+                with conn.cursor() as cur:
+                    cur.execute(sel, (start, end))
+                    ids = [r[0] for r in cur.fetchall()]
+                if not ids:
                     break
-        with conn.cursor() as cur:  # toolstart: small, single statement
-            cur.execute(
-                f"UPDATE {metrics_db}.toolstart t SET t.sessionid = NULL "
-                f"WHERE t.datetime >= %s AND t.datetime < %s "
-                f"  AND t.sessionid IS NOT NULL AND t.sessionid <> '0' "
-                f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
-                f"                  WHERE s.id = t.sessionid);",
-                (start, end))
-            total += cur.rowcount
-            conn.commit()
+                if dry_run:
+                    log.info(f"  [orphan-stamps] [dry-run] {tbl}: "
+                             f"{len(ids)}{'+' if len(ids) == 10000 else ''} "
+                             f"orphan stamp(s) in [{start}, {end})")
+                    break  # dry-run doesn't null them, so don't loop forever
+                with conn.cursor() as cur:
+                    placeholders = ",".join(["%s"] * len(ids))
+                    cur.execute(
+                        f"UPDATE {metrics_db}.{tbl} SET sessionid = NULL "
+                        f"WHERE id IN ({placeholders})", ids)
+                    tbl_total += cur.rowcount
+                conn.commit()
+            if tbl_total and not dry_run:
+                log.info(f"  [orphan-stamps] {tbl}: cleared {tbl_total} dangling stamp(s)")
+            total += tbl_total
     finally:
         conn.close()
-    if total:
-        log.info(f"  [orphan-stamps] cleared {total} dangling stamp(s) in [{start}, {end})")
     return total
 
 
