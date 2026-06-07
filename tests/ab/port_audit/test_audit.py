@@ -124,9 +124,15 @@ class CmdAuditTest(unittest.TestCase):
             if "SELECT MIN(d) FROM" in sql:
                 # --all probe — return an old start
                 return [(dt(2014, 1, 1, 0, 0, 0),)]
-            # Check J ledger-integrity queries.
+            # Check J ledger-integrity queries.  The audit selects
+            # (pk_start, pk_end, row_count, origin).  Tests may pass
+            # 3-tuples (pre-origin shape) or 4-tuples; pad 3-tuples
+            # with origin='importer' so the span-test path still fires.
             if "imported_sources" in sql and "pk_start IS NOT NULL" in sql:
-                return list(ledger_entries.get(params[0] if params else None, []))
+                raw = list(ledger_entries.get(
+                    params[0] if params else None, []))
+                return [(t + ("importer",)) if len(t) == 3 else t
+                        for t in raw]
             if "MIN(id), MAX(id)" in sql:
                 if ".userlogin" in sql:
                     return [base_extent.get("userlogin", (None, None))]
@@ -405,6 +411,24 @@ class CmdAuditTest(unittest.TestCase):
         )
         rc = hzmetrics.cmd_audit(self._args(all=True))
         self.assertEqual(rc, 0)
+
+    def test_ledger_reconstruct_origin_skips_span_check(self):
+        # Reconstructed entries legitimately have span > row_count when
+        # clean-bots removed interior rows.  The span check must skip
+        # origin='reconstruct' — only flag importer-origin spans.  This
+        # entry has span 150 (101..250) vs row_count 100 — would fire
+        # for an importer row, must NOT fire for a reconstruct row.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"web": [(1, 100, 100, "importer"),
+                                    (101, 250, 100, "reconstruct")]},
+            base_extent={"web": (1, 250)},
+            uncovered_count=0,
+        )
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("span != row_count", self._emitted())
 
     # ------------------------------------------------------------------
     # CLI shape

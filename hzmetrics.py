@@ -1991,6 +1991,32 @@ MIGRATIONS.append(Migration(
     required=True,
 ))
 
+# imported_sources.origin distinguishes insert-based ledger rows (written
+# by the importer, where pk_end - pk_start + 1 == row_count) from
+# survivor-based ones (written by reconstruct-imported-sources, where
+# row_count is the surviving row count and span may be larger due to
+# clean-bots id gaps).  repair-imported-sources walks DESC from MAX(id)
+# subtracting row_count per entry — that assumption only holds for
+# insert-based rows, so repair MUST skip origin='reconstruct'.  Likewise
+# audit check J's span!=row_count test is only valid for insert-based
+# rows; reconstructed rows legitimately have span > row_count.
+MIGRATIONS.append(Migration(
+    id=57,
+    description=("Add imported_sources.origin column — distinguishes "
+                 "importer-written (insert-based) from reconstruct-written "
+                 "(survivor-based) ledger rows so repair / audit can skip "
+                 "the reconstruct rows that break their contiguity / "
+                 "span-equality assumptions"),
+    sql=("ALTER TABLE {metrics_db}.imported_sources "
+         "ADD COLUMN origin ENUM('importer','reconstruct') "
+         "NOT NULL DEFAULT 'importer';"),
+    check_sql=("SELECT COUNT(*) FROM information_schema.columns "
+               "WHERE table_schema='{metrics_db}' "
+               "AND table_name='imported_sources' "
+               "AND column_name='origin';"),
+    required=True,
+))
+
 
 def _migrate_clear_orphan_stamps(metrics_db, dry_run=False):
     """Migration #56: one-shot clear of pre-existing dangling sessionid
@@ -2584,6 +2610,7 @@ METRICS_DB_DDL = [
   `pk_end` bigint(20) DEFAULT NULL,
   `row_count` bigint(20) NOT NULL DEFAULT 0,
   `imported_at` datetime NOT NULL,
+  `origin` enum('importer','reconstruct') NOT NULL DEFAULT 'importer',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_filename_target` (`filename`,`target_table`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
@@ -3219,8 +3246,13 @@ def cmd_audit(args):
     # indexed range counts) and avoids false positives on burned ids.
     # ---------------------------------------------------------------
     for target in ("web", "userlogin"):
+        # origin is selected so the span!=row_count check can skip
+        # origin='reconstruct' rows (survivor-based, span >= row_count
+        # by design when interior rows were deleted by clean-bots).
+        # Overlap and coverage checks apply uniformly to both origins.
         ents = mysql_query(
-            f"SELECT pk_start, pk_end, row_count FROM {metrics_db}.imported_sources "
+            f"SELECT pk_start, pk_end, row_count, origin "
+            f"FROM {metrics_db}.imported_sources "
             f"WHERE target_table=%s AND pk_start IS NOT NULL "
             f"ORDER BY pk_start, pk_end", (target,))
         if not ents:
@@ -3228,9 +3260,9 @@ def cmd_audit(args):
         span_bad = overlap_bad = 0
         uncovered: list = []   # (lo, hi) id intervals covered by no range
         prev_end = None
-        for ps, pe, rc in ents:
+        for ps, pe, rc, origin in ents:
             ps, pe, rc = int(ps), int(pe), int(rc or 0)
-            if pe - ps + 1 != rc:
+            if origin == "importer" and pe - ps + 1 != rc:
                 span_bad += 1
             if prev_end is not None:
                 if ps <= prev_end:
@@ -10573,6 +10605,21 @@ def cmd_repair_imported_sources(args):
     clean contiguous block of AUTO_INCREMENT IDs assigned in INSERT
     order.
 
+    Walks only origin='importer' rows newer than the newest
+    origin='reconstruct' row.  reconstruct writes survivor-based rows
+    where row_count is the surviving count (less than the original
+    insert if clean-bots removed any), so subtracting row_count
+    per step would silently under-walk and corrupt every entry following
+    a reconstructed one in DESC order — observed on geodynamics
+    2026-06-07 where a single repair-after-reconstruct shifted 1063
+    ranges out of alignment.  And skipping the reconstructed rows
+    in the walk doesn't fix it either: the cursor would still be wrong
+    when we resumed at the next older importer row, since we don't know
+    how much pk space the skipped row actually occupied.  So the walk
+    halts the moment it crosses below the highest reconstructed row —
+    entries older than that are not safely repairable by this algorithm
+    (re-run reconstruct on them instead).
+
     Default is dry-run; pass --apply to write corrections back.
     """
     _, _, _, metrics_db = db_credentials()
@@ -10580,10 +10627,22 @@ def cmd_repair_imported_sources(args):
     #  derived_pk_start, derived_pk_end)
     plan: list[tuple] = []
     for target in ("web", "userlogin"):
+        # Reconstruct watermark: the highest pk_end among reconstructed
+        # rows for this target.  importer entries with pk_start at or
+        # below this are not safely repairable (their cursor would be
+        # in the reconstructed range whose row_counts we can't trust).
+        wm_row = mysql_query(
+            f"SELECT MAX(pk_end) FROM {metrics_db}.imported_sources "
+            f"WHERE target_table=%s AND origin='reconstruct' "
+            f"  AND pk_end IS NOT NULL",
+            (target,))
+        recon_watermark = (int(wm_row[0][0])
+                           if wm_row and wm_row[0][0] is not None else 0)
         rows = mysql_query(
             f"SELECT id, filename, pk_start, pk_end, row_count "
             f"FROM {metrics_db}.imported_sources "
             f"WHERE target_table = %s "
+            f"  AND origin = 'importer' "
             f"  AND pk_start IS NOT NULL AND pk_end IS NOT NULL "
             f"  AND row_count > 0 "
             f"ORDER BY id DESC",
@@ -10599,10 +10658,17 @@ def cmd_repair_imported_sources(args):
             continue
         cursor_id = int(max_row[0][0])
         diff = 0
-        for src_id, filename, rec_start, rec_end, row_count in rows:
+        halted = 0
+        for idx, (src_id, filename, rec_start, rec_end, row_count) in enumerate(rows):
             row_count = int(row_count)
             derived_end = cursor_id
             derived_start = derived_end - row_count + 1
+            if derived_start <= recon_watermark:
+                # Cursor has descended into the reconstructed-rows pk
+                # range — can't trust derived_start any further (a
+                # survivor-based row_count would under-walk).
+                halted = len(rows) - idx
+                break
             if derived_start <= 0:
                 log.error(f"[repair-imported-sources] {target}: "
                           f"backward walk produced non-positive "
@@ -10620,6 +10686,11 @@ def cmd_repair_imported_sources(args):
         if diff >= 0:
             log.info(f"[repair-imported-sources] {target}: {diff} "
                      f"row(s) need correction (of {len(rows)} scanned)")
+            if halted:
+                log.info(f"[repair-imported-sources] {target}: halted "
+                         f"walk at reconstruct watermark id={recon_watermark}; "
+                         f"{halted} older importer row(s) left untouched "
+                         f"(re-run reconstruct on them if needed)")
 
     if not plan:
         log.info("[repair-imported-sources] no corrections needed")
@@ -10675,62 +10746,92 @@ def _reconstruct_apache_key(line: str):
     return (f"{datestamp} {timestamp}", ip, url[:255])
 
 
-def do_reconstruct_imported_sources(*, since=None, validate=False,
-                                    apply=False) -> int:
-    """Backfill imported_sources for the apache→web stream by
-    content-matching each archived file in HTTPD_IMPORTED against `web`.
+def _reconstruct_cmsauth_key(line: str):
+    """(datetime, ip, user, action) for one cmsauth line, mirroring
+    do_import_auth's extraction but WITHOUT the action/user/ip filter
+    chain — lines that were filtered at import simply find no match in
+    `userlogin` and are silently dropped from the key set.  Kept
+    separate from the importer so reconstruction can't perturb the
+    hot path; see do_import_auth for the authoritative parse.  Returns
+    None for an unrecognized line."""
+    line = line.rstrip("\r\n")
+    m = _AUTH_PAT_NEW.match(line)
+    if m:
+        dt = f"{m.group(1)} {m.group(2)}"
+        # Same lstrip('[') / rstrip(']') charlist semantics as
+        # do_import_auth so the recovered user matches stored rows.
+        user = m.group(4).strip().lstrip('[').rstrip(']')
+        ip = m.group(5).strip()
+        action = m.group(6).strip()
+    else:
+        m = _AUTH_PAT_OLD.match(line)
+        if not m:
+            return None
+        dt = f"{m.group(1)} {m.group(2)}"
+        user = m.group(3).strip()
+        ip = m.group(4).strip()
+        action = m.group(5).strip()
+    if not user:
+        user = "-"
+    return (dt, ip, user, action)
 
-    For legacy hubs whose web data was imported before imported_sources
-    existed (pre-migration #44), web rows carry no source-file marker, so
-    the only way to recover provenance is to re-parse each archived file
-    and match its (datetime, ip, content) tuples back to web rows.  Each
-    import was a contiguous AUTO_INCREMENT block, so the matched ids'
-    min/max give the file's pk range.  Rows deleted after import
-    (clean-bots) are gone, so the recovered range covers SURVIVING rows —
-    narrower than the original insert where boundary rows were pruned.
 
-    SEMANTICS — survivor-based, NOT insert-based.  Unlike the importer
-    (whose row_count is rows INSERTED, recorded before clean-bots, so
-    SUM(row_count) == MAX(id)), reconstruction can only see rows that
-    still exist.  So pk_start/pk_end are the surviving min/max and
-    row_count is the surviving count; interior deletions show up as
-    id-gaps within the range (reported), and boundary deletions are
-    unrecoverable.  Two consequences: SUM(row_count) on a reconstructed
-    ledger reconciles to COUNT(web), not MAX(id); and `repair-imported-
-    sources` (which assumes insert-based counts + contiguity) must NOT be
-    run against reconstructed entries.
-    Validated at 100% precision/recall against delta's authoritative
-    ledger (which was written by the Python importer); a legacy
-    PHP-imported hub may match less than 100% if its stored content /
-    datetime normalization differs — the per-file match-rate surfaces
-    that directly.
+# Per-stream config for reconstruct.  Each stream maps source files
+# (HTTPD_IMPORTED/apache or HZ_IMPORTED/cmsauth) to ledger rows for the
+# corresponding target table (web or userlogin) via a line-key extractor
+# + a row-key builder used to match parsed-line keys against base-table
+# candidate rows in the [lo..hi] datetime window.
+_RECONSTRUCT_STREAMS = {
+    "web": {
+        "source_dir":    lambda: HTTPD_IMPORTED,
+        "pattern":       lambda: f"{SITE}-access*log*",
+        "label":         "apache",
+        "key_from_line": _reconstruct_apache_key,
+        "candidate_sql": ("SELECT id, datetime, ip, content FROM {metrics_db}.web "
+                          "WHERE datetime >= %s AND datetime <= %s"),
+        "key_from_row":  lambda row: (
+            row[1].strftime("%Y-%m-%d %H:%M:%S"), row[2], (row[3] or '')[:255]),
+    },
+    "userlogin": {
+        "source_dir":    lambda: HZ_IMPORTED,
+        "pattern":       lambda: "cmsauth*log*",
+        "label":         "cmsauth",
+        "key_from_line": _reconstruct_cmsauth_key,
+        "candidate_sql": ("SELECT id, datetime, ip, user, action "
+                          "FROM {metrics_db}.userlogin "
+                          "WHERE datetime >= %s AND datetime <= %s"),
+        "key_from_row":  lambda row: (
+            row[1].strftime("%Y-%m-%d %H:%M:%S"), row[2], row[3], row[4]),
+    },
+}
 
-    Modes:
-      validate=True : compare derived ranges to EXISTING ledger rows
-                      (cross-check on a hub that already has provenance);
-                      writes nothing.
-      apply=False   : dry-run — report derived ranges + anomalies for
-                      files NOT already tracked.
-      apply=True    : INSERT a ledger row for each untracked file.
-    """
-    _, _, _, metrics_db = db_credentials()
-    files = dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*")
+
+def _do_reconstruct_one_stream(metrics_db, target, *, since, validate, apply):
+    """One stream's pass.  Returns (rc, n_inserted)."""
+    spec = _RECONSTRUCT_STREAMS[target]
+    files = dated_files(spec["source_dir"](), spec["pattern"]())
     if since:
         since_tag = since.replace("-", "")[:6]  # YYYYMM
         files = [(tag, p) for tag, p in files if tag[:6] >= since_tag]
     if not files:
-        log.info(f"[reconstruct] no apache files in {HTTPD_IMPORTED}")
-        return 0
+        log.info(f"[reconstruct/{target}] no {spec['label']} files in "
+                 f"{spec['source_dir']()}")
+        return 0, 0
 
     existing = {}
     for fn, ps, pe, rc in mysql_query(
             f"SELECT filename, pk_start, pk_end, row_count "
-            f"FROM {metrics_db}.imported_sources WHERE target_table='web'"):
+            f"FROM {metrics_db}.imported_sources WHERE target_table=%s",
+            (target,)):
         existing[fn] = (ps, pe, rc)
 
-    log.info(f"[reconstruct] {len(files)} apache file(s) in scope; "
-             f"{len(existing)} already in ledger "
+    log.info(f"[reconstruct/{target}] {len(files)} {spec['label']} file(s) "
+             f"in scope; {len(existing)} already in ledger "
              f"({'validate' if validate else 'apply' if apply else 'dry-run'})")
+
+    candidate_sql = spec["candidate_sql"].format(metrics_db=metrics_db)
+    key_from_line = spec["key_from_line"]
+    key_from_row = spec["key_from_row"]
 
     considered = agree = disagree = inserted = 0
     anomalies: list[str] = []
@@ -10749,7 +10850,7 @@ def do_reconstruct_imported_sources(*, since=None, validate=False,
         lo = hi = None
         with _open_input(str(path)) as src:
             for ln in src:
-                k = _reconstruct_apache_key(ln)
+                k = key_from_line(ln)
                 if not k:
                     continue
                 keys.add(k)
@@ -10761,16 +10862,14 @@ def do_reconstruct_imported_sources(*, since=None, validate=False,
             anomalies.append(f"{fn}: no parseable lines")
             continue
 
-        cands = mysql_query(
-            f"SELECT id, datetime, ip, content FROM {metrics_db}.web "
-            f"WHERE datetime >= %s AND datetime <= %s", (lo, hi))
+        cands = mysql_query(candidate_sql, (lo, hi))
         matched = sorted(
-            int(i) for (i, dt, ip, content) in cands
-            if (dt.strftime("%Y-%m-%d %H:%M:%S"), ip, (content or '')[:255]) in keys)
+            int(row[0]) for row in cands if key_from_row(row) in keys)
         if not matched:
             # 0 matched is only an anomaly if the ledger expected rows.
             # A file that legitimately imported nothing (all lines
-            # filtered as bots/excluded — e.g. a crawl flood) has a
+            # filtered as bots/excluded — e.g. a crawl flood, or a
+            # cmsauth file of pure detect/invalid/logout actions) has a
             # NULL-range / row_count=0 ledger entry and agrees here.
             if validate:
                 ps, _pe, rc = existing[fn]
@@ -10786,7 +10885,10 @@ def do_reconstruct_imported_sources(*, since=None, validate=False,
                 to_insert.append((fn, None, None, 0))
             continue
         d_start, d_end, n = matched[0], matched[-1], len(matched)
-        gaps = (d_end - d_start + 1) - n  # missing ids inside the span
+        # For web: gaps come from clean-bots deletions.  For userlogin:
+        # gaps come from INSERT IGNORE burning auto-increment ids on
+        # duplicate rejections (and also from any deletions).
+        gaps = (d_end - d_start + 1) - n
         if prev_end is not None and d_start <= prev_end:
             anomalies.append(f"{fn}: pk range [{d_start}..{d_end}] OVERLAPS "
                              f"prior file (ended {prev_end}) — mis-attribution")
@@ -10806,41 +10908,107 @@ def do_reconstruct_imported_sources(*, since=None, validate=False,
                                  f"ledger [{ps}..{pe}]")
         else:
             log.info(f"  {fn}: pk_start={d_start} pk_end={d_end} "
-                     f"row_count={n}" + (f"  ({gaps} id-gaps from deletions)"
+                     f"row_count={n}" + (f"  ({gaps} id-gaps)"
                                          if gaps else ""))
             to_insert.append((fn, d_start, d_end, n))
 
     if validate:
-        log.info(f"[reconstruct] validate: {agree} agree, {disagree} disagree "
-                 f"(of {considered} tracked files checked)")
+        log.info(f"[reconstruct/{target}] validate: {agree} agree, "
+                 f"{disagree} disagree (of {considered} tracked files checked)")
     elif apply:
         for fn, ds, de, n in to_insert:
             # imported_at is NOT NULL; _record_imported_source sets it to
             # NOW() at import time.  For a reconstructed entry the true
             # import time is unknown (legacy), so NOW() records when the
-            # ledger row was reconstructed.
+            # ledger row was reconstructed.  origin='reconstruct' marks
+            # the row as survivor-based so repair-imported-sources skips
+            # it (subtracting row_count would under-walk).
             mysql_exec(
                 f"INSERT INTO {metrics_db}.imported_sources "
-                f"(filename, target_table, pk_start, pk_end, row_count, imported_at) "
-                f"VALUES (%s, 'web', %s, %s, %s, NOW())", (fn, ds, de, n))
+                f"(filename, target_table, pk_start, pk_end, row_count, "
+                f"imported_at, origin) "
+                f"VALUES (%s, %s, %s, %s, %s, NOW(), 'reconstruct')",
+                (fn, target, ds, de, n))
             inserted += 1
-        log.info(f"[reconstruct] inserted {inserted} ledger row(s)")
+        log.info(f"[reconstruct/{target}] inserted {inserted} ledger row(s)")
     else:
-        log.info(f"[reconstruct] dry-run: {len(to_insert)} untracked file(s) "
-                 f"would be added.  Pass --apply to write them.")
+        log.info(f"[reconstruct/{target}] dry-run: {len(to_insert)} "
+                 f"untracked file(s) would be added.  Pass --apply to "
+                 f"write them.")
 
     if anomalies:
-        log.warning(f"[reconstruct] {len(anomalies)} anomaly/anomalies:")
+        log.warning(f"[reconstruct/{target}] {len(anomalies)} "
+                    f"anomaly/anomalies:")
         for a in anomalies[:40]:
             log.warning(f"    {a}")
         if len(anomalies) > 40:
             log.warning(f"    (... and {len(anomalies) - 40} more)")
-    return 1 if anomalies else 0
+    return (1 if anomalies else 0), inserted
+
+
+def do_reconstruct_imported_sources(*, since=None, validate=False,
+                                    apply=False, target=None) -> int:
+    """Backfill imported_sources by content-matching archived source
+    files against the base tables they imported into.
+
+    For legacy hubs whose web / userlogin data was imported before
+    imported_sources existed (pre-migration #44), base-table rows carry
+    no source-file marker, so the only way to recover provenance is to
+    re-parse each archived file and match its content tuples back to
+    base-table rows.  Each import was a contiguous AUTO_INCREMENT block,
+    so the matched ids' min/max give the file's pk range.  Rows deleted
+    after import (clean-bots) or never inserted (userlogin's INSERT
+    IGNORE on duplicates) leave id-gaps inside the recovered range —
+    the survivor-based row_count is the actual count of stored rows.
+
+    Two streams:
+      web        : apache logs in HTTPD_IMPORTED → web rows by
+                   (datetime, ip, content[:255])
+      userlogin  : cmsauth logs in HZ_IMPORTED → userlogin rows by
+                   (datetime, ip, user, action)
+
+    SEMANTICS — survivor-based, NOT insert-based.  Unlike the importer
+    (whose row_count is rows INSERTED, recorded before clean-bots, so
+    SUM(row_count) == MAX(id)), reconstruction can only see rows that
+    still exist.  pk_start/pk_end are the surviving min/max and
+    row_count is the surviving count; interior deletions show up as
+    id-gaps within the range (reported), and boundary deletions are
+    unrecoverable.  Inserted rows are marked origin='reconstruct' so
+    repair-imported-sources (which assumes insert-based row_count +
+    contiguity) skips them — repair against reconstructed rows would
+    corrupt the ledger by under-walking each survivor-based row by its
+    deletion count.
+
+    Validated at 100% precision/recall against delta's authoritative
+    apache ledger (which was written by the Python importer); a legacy
+    PHP-imported hub may match less than 100% if its stored content /
+    datetime normalization differs — the per-file match-rate surfaces
+    that directly.
+
+    Modes:
+      validate=True : compare derived ranges to EXISTING ledger rows
+                      (cross-check on a hub that already has provenance);
+                      writes nothing.
+      apply=False   : dry-run — report derived ranges + anomalies for
+                      files NOT already tracked.
+      apply=True    : INSERT a ledger row for each untracked file.
+
+    target=None processes both streams; set 'web' or 'userlogin' to
+    limit to one stream (used by per-stream re-runs)."""
+    _, _, _, metrics_db = db_credentials()
+    targets = [target] if target else ["web", "userlogin"]
+    rc_total = 0
+    for t in targets:
+        rc, _n = _do_reconstruct_one_stream(
+            metrics_db, t, since=since, validate=validate, apply=apply)
+        rc_total |= rc
+    return rc_total
 
 
 def cmd_reconstruct_imported_sources(args):
     return do_reconstruct_imported_sources(
-        since=args.since, validate=args.validate, apply=args.apply)
+        since=args.since, validate=args.validate, apply=args.apply,
+        target=getattr(args, "target", None))
 
 
 # ---------------------------------------------------------------------------
@@ -10931,9 +11099,9 @@ def main() -> None:
         help="Write the corrected ranges (default: dry-run only)")
 
     p_recon = sub.add_parser("reconstruct-imported-sources",
-        help="Backfill imported_sources for legacy apache imports by "
-             "content-matching archived files against web (pk range from "
-             "matched ids)")
+        help="Backfill imported_sources for legacy apache→web and "
+             "cmsauth→userlogin imports by content-matching archived "
+             "files against the base tables (pk range from matched ids)")
     p_recon.set_defaults(func=cmd_reconstruct_imported_sources)
     p_recon.add_argument("--validate", action="store_true",
         help="Compare derived ranges to EXISTING ledger rows (cross-check; "
@@ -10942,6 +11110,8 @@ def main() -> None:
         help="INSERT ledger rows for untracked files (default: dry-run)")
     p_recon.add_argument("--since", metavar="YYYY-MM",
         help="Only consider files dated on/after this month")
+    p_recon.add_argument("--target", choices=("web", "userlogin"),
+        help="Limit to one stream (default: process both web and userlogin)")
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     p_process.set_defaults(func=cmd_process)
