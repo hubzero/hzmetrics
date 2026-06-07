@@ -2825,6 +2825,15 @@ _AUDIT_CHECKS = [
 
 _AUDIT_MIN_ROWS = 100  # months with fewer rows are too noisy to score
 
+# Check H: periods whose stored hits cell is reconciled against a freshly
+# computed SUM(webhits).  1 (month) and 3 (quarter) both start on a calendar
+# boundary, so they're the high-signal guards for the inclusive-start (`>=`)
+# window fix — a regression to strict `>` drops each window's first day.
+_AUDIT_HITS_PERIODS = (1, 3)
+# Check I: shortest run of consecutive missing source-file days worth a finding.
+# 1-day gaps are rotation noise; 2+ consecutive missing days is a real block.
+_AUDIT_IMPORT_GAP_MIN_DAYS = 2
+
 
 def cmd_audit(args):
     """Per-month enrichment + structural health audit.  Exits 0 if no
@@ -3067,6 +3076,108 @@ def cmd_audit(args):
         findings.append(("webhits", "(parity)", ym, web_rows,
                          (wh_sum or 0), None, None,
                          f"rebuild-webhits --month {ym}"))
+
+    # ---------------------------------------------------------------
+    # H. Hits summary-cell parity.  Check B above guards webhits vs web;
+    # this guards the SUMMARY CELL (summary_misc_vals rowid=8) vs the
+    # windowed SUM(webhits).  It is the only check that catches a
+    # regression of the inclusive-start window boundary: the cell must
+    # use `datetime >= dstart` (period_dates returns an INCLUSIVE
+    # first-of-month start, and webhits rows sit at day-granularity
+    # midnight), so a revert to strict `>` silently drops each window's
+    # first calendar day.  Reuses period_dates so the check and the
+    # summarize code share one window definition and can't drift apart.
+    # ---------------------------------------------------------------
+    def _norm_hits(x):
+        if x is None or x == '':
+            return ''
+        try:
+            return str(int(float(x)))
+        except (ValueError, TypeError):
+            return str(x)
+
+    hits_months = mysql_column(
+        f"SELECT DISTINCT DATE_FORMAT(datetime, '%%Y-%%m') FROM {metrics_db}.webhits "
+        f"WHERE datetime >= %s AND datetime < %s ORDER BY 1",
+        (start_iso, end_iso))
+    for ym in hits_months:
+        if not ym:
+            continue
+        for period in _AUDIT_HITS_PERIODS:
+            dstart, dstop = period_dates(ym, period)
+            expected = mysql_scalar(
+                f"SELECT SUM(hits) FROM {metrics_db}.webhits "
+                f"WHERE datetime >= %s AND datetime < %s",
+                (dstart, dstop))
+            stored = mysql_scalar(
+                f"SELECT value FROM {metrics_db}.summary_misc_vals "
+                f"WHERE rowid=8 AND colid=1 AND period=%s AND datetime=%s",
+                (period, f"{ym}-00"))
+            if _norm_hits(expected) != _norm_hits(stored):
+                log.warning(f"[audit] WARN  {ym}: hits cell drift "
+                            f"(period={period} stored={_norm_hits(stored) or '(empty)'} "
+                            f"expected={_norm_hits(expected) or '(empty)'})")
+                findings.append(("summary_misc_vals", "(hits_parity)", ym,
+                                 None, None, None, None,
+                                 f"rebuild-webhits --month {ym}"))
+                break  # one finding per month; rebuild-webhits fixes all periods
+
+    # ---------------------------------------------------------------
+    # I. Sub-month import-coverage gaps.  imported_sources has one row
+    # per imported source file; a run of consecutive calendar days with
+    # no file means logs were lost or never collected for those days.
+    # File-based, NOT row-based: idle / heavily-filtered months (few web
+    # rows but a full set of daily files) correctly do NOT fire.  Only
+    # the recorded coverage range is assessed, so history that predates
+    # imported_sources (pre-migration #44) isn't falsely flagged.  The
+    # filename date is the last 8-digit run (handles both the historical
+    # `<site>-access-YYYYMMDD.log.gz` and the current
+    # `<site>-access.log-YYYYMMDD` naming).
+    # ---------------------------------------------------------------
+    for target, label in (("web", "apache"), ("userlogin", "cmsauth")):
+        fnames = mysql_column(
+            f"SELECT filename FROM {metrics_db}.imported_sources "
+            f"WHERE target_table=%s", (target,))
+        cov_days = set()
+        for fn in fnames:
+            m = re.findall(r"\d{8}", fn or "")
+            if not m:
+                continue
+            s = m[-1]
+            try:
+                cov_days.add(date(int(s[:4]), int(s[4:6]), int(s[6:8])))
+            except ValueError:
+                continue
+        if len(cov_days) < 2:
+            continue
+        lo, hi = min(cov_days), max(cov_days)
+        yesterday = today - timedelta(days=1)
+        if hi > yesterday:
+            hi = yesterday
+        gaps = []
+        run_start = None
+        d = lo
+        while d <= hi:
+            if d not in cov_days:
+                if run_start is None:
+                    run_start = d
+            elif run_start is not None:
+                gaps.append((run_start, d - timedelta(days=1)))
+                run_start = None
+            d += timedelta(days=1)
+        if run_start is not None:
+            gaps.append((run_start, hi))
+        for g0, g1 in gaps:
+            n = (g1 - g0).days + 1
+            if n < _AUDIT_IMPORT_GAP_MIN_DAYS:
+                continue
+            log.warning(f"[audit] WARN  {label} import gap: "
+                        f"{g0.isoformat()}..{g1.isoformat()} "
+                        f"({n} day(s), no source file)")
+            findings.append((f"{target}_import", "(import_gap)",
+                             g0.strftime("%Y-%m"), None, None, None, None,
+                             f"(check daily/ + imported/ for {label} logs "
+                             f"{g0.isoformat()}..{g1.isoformat()})"))
 
     # ---------------------------------------------------------------
     # C. Summary freshness: most-recent datetime in each summary_*_vals
