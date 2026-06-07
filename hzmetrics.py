@@ -1992,6 +1992,30 @@ MIGRATIONS.append(Migration(
 ))
 
 
+def _migrate_clear_orphan_stamps(metrics_db, dry_run=False):
+    """Migration #56: one-shot clear of pre-existing dangling sessionid
+    stamps (web/toolstart rows pointing at a deleted websessions).  Going
+    forward, do_analyze's per-month reconciliation keeps them clean; this
+    sweeps the history once.  Nulls only true orphans, so it's safe; no
+    re-summarize needed (summaries count distinct websessions, not stamps)."""
+    return 0 if _clear_orphan_session_stamps(
+        "2000-01-01", "2100-01-01", dry_run=dry_run) >= 0 else 1
+
+MIGRATIONS.append(Migration(
+    id=56,
+    description=("Clear dangling web/toolstart.sessionid stamps that reference "
+                 "deleted websessions (referential cleanup; immaterial to "
+                 "summaries — counts distinct sessions, not stamps)"),
+    fn=_migrate_clear_orphan_stamps,
+    check_sql=("SELECT COUNT(*) FROM {metrics_db}.web w "
+               "WHERE w.sessionid IS NOT NULL AND w.sessionid <> '0' "
+               "AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
+               "                WHERE s.id = w.sessionid);"),
+    check_expect=0,
+    required=True,
+))
+
+
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
 # size free, the direct ALTER TABLE in migration #41 can overflow the
 # datadir transient (old MyISAM + new InnoDB live side-by-side during
@@ -3988,6 +4012,67 @@ def _do_tool_metrics_stage(month_str, dry_run):
             do_gen_tool_toplists(month_str, dry_run=dry_run)
 
 
+def _clear_orphan_session_stamps(start, end, *, dry_run=False):
+    """Null `web`/`toolstart`.sessionid stamps that reference a `websessions`
+    row which no longer exists.  Such orphans arise because `clean-bots`
+    (delete by domain) and `_reset_month_for_resummarize` (delete by datetime)
+    remove `websessions` rows by a predicate that doesn't always match the
+    exact set of member rows whose `sessionid` was cleared/re-stamped — so a
+    small residue of stamps can outlive their session.  Re-stamping
+    (logfix-session) only touches `sessionid IS NULL/0`, so the residue never
+    self-heals; this reconciliation does.
+
+    Only ever nulls a *true* orphan (the joined websessions is absent), so it
+    can never disturb a valid stamp.  Scoped to [start, end) on the stamped
+    row's datetime; chunked on `web` (the large table)."""
+    _, _, _, metrics_db = db_credentials()
+    if dry_run:
+        for t in ("web", "toolstart"):
+            n = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.{t} x "
+                f"WHERE x.datetime >= %s AND x.datetime < %s "
+                f"  AND x.sessionid IS NOT NULL AND x.sessionid <> '0' "
+                f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
+                f"                  WHERE s.id = x.sessionid)",
+                (start, end))
+            log.info(f"  [orphan-stamps] [dry-run] {t}: {n or 0} orphan stamp(s) "
+                     f"in [{start}, {end})")
+        return 0
+    total = 0
+    conn = _open_db()
+    try:
+        with conn.cursor() as cur:
+            while True:  # web: chunked (LIMIT works on single-table UPDATE)
+                cur.execute(
+                    f"UPDATE {metrics_db}.web w SET w.sessionid = NULL "
+                    f"WHERE w.datetime >= %s AND w.datetime < %s "
+                    f"  AND w.sessionid IS NOT NULL AND w.sessionid <> '0' "
+                    f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
+                    f"                  WHERE s.id = w.sessionid) "
+                    f"LIMIT 50000;",
+                    (start, end))
+                n = cur.rowcount
+                conn.commit()
+                total += n
+                if n < 50000:
+                    break
+        with conn.cursor() as cur:  # toolstart: small, single statement
+            cur.execute(
+                f"UPDATE {metrics_db}.toolstart t SET t.sessionid = NULL "
+                f"WHERE t.datetime >= %s AND t.datetime < %s "
+                f"  AND t.sessionid IS NOT NULL AND t.sessionid <> '0' "
+                f"  AND NOT EXISTS (SELECT 1 FROM {metrics_db}.websessions s "
+                f"                  WHERE s.id = t.sessionid);",
+                (start, end))
+            total += cur.rowcount
+            conn.commit()
+    finally:
+        conn.close()
+    if total:
+        log.info(f"  [orphan-stamps] cleared {total} dangling stamp(s) in [{start}, {end})")
+    return total
+
+
 def _do_usage_metrics_stage(month_str, dry_run, *, sessions=True):
     """Run the per-month web / toolstart / websessions enrichment chain
     in-process.  Direct port of __process_usage_metrics.sh.
@@ -4053,6 +4138,16 @@ def _do_usage_metrics_stage(month_str, dry_run, *, sessions=True):
                 do_logfix_session(month_str, dry_run=dry_run)
             with _timed_stage("  clean-bots websessions"):
                 do_clean_bots("websessions", month_str, dry_run=dry_run)
+            # Reconcile dangling stamps: clean-bots (and any prior reset) may
+            # have deleted websessions rows whose member web/toolstart rows
+            # weren't all cleared, leaving sessionid stamps pointing at a now-
+            # missing session.  Null them so the month is referentially clean.
+            with _timed_stage("  clear-orphan-stamps"):
+                _m = datetime.strptime(month_str + "-01", "%Y-%m-%d")
+                _end = (_m.replace(day=28) + timedelta(days=4)).replace(day=1)
+                _clear_orphan_session_stamps(
+                    _m.strftime("%Y-%m-%d"), _end.strftime("%Y-%m-%d"),
+                    dry_run=dry_run)
             # websessions carries its own host / domain / ipcountry columns.
             # logfix-session copies host/domain from the constituent web
             # rows at coalesce time, but a session built before its web
