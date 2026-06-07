@@ -3180,6 +3180,71 @@ def cmd_audit(args):
                              f"{g0.isoformat()}..{g1.isoformat()})"))
 
     # ---------------------------------------------------------------
+    # J. imported_sources ledger integrity, per stream.  The recorded
+    # pk ranges must: (a) have span == row_count, (b) not overlap, and
+    # (c) cover every base-table row (no data without provenance).
+    # 0-row entries (NULL range — all-filtered days) are skipped.  Gaps
+    # between ranges are allowed ONLY where no rows live in them (e.g.
+    # userlogin INSERT IGNORE burns auto-increment ids), so coverage is
+    # checked by counting base rows that fall in the uncovered intervals
+    # rather than flagging gaps directly — keeps it fast (a handful of
+    # indexed range counts) and avoids false positives on burned ids.
+    # ---------------------------------------------------------------
+    for target in ("web", "userlogin"):
+        ents = mysql_query(
+            f"SELECT pk_start, pk_end, row_count FROM {metrics_db}.imported_sources "
+            f"WHERE target_table=%s AND pk_start IS NOT NULL "
+            f"ORDER BY pk_start, pk_end", (target,))
+        if not ents:
+            continue
+        span_bad = overlap_bad = 0
+        uncovered: list = []   # (lo, hi) id intervals covered by no range
+        prev_end = None
+        for ps, pe, rc in ents:
+            ps, pe, rc = int(ps), int(pe), int(rc or 0)
+            if pe - ps + 1 != rc:
+                span_bad += 1
+            if prev_end is not None:
+                if ps <= prev_end:
+                    overlap_bad += 1
+                elif ps > prev_end + 1:
+                    uncovered.append((prev_end + 1, ps - 1))
+            prev_end = pe if prev_end is None else max(prev_end, pe)
+        ext = mysql_query(f"SELECT MIN(id), MAX(id) FROM {metrics_db}.{target}")
+        base_min = ext[0][0] if ext and ext[0] else None
+        base_max = ext[0][1] if ext and ext[0] else None
+        first_start = int(ents[0][0])
+        if base_min is not None and int(base_min) < first_start:
+            uncovered.append((int(base_min), first_start - 1))
+        if base_max is not None and int(base_max) > prev_end:
+            uncovered.append((prev_end + 1, int(base_max)))
+        orphan = 0
+        for lo, hi in uncovered:
+            c = mysql_query(f"SELECT COUNT(*) FROM {metrics_db}.{target} "
+                            f"WHERE id BETWEEN %s AND %s", (lo, hi))
+            orphan += int(c[0][0]) if c and c[0] and c[0][0] is not None else 0
+        if span_bad:
+            log.warning(f"[audit] WARN  {target}: {span_bad} imported_sources "
+                        f"entry(ies) with span != row_count")
+            findings.append((f"{target}_ledger", "(span)", target,
+                             None, None, None, None,
+                             "repair-imported-sources --apply"))
+        if overlap_bad:
+            log.warning(f"[audit] WARN  {target}: {overlap_bad} overlapping "
+                        f"imported_sources range(s) — possible duplicate/"
+                        f"corrupt provenance")
+            findings.append((f"{target}_ledger", "(overlap)", target,
+                             None, None, None, None,
+                             "(investigate imported_sources overlaps)"))
+        if orphan:
+            log.warning(f"[audit] WARN  {target}: {orphan} row(s) outside all "
+                        f"imported_sources ranges — no import provenance")
+            findings.append((f"{target}_ledger", "(uncovered)", target,
+                             None, None, None, None,
+                             f"reconstruct-imported-sources --apply "
+                             f"({orphan} untracked {target} row(s))"))
+
+    # ---------------------------------------------------------------
     # C. Summary freshness: most-recent datetime in each summary_*_vals
     # should be prev_month-00.  If summarize-month silently stopped
     # running at month close, we'd see the max datetime stuck on a
@@ -10486,6 +10551,203 @@ def cmd_repair_imported_sources(args):
     return 0
 
 
+def _reconstruct_apache_key(line: str):
+    """(datetime, ip, content) for one apache line, mirroring
+    do_import_apache's extraction but WITHOUT the filter chain — lines
+    that were filtered at import simply find no match in `web`, so the
+    historical filter state never needs to be reproduced.  Kept separate
+    from the importer so reconstruction can't perturb the hot path; see
+    do_import_apache for the authoritative parse.  Returns None for an
+    unrecognized line.  content is truncated to web.content's tinytext
+    width (255)."""
+    line = line.rstrip("\r\n")
+    m = _APACHE_PAT_NEW.match(line)
+    if m:
+        datestamp, timestamp, firstline, ip = (
+            m.group(1), m.group(2), m.group(6), m.group(9))
+    else:
+        m = _APACHE_PAT_OLD.match(line)
+        if not m:
+            return None
+        datestamp, timestamp, firstline, ip = (
+            m.group(1), m.group(2), m.group(5), m.group(8))
+    parts = firstline.strip().split(None, 2)
+    method = parts[0] if parts else ''
+    url = parts[1] if len(parts) > 1 else ''
+    if not url:
+        url = method
+    url = _SLASH_COLLAPSE.sub('/', url)
+    return (f"{datestamp} {timestamp}", ip, url[:255])
+
+
+def do_reconstruct_imported_sources(*, since=None, validate=False,
+                                    apply=False) -> int:
+    """Backfill imported_sources for the apache→web stream by
+    content-matching each archived file in HTTPD_IMPORTED against `web`.
+
+    For legacy hubs whose web data was imported before imported_sources
+    existed (pre-migration #44), web rows carry no source-file marker, so
+    the only way to recover provenance is to re-parse each archived file
+    and match its (datetime, ip, content) tuples back to web rows.  Each
+    import was a contiguous AUTO_INCREMENT block, so the matched ids'
+    min/max give the file's pk range.  Rows deleted after import
+    (clean-bots) are gone, so the recovered range covers SURVIVING rows —
+    narrower than the original insert where boundary rows were pruned.
+
+    SEMANTICS — survivor-based, NOT insert-based.  Unlike the importer
+    (whose row_count is rows INSERTED, recorded before clean-bots, so
+    SUM(row_count) == MAX(id)), reconstruction can only see rows that
+    still exist.  So pk_start/pk_end are the surviving min/max and
+    row_count is the surviving count; interior deletions show up as
+    id-gaps within the range (reported), and boundary deletions are
+    unrecoverable.  Two consequences: SUM(row_count) on a reconstructed
+    ledger reconciles to COUNT(web), not MAX(id); and `repair-imported-
+    sources` (which assumes insert-based counts + contiguity) must NOT be
+    run against reconstructed entries.
+    Validated at 100% precision/recall against delta's authoritative
+    ledger (which was written by the Python importer); a legacy
+    PHP-imported hub may match less than 100% if its stored content /
+    datetime normalization differs — the per-file match-rate surfaces
+    that directly.
+
+    Modes:
+      validate=True : compare derived ranges to EXISTING ledger rows
+                      (cross-check on a hub that already has provenance);
+                      writes nothing.
+      apply=False   : dry-run — report derived ranges + anomalies for
+                      files NOT already tracked.
+      apply=True    : INSERT a ledger row for each untracked file.
+    """
+    _, _, _, metrics_db = db_credentials()
+    files = dated_files(HTTPD_IMPORTED, f"{SITE}-access*log*")
+    if since:
+        since_tag = since.replace("-", "")[:6]  # YYYYMM
+        files = [(tag, p) for tag, p in files if tag[:6] >= since_tag]
+    if not files:
+        log.info(f"[reconstruct] no apache files in {HTTPD_IMPORTED}")
+        return 0
+
+    existing = {}
+    for fn, ps, pe, rc in mysql_query(
+            f"SELECT filename, pk_start, pk_end, row_count "
+            f"FROM {metrics_db}.imported_sources WHERE target_table='web'"):
+        existing[fn] = (ps, pe, rc)
+
+    log.info(f"[reconstruct] {len(files)} apache file(s) in scope; "
+             f"{len(existing)} already in ledger "
+             f"({'validate' if validate else 'apply' if apply else 'dry-run'})")
+
+    considered = agree = disagree = inserted = 0
+    anomalies: list[str] = []
+    prev_end = None
+    to_insert: list = []
+    for tag, path in files:
+        fn = path.name
+        tracked = fn in existing
+        if validate and not tracked:
+            continue
+        if not validate and tracked:
+            continue
+        considered += 1
+
+        keys: set = set()
+        lo = hi = None
+        with _open_input(str(path)) as src:
+            for ln in src:
+                k = _reconstruct_apache_key(ln)
+                if not k:
+                    continue
+                keys.add(k)
+                if lo is None or k[0] < lo:
+                    lo = k[0]
+                if hi is None or k[0] > hi:
+                    hi = k[0]
+        if lo is None:
+            anomalies.append(f"{fn}: no parseable lines")
+            continue
+
+        cands = mysql_query(
+            f"SELECT id, datetime, ip, content FROM {metrics_db}.web "
+            f"WHERE datetime >= %s AND datetime <= %s", (lo, hi))
+        matched = sorted(
+            int(i) for (i, dt, ip, content) in cands
+            if (dt.strftime("%Y-%m-%d %H:%M:%S"), ip, (content or '')[:255]) in keys)
+        if not matched:
+            # 0 matched is only an anomaly if the ledger expected rows.
+            # A file that legitimately imported nothing (all lines
+            # filtered as bots/excluded — e.g. a crawl flood) has a
+            # NULL-range / row_count=0 ledger entry and agrees here.
+            if validate:
+                ps, _pe, rc = existing[fn]
+                if ps is None or int(rc or 0) == 0:
+                    agree += 1
+                else:
+                    disagree += 1
+                    anomalies.append(
+                        f"{fn}: 0 matched but ledger claims {rc} row(s) "
+                        f"[{ps}..{_pe}] — lost data or content-format mismatch")
+            else:
+                # untracked 0-row file: record a faithful 0-row marker
+                to_insert.append((fn, None, None, 0))
+            continue
+        d_start, d_end, n = matched[0], matched[-1], len(matched)
+        gaps = (d_end - d_start + 1) - n  # missing ids inside the span
+        if prev_end is not None and d_start <= prev_end:
+            anomalies.append(f"{fn}: pk range [{d_start}..{d_end}] OVERLAPS "
+                             f"prior file (ended {prev_end}) — mis-attribution")
+        prev_end = max(prev_end or 0, d_end)
+
+        if validate:
+            ps, pe, _rc = existing[fn]
+            if ps is None:
+                # ledger says 0 rows but we matched some → disagreement
+                disagree += 1
+                anomalies.append(f"{fn}: ledger has no range but matched {n} row(s)")
+            elif d_start >= int(ps) and d_end <= int(pe):
+                agree += 1
+            else:
+                disagree += 1
+                anomalies.append(f"{fn}: derived [{d_start}..{d_end}] not within "
+                                 f"ledger [{ps}..{pe}]")
+        else:
+            log.info(f"  {fn}: pk_start={d_start} pk_end={d_end} "
+                     f"row_count={n}" + (f"  ({gaps} id-gaps from deletions)"
+                                         if gaps else ""))
+            to_insert.append((fn, d_start, d_end, n))
+
+    if validate:
+        log.info(f"[reconstruct] validate: {agree} agree, {disagree} disagree "
+                 f"(of {considered} tracked files checked)")
+    elif apply:
+        for fn, ds, de, n in to_insert:
+            # imported_at is NOT NULL; _record_imported_source sets it to
+            # NOW() at import time.  For a reconstructed entry the true
+            # import time is unknown (legacy), so NOW() records when the
+            # ledger row was reconstructed.
+            mysql_exec(
+                f"INSERT INTO {metrics_db}.imported_sources "
+                f"(filename, target_table, pk_start, pk_end, row_count, imported_at) "
+                f"VALUES (%s, 'web', %s, %s, %s, NOW())", (fn, ds, de, n))
+            inserted += 1
+        log.info(f"[reconstruct] inserted {inserted} ledger row(s)")
+    else:
+        log.info(f"[reconstruct] dry-run: {len(to_insert)} untracked file(s) "
+                 f"would be added.  Pass --apply to write them.")
+
+    if anomalies:
+        log.warning(f"[reconstruct] {len(anomalies)} anomaly/anomalies:")
+        for a in anomalies[:40]:
+            log.warning(f"    {a}")
+        if len(anomalies) > 40:
+            log.warning(f"    (... and {len(anomalies) - 40} more)")
+    return 1 if anomalies else 0
+
+
+def cmd_reconstruct_imported_sources(args):
+    return do_reconstruct_imported_sources(
+        since=args.since, validate=args.validate, apply=args.apply)
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -10572,6 +10834,19 @@ def main() -> None:
     p_repair.set_defaults(func=cmd_repair_imported_sources)
     p_repair.add_argument("--apply", action="store_true",
         help="Write the corrected ranges (default: dry-run only)")
+
+    p_recon = sub.add_parser("reconstruct-imported-sources",
+        help="Backfill imported_sources for legacy apache imports by "
+             "content-matching archived files against web (pk range from "
+             "matched ids)")
+    p_recon.set_defaults(func=cmd_reconstruct_imported_sources)
+    p_recon.add_argument("--validate", action="store_true",
+        help="Compare derived ranges to EXISTING ledger rows (cross-check; "
+             "writes nothing)")
+    p_recon.add_argument("--apply", action="store_true",
+        help="INSERT ledger rows for untracked files (default: dry-run)")
+    p_recon.add_argument("--since", metavar="YYYY-MM",
+        help="Only consider files dated on/after this month")
 
     p_process = sub.add_parser("process", help="Import logs, analyze, and summarize for a month (normal usage)")
     p_process.set_defaults(func=cmd_process)

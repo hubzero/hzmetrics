@@ -98,7 +98,8 @@ class CmdAuditTest(unittest.TestCase):
         return "\n".join(msg for _, msg in self._log_records)
 
     def _set_mock(self, data, *, webhits_months=None, hits_expected=None,
-                  stored_hits=None, import_files=None):
+                  stored_hits=None, import_files=None,
+                  ledger_entries=None, base_extent=None, uncovered_count=0):
         """data: dict mapping (table, column) → list of (ym, total, missing)
         tuples for the enrichment-coverage checks (via mysql_query).
 
@@ -116,11 +117,24 @@ class CmdAuditTest(unittest.TestCase):
         hits_expected = hits_expected or {}
         stored_hits = stored_hits or {}
         import_files = import_files or {}
+        ledger_entries = ledger_entries or {}
+        base_extent = base_extent or {}
 
         def mq(sql, params=None):
             if "SELECT MIN(d) FROM" in sql:
                 # --all probe — return an old start
                 return [(dt(2014, 1, 1, 0, 0, 0),)]
+            # Check J ledger-integrity queries.
+            if "imported_sources" in sql and "pk_start IS NOT NULL" in sql:
+                return list(ledger_entries.get(params[0] if params else None, []))
+            if "MIN(id), MAX(id)" in sql:
+                if ".userlogin" in sql:
+                    return [base_extent.get("userlogin", (None, None))]
+                if ".web" in sql:
+                    return [base_extent.get("web", (None, None))]
+                return [(None, None)]
+            if "id BETWEEN" in sql:
+                return [(uncovered_count,)]
             if "HAVING total" in sql:
                 # The audit per-check query.  Find which table + which
                 # missing-column predicate by scanning _AUDIT_CHECKS.
@@ -322,6 +336,73 @@ class CmdAuditTest(unittest.TestCase):
         files = [f"delta-access-202507{d:02d}.log.gz" for d in range(1, 13)]
         data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
         self._set_mock(data, import_files={"web": files})
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+
+    # ------------------------------------------------------------------
+    # Check J — imported_sources ledger integrity (coverage / overlaps /
+    # span==row_count).
+    # ------------------------------------------------------------------
+
+    def test_ledger_clean(self):
+        # Contiguous, span-consistent ranges covering the whole id extent.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"web": [(1, 100, 100), (101, 200, 100)]},
+            base_extent={"web": (1, 200)},
+        )
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+
+    def test_ledger_span_mismatch_flagged(self):
+        # Second entry's span (101..250 = 150) != row_count (100).
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"web": [(1, 100, 100), (101, 250, 100)]},
+            base_extent={"web": (1, 250)},
+        )
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("span != row_count", self._emitted())
+
+    def test_ledger_overlap_flagged(self):
+        # Second range starts at 50, inside the first (1..100).
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"web": [(1, 100, 100), (50, 150, 101)]},
+            base_extent={"web": (1, 150)},
+        )
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("overlapping", self._emitted())
+
+    def test_ledger_uncovered_rows_flagged(self):
+        # Ranges stop at 100 but the table extends to id 150, and 50 rows
+        # live in the uncovered tail → orphan/no-provenance finding.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"web": [(1, 100, 100)]},
+            base_extent={"web": (1, 150)},
+            uncovered_count=50,
+        )
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("no import provenance", self._emitted())
+
+    def test_ledger_burned_id_gaps_not_flagged(self):
+        # A gap between ranges that holds NO rows (e.g. INSERT IGNORE
+        # burned ids) must not fire — uncovered_count=0.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(
+            data,
+            ledger_entries={"userlogin": [(1, 100, 100), (103, 200, 98)]},
+            base_extent={"userlogin": (1, 200)},
+            uncovered_count=0,
+        )
         rc = hzmetrics.cmd_audit(self._args(all=True))
         self.assertEqual(rc, 0)
 
