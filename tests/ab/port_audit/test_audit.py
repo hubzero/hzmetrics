@@ -99,7 +99,8 @@ class CmdAuditTest(unittest.TestCase):
 
     def _set_mock(self, data, *, webhits_months=None, hits_expected=None,
                   stored_hits=None, import_files=None,
-                  ledger_entries=None, base_extent=None, uncovered_count=0):
+                  ledger_entries=None, base_extent=None, uncovered_count=0,
+                  reconstruct_drift=None, autoincr=None, pipeline_state=None):
         """data: dict mapping (table, column) → list of (ym, total, missing)
         tuples for the enrichment-coverage checks (via mysql_query).
 
@@ -119,11 +120,37 @@ class CmdAuditTest(unittest.TestCase):
         import_files = import_files or {}
         ledger_entries = ledger_entries or {}
         base_extent = base_extent or {}
+        reconstruct_drift = reconstruct_drift or {}
+        autoincr = autoincr or {}
+        pipeline_state = pipeline_state or {}
 
         def mq(sql, params=None):
             if "SELECT MIN(d) FROM" in sql:
                 # --all probe — return an old start
                 return [(dt(2014, 1, 1, 0, 0, 0),)]
+            # Check K reconstruct-drift query (correlated COUNT(*) per row).
+            if "HAVING actual_n" in sql:
+                target = params[0] if params else None
+                return list(reconstruct_drift.get(target, []))
+            # Check M auto_increment query.
+            if "information_schema.tables" in sql and "auto_increment" in sql:
+                tbl = params[1] if params and len(params) > 1 else None
+                ai = autoincr.get(tbl, (None, None))[0]
+                return [(ai,)] if ai is not None else []
+            if "SELECT MAX(id) FROM" in sql:
+                # Used by check M after reading auto_increment.  Match
+                # the trailing table name by endswith to avoid the
+                # ".web" substring matching ".websessions".  Sort by
+                # length DESC so longer names win the endswith race
+                # (defensive; endswith on the bare name is sufficient).
+                tail = sql.strip().rstrip(";")
+                for t in sorted(autoincr.keys(), key=len, reverse=True):
+                    if tail.endswith(f".{t}") or tail.endswith(f" {t}"):
+                        return [(autoincr[t][1],)]
+                return [(None,)]
+            # Check P pipeline_state shape query.
+            if "SELECT k, v FROM" in sql and "pipeline_state" in sql:
+                return list(pipeline_state.items())
             # Check J ledger-integrity queries.  The audit selects
             # (pk_start, pk_end, row_count, origin).  Tests may pass
             # 3-tuples (pre-origin shape) or 4-tuples; pad 3-tuples
@@ -411,6 +438,127 @@ class CmdAuditTest(unittest.TestCase):
         )
         rc = hzmetrics.cmd_audit(self._args(all=True))
         self.assertEqual(rc, 0)
+
+    # ------------------------------------------------------------------
+    # Check K — reconstruct-row pk-range drift
+    # ------------------------------------------------------------------
+
+    def test_reconstruct_drift_clean(self):
+        # No drift rows returned → no finding.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, reconstruct_drift={"web": [], "userlogin": []})
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("survivor invariant broken", self._emitted())
+
+    def test_reconstruct_drift_flagged(self):
+        # A drifted row (actual_n=900, row_count=1000) on web → finding.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, reconstruct_drift={
+            "web": [(42, "geodynamics-access.log-20240101.gz",
+                     1000, 1999, 1000, 900)],
+            "userlogin": [],
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("survivor invariant broken", self._emitted())
+        # Remediation cmd should reference --target web (the affected stream)
+        self.assertIn("--target web", self._emitted())
+
+    # ------------------------------------------------------------------
+    # Check M — AUTO_INCREMENT vs MAX(id) sanity
+    # ------------------------------------------------------------------
+
+    def test_autoincr_healthy(self):
+        # auto_increment > MAX(id) for every table → no finding.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, autoincr={
+            "web":              (100001, 100000),
+            "userlogin":        ( 50001,  50000),
+            "websessions":      ( 30001,  30000),
+            "imported_sources": (  1517,   1516),
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("PK-collide", self._emitted())
+
+    def test_autoincr_reseed_flagged(self):
+        # web's auto_increment was reseeded to 50 below MAX(id)=100 →
+        # next INSERT IGNORE would collide and silently drop.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, autoincr={
+            "web":              (50, 100),
+            "userlogin":        (51, 50),
+            "websessions":      (31, 30),
+            "imported_sources": (2, 1),
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("PK-collide", self._emitted())
+        self.assertIn("AUTO_INCREMENT=50", self._emitted())
+
+    # ------------------------------------------------------------------
+    # Check P — pipeline_state shape validation
+    # ------------------------------------------------------------------
+
+    def test_pipeline_state_clean(self):
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, pipeline_state={
+            "mode":             "normal",
+            "analyzed":         "2026-06-07",
+            "catchup_started":  "2022-01",
+            "rebuild_cursor":   "2026-06",
+            "rebuild_cascade_from": "",
+            "dirty_months":     "",
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+
+    def test_pipeline_state_bad_mode_flagged(self):
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, pipeline_state={
+            "mode":     "limbo",       # invalid
+            "analyzed": "2026-06-07",
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("mode='limbo'", self._emitted())
+
+    def test_pipeline_state_bad_cursor_format_flagged(self):
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, pipeline_state={
+            "mode":           "rebuild",
+            "rebuild_cursor": "Jun2026",  # not YYYY-MM
+            "analyzed":       "2026-06-07",
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("not YYYY-MM", self._emitted())
+
+    def test_pipeline_state_catchup_after_analyzed_flagged(self):
+        # catchup_started in the future relative to analyzed: orchestrator
+        # was asked to catchup a month it hasn't analyzed yet.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, pipeline_state={
+            "mode":            "normal",
+            "analyzed":        "2024-01-15",
+            "catchup_started": "2026-06",
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("catchup_started", self._emitted())
+        self.assertIn("orchestrator never ran", self._emitted())
+
+    def test_pipeline_state_bad_dirty_months_flagged(self):
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, pipeline_state={
+            "mode":         "normal",
+            "analyzed":     "2026-06-07",
+            "dirty_months": "2026-06,June2025",  # one bad entry
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("dirty_months contains", self._emitted())
 
     def test_ledger_reconstruct_origin_skips_span_check(self):
         # Reconstructed entries legitimately have span > row_count when

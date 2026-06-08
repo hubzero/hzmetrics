@@ -3305,6 +3305,115 @@ def cmd_audit(args):
                              f"({orphan} untracked {target} row(s))"))
 
     # ---------------------------------------------------------------
+    # K. Reconstruct-row pk-range drift.  Reconstruct writes survivor-
+    # based rows: at write time, COUNT(*) FROM {target} WHERE id BETWEEN
+    # pk_start AND pk_end == row_count by construction.  Any later drift
+    # (manual UPDATE, accidental repair-imported-sources against a
+    # reconstruct row — which we saw shift 1063 ranges out of alignment
+    # on geodynamics 2026-06-07 before the watermark-halt fix landed,
+    # or a post-reconstruct clean-bots run that deletes rows in the
+    # range) breaks the equality.  Importer-origin rows can legitimately
+    # have actual_count <= row_count (clean-bots deletes), so we only
+    # flag origin='reconstruct'.  One correlated query per target keeps
+    # it fast even at 1000+ ledger rows.
+    # ---------------------------------------------------------------
+    for target in ("web", "userlogin"):
+        drift = mysql_query(
+            f"SELECT i.id, i.filename, i.pk_start, i.pk_end, i.row_count, "
+            f"  (SELECT COUNT(*) FROM {metrics_db}.{target} t "
+            f"   WHERE t.id BETWEEN i.pk_start AND i.pk_end) AS actual_n "
+            f"FROM {metrics_db}.imported_sources i "
+            f"WHERE i.target_table=%s AND i.origin='reconstruct' "
+            f"  AND i.pk_start IS NOT NULL "
+            f"HAVING actual_n <> row_count", (target,))
+        if drift:
+            log.warning(f"[audit] WARN  {target}: {len(drift)} "
+                        f"origin='reconstruct' ledger row(s) where actual "
+                        f"row-count in pk_start..pk_end <> row_count "
+                        f"(survivor invariant broken — ledger was tampered "
+                        f"or rows were deleted after reconstruct)")
+            findings.append((f"{target}_ledger", "(reconstruct_drift)",
+                             target, None, None, None, None,
+                             f"reconstruct-imported-sources --apply --target "
+                             f"{target} (re-derive {len(drift)} drifted "
+                             f"reconstruct row(s); may need to DELETE them "
+                             f"first since reconstruct skips tracked files)"))
+
+    # ---------------------------------------------------------------
+    # M. AUTO_INCREMENT vs MAX(id) sanity.  If AUTO_INCREMENT has been
+    # reseeded below MAX(id) (an InnoDB recovery quirk, a clumsy ALTER,
+    # or a restore from a backup with the wrong counter), the next
+    # INSERT IGNORE on web / userlogin / imported_sources will
+    # PK-collide on an existing row, get silently dropped, and the
+    # import will report "0 inserted" with no clue why.  Cheap one-shot
+    # check; covers the tables the importer writes to.
+    # ---------------------------------------------------------------
+    for tbl in ("web", "userlogin", "websessions", "imported_sources"):
+        rows = mysql_query(
+            f"SELECT auto_increment FROM information_schema.tables "
+            f"WHERE table_schema=%s AND table_name=%s",
+            (metrics_db, tbl))
+        if not rows or rows[0][0] is None:
+            continue
+        ai = int(rows[0][0])
+        maxr = mysql_query(f"SELECT MAX(id) FROM {metrics_db}.{tbl}")
+        max_id = maxr[0][0] if maxr and maxr[0] else None
+        if max_id is None:
+            continue
+        max_id = int(max_id)
+        if ai <= max_id:
+            log.warning(f"[audit] WARN  {tbl}: AUTO_INCREMENT={ai} "
+                        f"<= MAX(id)={max_id} — next INSERT will PK-collide "
+                        f"and silently drop (under INSERT IGNORE)")
+            findings.append((f"{tbl}_autoincr", "(reseed)", tbl,
+                             None, None, None, None,
+                             f"ALTER TABLE {tbl} AUTO_INCREMENT={max_id + 1} "
+                             f"(run as root, with care)"))
+
+    # ---------------------------------------------------------------
+    # P. pipeline_state shape validation.  Catches operator typos in
+    # mark-dirty / direct UPDATEs to pipeline_state — invalid mode would
+    # wedge the orchestrator, malformed cursor / dirty_months would
+    # crash the next tick.  Format-level only; semantic checks (e.g.
+    # stuck dirty_months) live in E.
+    # ---------------------------------------------------------------
+    pstate = {k: v for k, v in mysql_query(
+        f"SELECT k, v FROM {metrics_db}.pipeline_state")}
+    pstate_bad: list[str] = []
+    _YYYYMM = re.compile(r"^\d{4}-\d{2}$")
+    _YYYYMMDD = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    mode = pstate.get("mode", "")
+    if mode and mode not in ("normal", "catchup", "rebuild"):
+        pstate_bad.append(f"mode='{mode}' not in {{normal,catchup,rebuild}}")
+    for key in ("rebuild_cursor", "catchup_started", "rebuild_cascade_from"):
+        v = pstate.get(key, "")
+        if v and not _YYYYMM.match(v):
+            pstate_bad.append(f"{key}='{v}' not YYYY-MM")
+    analyzed = pstate.get("analyzed", "")
+    if analyzed and not _YYYYMMDD.match(analyzed):
+        pstate_bad.append(f"analyzed='{analyzed}' not YYYY-MM-DD")
+    dm = pstate.get("dirty_months", "")
+    if dm:
+        for m in dm.split(","):
+            m = m.strip()
+            if m and not _YYYYMM.match(m):
+                pstate_bad.append(f"dirty_months contains '{m}' (not YYYY-MM)")
+                break
+    # Cross-field: catchup_started must precede analyzed (if both set).
+    cs = pstate.get("catchup_started", "")
+    if cs and _YYYYMM.match(cs) and analyzed and _YYYYMMDD.match(analyzed):
+        if cs > analyzed[:7]:
+            pstate_bad.append(f"catchup_started='{cs}' > analyzed='{analyzed[:7]}' "
+                              f"(orchestrator never ran the catchup it was asked for)")
+    for msg in pstate_bad:
+        log.warning(f"[audit] WARN  pipeline_state: {msg}")
+        findings.append(("pipeline_state", "(shape)", msg,
+                         None, None, None, None,
+                         f"(fix by direct UPDATE pipeline_state SET v=... "
+                         f"WHERE k=... — review the change against the "
+                         f"orchestrator's expectations)"))
+
+    # ---------------------------------------------------------------
     # C. Summary freshness: most-recent datetime in each summary_*_vals
     # should be prev_month-00.  If summarize-month silently stopped
     # running at month close, we'd see the max datetime stuck on a
