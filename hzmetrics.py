@@ -5548,26 +5548,47 @@ class _DnsResolver:
                 nameservers=[nameserver], timeout=timeout, loop=self._loop)
 
     async def _resolve_async(self, ips):
+        # Bounded worker-pool: exactly `concurrency` workers drain a queue
+        # of IPs, so the number of live coroutine frames AND in-flight
+        # c-ares queries is capped at `concurrency` — independent of batch
+        # size.  The previous form — gather(*(one(ip) for ip in ips)) gated
+        # by a Semaphore — scheduled one Task per IP up front: a 10K-IP
+        # batch materialised 10K coroutine frames at once, so peak async
+        # memory scaled with batch size, not concurrency.  On the 4.5 GB /
+        # no-swap host that (with concurrency 500) contributed to the
+        # resolve-dns OOM that killed MariaDB.  Results come back unordered;
+        # the caller pairs by IP (write-back is keyed on ip), so order is
+        # irrelevant.
         asyncio = self._asyncio
         aiodns = self._aiodns
-        sem = asyncio.Semaphore(self._concurrency)
-        async def one(ip):
-            async with sem:
+        queue = asyncio.Queue()
+        for ip in ips:
+            queue.put_nowait(ip)
+        results = []
+        async def worker():
+            while True:
+                try:
+                    ip = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
                 try:
                     # Hard asyncio-level backstop around aiodns's own
                     # timeout: c-ares occasionally never completes a query
-                    # (stuck UDP sockets that would hang gather forever on
-                    # a 2 M-IP batch).  wait_for fires even when the c-ares
-                    # timer doesn't, cancels the query, and lets gather
-                    # finish.  +1s lets aiodns's cleaner timeout win when it
-                    # works, falling back to the hard cancel otherwise.
+                    # (stuck UDP sockets that would hang a worker forever).
+                    # wait_for fires even when the c-ares timer doesn't,
+                    # cancels the query, and lets the worker move on.  +1s
+                    # lets aiodns's cleaner timeout win when it works.
                     r = await asyncio.wait_for(
                         self._resolver.gethostbyaddr(ip),
                         timeout=self._timeout + 1)
-                    return ip, (r.name if r and r.name else "?")
+                    results.append((ip, r.name if r and r.name else "?"))
                 except (aiodns.error.DNSError, asyncio.TimeoutError):
-                    return ip, "?"
-        return await asyncio.gather(*(one(ip) for ip in ips))
+                    results.append((ip, "?"))
+        # All IPs are enqueued before any worker starts, so a worker that
+        # finds the queue empty is done — no sentinels / join needed.
+        n_workers = min(self._concurrency, len(ips)) or 1
+        await asyncio.gather(*(worker() for _ in range(n_workers)))
+        return results
 
     def resolve(self, ips):
         """Resolve a batch of IPs to [(ip, host_or_'?'), ...]."""
