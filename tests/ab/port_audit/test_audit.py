@@ -128,10 +128,15 @@ class CmdAuditTest(unittest.TestCase):
             if "SELECT MIN(d) FROM" in sql:
                 # --all probe — return an old start
                 return [(dt(2014, 1, 1, 0, 0, 0),)]
-            # Check K reconstruct-drift query (correlated COUNT(*) per row).
-            if "HAVING actual_n" in sql:
+            # Check K reconstruct-drift: returns the list of ledger
+            # rows for this target.  The audit then issues a per-row
+            # COUNT(*) via mysql_scalar; we drive that count from the
+            # 6-tuple's last element (the expected actual_n).
+            if ("imported_sources" in sql and "origin='reconstruct'" in sql
+                    and "row_count" in sql and "filename" in sql):
                 target = params[0] if params else None
-                return list(reconstruct_drift.get(target, []))
+                # Return as 5-tuples (id, filename, pk_start, pk_end, row_count)
+                return [t[:5] for t in reconstruct_drift.get(target, [])]
             # Check M auto_increment query.
             if "information_schema.tables" in sql and "auto_increment" in sql:
                 tbl = params[1] if params and len(params) > 1 else None
@@ -199,6 +204,18 @@ class CmdAuditTest(unittest.TestCase):
                 if params:
                     return stored_hits.get((params[1][:7], params[0]))
                 return None
+            # Check K's per-row COUNT(*) WHERE id BETWEEN x AND y.
+            # Look up by (pk_start, pk_end) in the reconstruct_drift
+            # rows for any target.  The 6th tuple element is the
+            # mocked actual_n; if not provided, default to row_count
+            # (a no-drift row gets a healthy count back).
+            if ("COUNT(*) FROM" in sql and "id BETWEEN" in sql and params):
+                ps, pe = int(params[0]), int(params[1])
+                for tgt, rows in reconstruct_drift.items():
+                    for r in rows:
+                        if int(r[2]) == ps and int(r[3]) == pe:
+                            return int(r[5]) if len(r) > 5 else int(r[4])
+                return 0
             return None
 
         hzmetrics.mysql_query = mq

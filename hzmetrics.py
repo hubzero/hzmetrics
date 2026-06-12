@@ -3314,20 +3314,30 @@ def cmd_audit(args):
     # or a post-reconstruct clean-bots run that deletes rows in the
     # range) breaks the equality.  Importer-origin rows can legitimately
     # have actual_count <= row_count (clean-bots deletes), so we only
-    # flag origin='reconstruct'.  One correlated query per target keeps
-    # it fast even at 1000+ ledger rows.
+    # flag origin='reconstruct'.
+    #
+    # Per-row Python loop, NOT a correlated subquery.  MariaDB's planner
+    # degenerates the correlated form to O(rows × candidate_scan) — at
+    # ~1000 reconstruct rows × 10M-row table on geodynamics it ran for
+    # 49 minutes.  Each isolated COUNT(*) WHERE id BETWEEN x AND y is a
+    # bounded PK index range scan (~10-50ms), so 1000 of them complete
+    # in ~30 sec — three orders of magnitude faster.
     # ---------------------------------------------------------------
     for target in ("web", "userlogin"):
-        drift = mysql_query(
-            f"SELECT i.id, i.filename, i.pk_start, i.pk_end, i.row_count, "
-            f"  (SELECT COUNT(*) FROM {metrics_db}.{target} t "
-            f"   WHERE t.id BETWEEN i.pk_start AND i.pk_end) AS actual_n "
-            f"FROM {metrics_db}.imported_sources i "
-            f"WHERE i.target_table=%s AND i.origin='reconstruct' "
-            f"  AND i.pk_start IS NOT NULL "
-            f"HAVING actual_n <> row_count", (target,))
-        if drift:
-            log.warning(f"[audit] WARN  {target}: {len(drift)} "
+        rows = mysql_query(
+            f"SELECT id, filename, pk_start, pk_end, row_count "
+            f"FROM {metrics_db}.imported_sources "
+            f"WHERE target_table=%s AND origin='reconstruct' "
+            f"  AND pk_start IS NOT NULL", (target,))
+        drift_count = 0
+        for _id, _fn, ps, pe, rc in rows:
+            n = mysql_scalar(
+                f"SELECT COUNT(*) FROM {metrics_db}.{target} "
+                f"WHERE id BETWEEN %s AND %s", (int(ps), int(pe)))
+            if int(n or 0) != int(rc or 0):
+                drift_count += 1
+        if drift_count:
+            log.warning(f"[audit] WARN  {target}: {drift_count} "
                         f"origin='reconstruct' ledger row(s) where actual "
                         f"row-count in pk_start..pk_end <> row_count "
                         f"(survivor invariant broken — ledger was tampered "
@@ -3335,7 +3345,7 @@ def cmd_audit(args):
             findings.append((f"{target}_ledger", "(reconstruct_drift)",
                              target, None, None, None, None,
                              f"reconstruct-imported-sources --apply --target "
-                             f"{target} (re-derive {len(drift)} drifted "
+                             f"{target} (re-derive {drift_count} drifted "
                              f"reconstruct row(s); may need to DELETE them "
                              f"first since reconstruct skips tracked files)"))
 
