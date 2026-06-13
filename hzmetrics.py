@@ -7434,7 +7434,23 @@ def do_import_apache(input_file, *, batch_size=5000, dry_run=False, conn=None):
     return 0
 
 def cmd_import_apache(args):
-    return do_import_apache(args.input_file, dry_run=args.dry_run)
+    # Use the atomic per-file flow (stage → INSERT IGNORE imported_sources
+    # → conditional data INSERT → COMMIT → move to imported/) instead of
+    # raw do_import_apache, so the CLI matches the pipeline's
+    # crash-recoverable contract.  Without this, an operator running
+    # `hzmetrics.py import-apache <file>` directly would:
+    #   * not get a ledger row → audit treats the file as unimported,
+    #     restored-daily backfills disappear from the provenance trail,
+    #     a future ad-hoc re-import would double-insert into web;
+    #   * leave the source file untouched in its dir → no signal that
+    #     it's already been processed.
+    # The atomic helper handles both cleanly: if the ledger already has
+    # this filename it skips the data INSERT but still does the move,
+    # so re-running the CLI on a known-imported file is idempotent
+    # (and the safest way to clean up files left behind by the old
+    # behaviour — see the 2026-06-13 restored-daily backfill).
+    rc = _import_apache_file_atomic(Path(args.input_file), dry_run=args.dry_run)
+    return 0 if isinstance(rc, int) else rc
 
 
 # ---------------------------------------------------------------------------
