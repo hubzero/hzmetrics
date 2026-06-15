@@ -2885,9 +2885,11 @@ _AUDIT_MIN_ROWS = 100  # months with fewer rows are too noisy to score
 # boundary, so they're the high-signal guards for the inclusive-start (`>=`)
 # window fix — a regression to strict `>` drops each window's first day.
 _AUDIT_HITS_PERIODS = (1, 3)
-# Check I: shortest run of consecutive missing source-file days worth a finding.
-# 1-day gaps are rotation noise; 2+ consecutive missing days is a real block.
-_AUDIT_IMPORT_GAP_MIN_DAYS = 2
+# Check I: shortest run of consecutive missing source-file days worth a
+# finding.  Below the threshold is treated as noise — daily-file rotation
+# misses, occasional quiet days with no login activity, or short
+# maintenance windows.  A real lost-data block is days to weeks long.
+_AUDIT_IMPORT_GAP_MIN_DAYS = 7
 
 
 def cmd_audit(args):
@@ -3184,17 +3186,37 @@ def cmd_audit(args):
     # File-based, NOT row-based: idle / heavily-filtered months (few web
     # rows but a full set of daily files) correctly do NOT fire.  Only
     # the recorded coverage range is assessed, so history that predates
-    # imported_sources (pre-migration #44) isn't falsely flagged.  The
-    # filename date is the last 8-digit run (handles both the historical
-    # `<site>-access-YYYYMMDD.log.gz` and the current
-    # `<site>-access.log-YYYYMMDD` naming).
+    # imported_sources (pre-migration #44) isn't falsely flagged.
+    #
+    # Coverage comes from the data, not the filename: when a ledger
+    # entry's pk range covers multiple calendar days (mega-files from a
+    # rotation failure — e.g. cmsauth.log-20200811.gz spans 2019-12-09
+    # to 2020-08-11), every day in the data's MIN/MAX(DATE) span counts
+    # as covered.  Filename-date is the fallback only for entries that
+    # have no pk range (NULL/NULL) — typically unparseable legacy files
+    # the reconstruct couldn't bound.
     # ---------------------------------------------------------------
     for target, label in (("web", "apache"), ("userlogin", "cmsauth")):
-        fnames = mysql_column(
-            f"SELECT filename FROM {metrics_db}.imported_sources "
-            f"WHERE target_table=%s", (target,))
         cov_days = set()
-        for fn in fnames:
+        # Coverage source A: every distinct date that has at least one
+        # row in the target table.  Captures mega-files (one ledger
+        # entry spanning many days) and rows re-imported via the
+        # stdin / `forget-import + re-feed` paths that never created a
+        # ledger entry — the data is there, the day is covered.
+        for (d,) in mysql_query(
+                f"SELECT DISTINCT DATE(datetime) FROM {metrics_db}.{target} "
+                f"WHERE datetime > '0000-00-00'"):
+            if d is not None:
+                cov_days.add(d)
+        # Coverage source B: filename date from the ledger.  Covers the
+        # rare case where a daily file was imported and recorded but no
+        # rows survived the filters (all-bot day) — the file's date
+        # still counts as collected.  Filename date = last 8-digit run
+        # (handles both `<site>-access-YYYYMMDD.log.gz` and
+        # `<site>-access.log-YYYYMMDD` naming).
+        for (fn,) in mysql_query(
+                f"SELECT filename FROM {metrics_db}.imported_sources "
+                f"WHERE target_table=%s", (target,)):
             m = re.findall(r"\d{8}", fn or "")
             if not m:
                 continue
