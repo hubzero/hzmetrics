@@ -6181,11 +6181,25 @@ def cmd_import_hub_data(args):
 
 # Old format: 2007-05-17 11:06:39 username 128.210.189.195 login
 # New format: 2009-01-17 11:06:39 1234 [username] 128.210.189.195 login
+# Bracket format (~2014):
+#   [2014-05-01 09:58:35] production.INFO: 1002 [ehillery] 128.210.189.147 login [] []
+#   [2014-05-01 00:00:02] production.INFO: - 66.249.76.206 detect [] []
+# Timeless format (2021-05..2022-02): UID-or-dash, optional [user], IP, action,
+# but NO time component (logger bug during that window).
+#   2021-05-31 10703 [kong97] 128.210.107.84 login
+#   2021-05-31 - 207.46.13.130 detect
 _AUTH_PAT_NEW = re.compile(
     r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(\[.+\])\s+([\.\d]+)\s+(\w+)\s*$'
 )
 _AUTH_PAT_OLD = re.compile(
     r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+)\s+([\.\d]+)\s+(\w+)\s*$'
+)
+_AUTH_PAT_BRACKET = re.compile(
+    r'^\[(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\]\s+production\.INFO:\s+'
+    r'(\S+)(?:\s+(\[[^\]]*\]))?\s+([\.\d]+)\s+(\w+)(?:\s+\[\]\s+\[\])?\s*$'
+)
+_AUTH_PAT_TIMELESS = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})\s+(\S+)(?:\s+(\[[^\]]*\]))?\s+([\.\d]+)\s+(\w+)\s*$'
 )
 
 def _ip_excluded(ip, filters):
@@ -6270,15 +6284,41 @@ def do_import_auth(input_file, *, batch_size=5000, dry_run=False, conn=None):
                 ip = m.group(5).strip()
                 action = m.group(6).strip()
             else:
-                m = _AUTH_PAT_OLD.match(line)
-                if not m:
-                    unrec += 1
-                    continue
-                dt = f"{m.group(1)} {m.group(2)}"
-                uid = 0
-                user = m.group(3).strip()
-                ip = m.group(4).strip()
-                action = m.group(5).strip()
+                m = _AUTH_PAT_BRACKET.match(line)
+                if m:
+                    # Bracket format ~2014 — Laravel-era logger wrap.
+                    # UID is either `<digits>` (login/simulation) or `-`.
+                    dt = f"{m.group(1)} {m.group(2)}"
+                    uid_tok = m.group(3)
+                    uid = int(uid_tok) if uid_tok.isdigit() else 0
+                    user = (m.group(4) or "").strip().lstrip('[').rstrip(']')
+                    ip = m.group(5).strip()
+                    action = m.group(6).strip()
+                else:
+                    m = _AUTH_PAT_TIMELESS.match(line)
+                    if m:
+                        # Timeless format (2021-05..2022-02) — the cmsauth
+                        # logger dropped the time component during a
+                        # 10-month window.  Synthesize 00:00:00 so
+                        # downstream stays uniform; loses intra-day
+                        # ordering but preserves the day, which is all
+                        # the audit / summary code reads.
+                        dt = f"{m.group(1)} 00:00:00"
+                        uid_tok = m.group(2)
+                        uid = int(uid_tok) if uid_tok.isdigit() else 0
+                        user = (m.group(3) or "").strip().lstrip('[').rstrip(']')
+                        ip = m.group(4).strip()
+                        action = m.group(5).strip()
+                    else:
+                        m = _AUTH_PAT_OLD.match(line)
+                        if not m:
+                            unrec += 1
+                            continue
+                        dt = f"{m.group(1)} {m.group(2)}"
+                        uid = 0
+                        user = m.group(3).strip()
+                        ip = m.group(4).strip()
+                        action = m.group(5).strip()
             months_seen.add(dt[:7])
             if not user:
                 user = "-"
@@ -10942,13 +10982,30 @@ def _reconstruct_cmsauth_key(line: str):
         ip = m.group(5).strip()
         action = m.group(6).strip()
     else:
-        m = _AUTH_PAT_OLD.match(line)
-        if not m:
-            return None
-        dt = f"{m.group(1)} {m.group(2)}"
-        user = m.group(3).strip()
-        ip = m.group(4).strip()
-        action = m.group(5).strip()
+        m = _AUTH_PAT_BRACKET.match(line)
+        if m:
+            dt = f"{m.group(1)} {m.group(2)}"
+            user = (m.group(4) or "").strip().lstrip('[').rstrip(']')
+            ip = m.group(5).strip()
+            action = m.group(6).strip()
+        else:
+            m = _AUTH_PAT_TIMELESS.match(line)
+            if m:
+                # Synthesize 00:00:00 — matches do_import_auth so
+                # reconstructed keys collide with stored rows from
+                # the same line.
+                dt = f"{m.group(1)} 00:00:00"
+                user = (m.group(3) or "").strip().lstrip('[').rstrip(']')
+                ip = m.group(4).strip()
+                action = m.group(5).strip()
+            else:
+                m = _AUTH_PAT_OLD.match(line)
+                if not m:
+                    return None
+                dt = f"{m.group(1)} {m.group(2)}"
+                user = m.group(3).strip()
+                ip = m.group(4).strip()
+                action = m.group(5).strip()
     if not user:
         user = "-"
     return (dt, ip, user, action)
