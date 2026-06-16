@@ -5427,13 +5427,68 @@ def cmd_tick(args):
     # before whoisonline consumes any time.
     at_metrics_tick = (datetime.now().minute == 30)
 
-    # Always update the who-is-online map — fast, no lock needed.
-    do_whoisonline(dry_run=args.dry_run)
+    # whoisonline is USUALLY fast (single-digit seconds) but a reverse-
+    # DNS backlog can stretch it past the 5-minute tick interval —
+    # observed on geodynamics 2026-06-16 where a 9-hour cron outage
+    # built up a 3000+ unresolved-IP backlog, the first post-fix tick
+    # ran for 17 minutes, and seven more ticks stacked on top of it
+    # racing for the same XML file.  Wrap it in a non-blocking flock
+    # so subsequent overlapping ticks fast-exit until the in-flight
+    # run finishes.  Separate file from the cmd_run lock because the
+    # two are meant to be independently held (cmd_run holds the main
+    # lock for ~minutes at :30 past each hour; we don't want that to
+    # also block the every-5-minute whoisonline tick).
+    if _try_whoisonline_lock():
+        try:
+            do_whoisonline(dry_run=args.dry_run)
+        finally:
+            _release_whoisonline_lock()
+    else:
+        log.info("[tick] whoisonline still running from a prior tick — "
+                 "skipping this round")
 
     # At :30 past each hour, attempt a full metrics run.
     # cmd_run acquires its own lock, so concurrent ticks fast-exit there.
     if at_metrics_tick:
         cmd_run(args)
+
+
+# Whoisonline gets its own flock — independent of the main cmd_run
+# lock — so a long-running whoisonline tick doesn't block the metrics
+# pipeline (and vice-versa).  Same fast-exit-on-contention semantics
+# as acquire_lock(); no PID file because nothing inspects it.
+_whoisonline_lock_fd: int | None = None
+
+def _try_whoisonline_lock() -> bool:
+    global _whoisonline_lock_fd
+    import fcntl
+    try:
+        LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # Same diagnostic as acquire_lock — operator runs this once.
+        log.error(f"cannot create {LOCK_FILE.parent} — permission denied.")
+        return False
+    path = LOCK_FILE.parent / "hzmetrics.whoisonline.lock"
+    fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return False
+    _whoisonline_lock_fd = fd
+    return True
+
+def _release_whoisonline_lock() -> None:
+    global _whoisonline_lock_fd
+    if _whoisonline_lock_fd is None:
+        return
+    import fcntl
+    try:
+        fcntl.flock(_whoisonline_lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    os.close(_whoisonline_lock_fd)
+    _whoisonline_lock_fd = None
 
 
 # ---------------------------------------------------------------------------
