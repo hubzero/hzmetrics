@@ -98,19 +98,42 @@ def _relaunch_if_needed():
 
     # Try highest version first.
     cands.sort(reverse=True)
-    for _, exe in cands:
-        # Confirm reality (name → version mismatch can happen with aliases).
+    # Also check that the candidate can import the critical 3rd-party
+    # dep (pymysql).  RHEL 8.10 ships python3.11 + python3.12 in /usr/bin
+    # but `python3.11-PyMySQL` is the only RPM-available variant — picking
+    # the highest version without verifying the import would silently exec
+    # into a Python that can't talk to MariaDB.  Observed on geodynamics
+    # 2026-06-16: cron tick under 3.12 hit `ModuleNotFoundError: pymysql`
+    # 9 hours before anyone noticed (MAILTO="" swallows the traceback).
+    skipped: list[tuple] = []
+    for v, exe in cands:
         check = subprocess.run(
-            [exe, "-c", f"import sys; raise SystemExit(sys.version_info < {_MIN_PYTHON})"]
+            [exe, "-c",
+             f"import sys; sys.exit(1 if sys.version_info < {_MIN_PYTHON} "
+             f"else 0); import pymysql"]
         )
-        if check.returncode == 0:
-            os.execv(exe, [exe, *sys.argv])
+        if check.returncode != 0:
+            skipped.append((v, exe, "version too old"))
+            continue
+        # Separate check for pymysql so the version-fail and dep-fail
+        # paths are distinguishable in the diagnostic.
+        dep = subprocess.run(
+            [exe, "-c", "import pymysql"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if dep.returncode != 0:
+            skipped.append((v, exe, "pymysql not importable"))
+            continue
+        os.execv(exe, [exe, *sys.argv])
 
     versions = ", ".join(f"{mj}.{mi}" for (mj, mi), _ in cands) or "none"
+    skip_detail = ("; skipped: " + ", ".join(
+        f"{mj}.{mi} ({reason})" for (mj, mi), _exe, reason in skipped)
+    ) if skipped else ""
     raise SystemExit(
-        f"hzmetrics.py requires Python {_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+; "
-        f"running {sys.version.split()[0]}.  "
-        f"Newer python3.X on PATH: {versions}."
+        f"hzmetrics.py requires Python {_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+ "
+        f"with pymysql; running {sys.version.split()[0]}.  "
+        f"Newer python3.X on PATH: {versions}{skip_detail}."
     )
 
 if __name__ == "__main__":
