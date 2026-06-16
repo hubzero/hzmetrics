@@ -3329,14 +3329,16 @@ def cmd_audit(args):
     # ---------------------------------------------------------------
     # K. Reconstruct-row pk-range drift.  Reconstruct writes survivor-
     # based rows: at write time, COUNT(*) FROM {target} WHERE id BETWEEN
-    # pk_start AND pk_end == row_count by construction.  Any later drift
-    # (manual UPDATE, accidental repair-imported-sources against a
-    # reconstruct row — which we saw shift 1063 ranges out of alignment
-    # on geodynamics 2026-06-07 before the watermark-halt fix landed,
-    # or a post-reconstruct clean-bots run that deletes rows in the
-    # range) breaks the equality.  Importer-origin rows can legitimately
-    # have actual_count <= row_count (clean-bots deletes), so we only
-    # flag origin='reconstruct'.
+    # pk_start AND pk_end == row_count by construction.  Subsequent
+    # clean-bots runs (web only) legitimately delete rows inside the
+    # range — that's expected churn, not tampering.  So we flag only
+    # actual > row_count, which can't happen from deletes and indicates
+    # a real problem: pollution from an adjacent file's range, a manual
+    # UPDATE shifting bounds outward, or the kind of accidental
+    # repair-imported-sources widening that shifted 1063 geodynamics
+    # ranges on 2026-06-07 before the watermark-halt fix landed.
+    # userlogin has no clean-bots, so the strict equality still applies
+    # there.
     #
     # Per-row Python loop, NOT a correlated subquery.  MariaDB's planner
     # degenerates the correlated form to O(rows × candidate_scan) — at
@@ -3356,14 +3358,20 @@ def cmd_audit(args):
             n = mysql_scalar(
                 f"SELECT COUNT(*) FROM {metrics_db}.{target} "
                 f"WHERE id BETWEEN %s AND %s", (int(ps), int(pe)))
-            if int(n or 0) != int(rc or 0):
-                drift_count += 1
+            n_i, rc_i = int(n or 0), int(rc or 0)
+            if target == "web":
+                # clean-bots may have shrunk the row count; only flag overage
+                if n_i > rc_i:
+                    drift_count += 1
+            else:
+                if n_i != rc_i:
+                    drift_count += 1
         if drift_count:
+            direction = "> row_count (extra rows in range — pollution or widened bounds)" \
+                if target == "web" else "<> row_count (survivor invariant broken — ledger tampered or rows deleted outside clean-bots)"
             log.warning(f"[audit] WARN  {target}: {drift_count} "
                         f"origin='reconstruct' ledger row(s) where actual "
-                        f"row-count in pk_start..pk_end <> row_count "
-                        f"(survivor invariant broken — ledger was tampered "
-                        f"or rows were deleted after reconstruct)")
+                        f"row-count in pk_start..pk_end {direction}")
             findings.append((f"{target}_ledger", "(reconstruct_drift)",
                              target, None, None, None, None,
                              f"reconstruct-imported-sources --apply --target "
