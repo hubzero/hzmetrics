@@ -57,8 +57,26 @@ import sys
 
 _MIN_PYTHON = (3, 10)
 
+# Third-party modules every code path eventually needs.  Probed in
+# candidate interpreters during _relaunch_if_needed so a freshly-installed
+# python3.X without our deps gets skipped instead of crashing later.
+_REQUIRED_MODULES = ("pymysql", "aiodns")
+
+def _has_prereqs():
+    for mod in _REQUIRED_MODULES:
+        try:
+            __import__(mod)
+        except ImportError:
+            return False
+    return True
+
 def _relaunch_if_needed():
-    if sys.version_info >= _MIN_PYTHON:
+    # Current interpreter is acceptable only if it meets the version floor
+    # AND has our third-party deps.  A newer python3.X installed by the OS
+    # without our deps (e.g. dnf brings in python3.12 but pymysql isn't
+    # there yet) must NOT be used silently — that's how reboots used to
+    # break the pipeline.
+    if sys.version_info >= _MIN_PYTHON and _has_prereqs():
         return
 
     # Scan PATH for every `python3.N` interpreter (auto-discovers future
@@ -96,33 +114,37 @@ def _relaunch_if_needed():
             seen.add(real)
             cands.append(((3, minor), str(entry)))
 
-    # Try highest version first.
-    cands.sort(reverse=True)
-    # Also check that the candidate can import the critical 3rd-party
-    # dep (pymysql).  RHEL 8.10 ships python3.11 + python3.12 in /usr/bin
-    # but `python3.11-PyMySQL` is the only RPM-available variant — picking
-    # the highest version without verifying the import would silently exec
-    # into a Python that can't talk to MariaDB.  Observed on geodynamics
-    # 2026-06-16: cron tick under 3.12 hit `ModuleNotFoundError: pymysql`
-    # 9 hours before anyone noticed (MAILTO="" swallows the traceback).
-    skipped: list[tuple] = []
+    # Try LOWEST eligible version first.  Older interpreters have been on
+    # the box longer and are far more likely to have our deps installed;
+    # only escalate to a newer line (3.12, 3.13, …) when the older ones
+    # are missing prerequisites.  Without this, a fresh dnf bringing in
+    # python3.12 (no deps yet) would silently break the pipeline at the
+    # next tick — observed on geodynamics 2026-06-16: cron tick under 3.12
+    # hit `ModuleNotFoundError: pymysql` 9 hours before anyone noticed
+    # (MAILTO="" swallows the traceback).
+    cands.sort()
+    skipped: list[tuple] = []  # (version, exe, reason)
     for v, exe in cands:
+        # Step 1: version floor.  Cheap, separates "interpreter too old"
+        # from "interpreter fine but missing deps" in the diagnostic.
         check = subprocess.run(
-            [exe, "-c",
-             f"import sys; sys.exit(1 if sys.version_info < {_MIN_PYTHON} "
-             f"else 0); import pymysql"]
+            [exe, "-c", f"import sys; sys.exit(1 if sys.version_info < {_MIN_PYTHON} else 0)"]
         )
         if check.returncode != 0:
             skipped.append((v, exe, "version too old"))
             continue
-        # Separate check for pymysql so the version-fail and dep-fail
-        # paths are distinguishable in the diagnostic.
-        dep = subprocess.run(
-            [exe, "-c", "import pymysql"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if dep.returncode != 0:
-            skipped.append((v, exe, "pymysql not importable"))
+        # Step 2: each prereq probed individually so the failure message
+        # names the missing module instead of just saying "deps".
+        missing = []
+        for mod in _REQUIRED_MODULES:
+            dep = subprocess.run(
+                [exe, "-c", f"import {mod}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if dep.returncode != 0:
+                missing.append(mod)
+        if missing:
+            skipped.append((v, exe, f"missing: {', '.join(missing)}"))
             continue
         os.execv(exe, [exe, *sys.argv])
 
@@ -130,9 +152,10 @@ def _relaunch_if_needed():
     skip_detail = ("; skipped: " + ", ".join(
         f"{mj}.{mi} ({reason})" for (mj, mi), _exe, reason in skipped)
     ) if skipped else ""
+    required_str = ", ".join(_REQUIRED_MODULES)
     raise SystemExit(
         f"hzmetrics.py requires Python {_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+ "
-        f"with pymysql; running {sys.version.split()[0]}.  "
+        f"with ({required_str}); running {sys.version.split()[0]}.  "
         f"Newer python3.X on PATH: {versions}{skip_detail}."
     )
 
