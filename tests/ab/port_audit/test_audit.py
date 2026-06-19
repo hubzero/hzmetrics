@@ -137,6 +137,15 @@ class CmdAuditTest(unittest.TestCase):
                 target = params[0] if params else None
                 # Return as 5-tuples (id, filename, pk_start, pk_end, row_count)
                 return [t[:5] for t in reconstruct_drift.get(target, [])]
+            # Check I coverage source B: bare filename list from the
+            # ledger (NO origin / pk_start clause).  Drives import-gap
+            # detection from the import_files kwarg.  (Coverage source A —
+            # SELECT DISTINCT DATE(datetime) — falls through to [] so the
+            # gap comes purely from the supplied filenames.)
+            if ("SELECT filename FROM" in sql and "imported_sources" in sql
+                    and "origin" not in sql):
+                target = params[0] if params else None
+                return [(fn,) for fn in import_files.get(target, [])]
             # Check M auto_increment query.
             if "information_schema.tables" in sql and "auto_increment" in sql:
                 tbl = params[1] if params and len(params) > 1 else None
@@ -369,16 +378,17 @@ class CmdAuditTest(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_import_gap_flagged(self):
-        # apache files cover 2025-07-01..05 and 09..12 — a 3-day hole at
-        # 06/07/08.  I must report it.  cmsauth left empty (skipped).
+        # apache files cover 2025-07-01..05 and 15..20 — a 9-day hole at
+        # 06..14, which exceeds the 7-day floor and must be reported.
+        # (Coverage source B = ledger filenames; cmsauth left empty.)
         files = [f"delta-access-202507{d:02d}.log.gz" for d in
-                 (1, 2, 3, 4, 5, 9, 10, 11, 12)]
+                 (1, 2, 3, 4, 5, 15, 16, 17, 18, 19, 20)]
         data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
         self._set_mock(data, import_files={"web": files})
         rc = hzmetrics.cmd_audit(self._args(all=True))
         self.assertEqual(rc, 1)
         emitted = self._emitted()
-        self.assertIn("apache import gap: 2025-07-06..2025-07-08", emitted)
+        self.assertIn("apache import gap: 2025-07-06..2025-07-14", emitted)
 
     def test_no_import_gap_when_contiguous(self):
         # Fully contiguous daily files → no gap finding.  (A single missing
@@ -468,8 +478,24 @@ class CmdAuditTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertNotIn("survivor invariant broken", self._emitted())
 
-    def test_reconstruct_drift_flagged(self):
-        # A drifted row (actual_n=900, row_count=1000) on web → finding.
+    def test_reconstruct_drift_web_overage_flagged(self):
+        # web reconstruct row where actual rows in range (1100) EXCEED
+        # row_count (1000) → pollution / widened bounds.  Web only flags
+        # overage (clean-bots shrinkage is tolerated — see next test).
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, reconstruct_drift={
+            "web": [(42, "geodynamics-access.log-20240101.gz",
+                     1000, 1999, 1000, 1100)],
+            "userlogin": [],
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("extra rows in range", self._emitted())
+        self.assertIn("--target web", self._emitted())
+
+    def test_reconstruct_web_shrinkage_tolerated(self):
+        # web reconstruct row where actual (900) < row_count (1000):
+        # legitimate clean-bots churn — must NOT fire (guards 294413b).
         data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
         self._set_mock(data, reconstruct_drift={
             "web": [(42, "geodynamics-access.log-20240101.gz",
@@ -477,10 +503,21 @@ class CmdAuditTest(unittest.TestCase):
             "userlogin": [],
         })
         rc = hzmetrics.cmd_audit(self._args(all=True))
+        self.assertEqual(rc, 0)
+
+    def test_reconstruct_userlogin_drift_flagged(self):
+        # userlogin has no clean-bots churn, so ANY actual != row_count is
+        # a broken survivor invariant.  actual_n=90 vs row_count=100.
+        data = {(t, c): [] for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+        self._set_mock(data, reconstruct_drift={
+            "web": [],
+            "userlogin": [(43, "cmsauth.log-20240101.gz",
+                           1000, 1099, 100, 90)],
+        })
+        rc = hzmetrics.cmd_audit(self._args(all=True))
         self.assertEqual(rc, 1)
         self.assertIn("survivor invariant broken", self._emitted())
-        # Remediation cmd should reference --target web (the affected stream)
-        self.assertIn("--target web", self._emitted())
+        self.assertIn("--target userlogin", self._emitted())
 
     # ------------------------------------------------------------------
     # Check M — AUTO_INCREMENT vs MAX(id) sanity
