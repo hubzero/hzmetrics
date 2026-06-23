@@ -3516,6 +3516,20 @@ def cmd_audit(args):
         )
         max_dt = rows[0][0] if rows and rows[0] else None
         if max_dt is None:
+            # summary_simusage_vals is legitimately empty on hubs with no
+            # simulation tools (collaboration / education hubs like
+            # plantingscience): with no `toolstart` rows there is nothing
+            # for _summary_sim_usage to write, so an empty table is correct
+            # — not a stalled-summarize symptom.  Only flag it when tool
+            # data actually exists, which is the real failure mode (tools
+            # ran but simusage didn't populate).  The other two summary
+            # tables are populated on every hub, so they're never gated.
+            if tbl == "summary_simusage_vals":
+                ts = mysql_query(f"SELECT COUNT(*) FROM {metrics_db}.toolstart")
+                if ts and ts[0] and not ts[0][0]:
+                    log.info(f"[audit] OK    {tbl}: empty — no simulation-tool "
+                             f"data on this hub (toolstart is empty)")
+                    continue
             log.warning(f"[audit] WARN  {tbl}: no non-empty cells at all "
                         f"(expected at least {expected_max[:7]})")
             findings.append((tbl, "(stale)", expected_max[:7],

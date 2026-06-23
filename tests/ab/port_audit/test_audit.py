@@ -100,7 +100,8 @@ class CmdAuditTest(unittest.TestCase):
     def _set_mock(self, data, *, webhits_months=None, hits_expected=None,
                   stored_hits=None, import_files=None,
                   ledger_entries=None, base_extent=None, uncovered_count=0,
-                  reconstruct_drift=None, autoincr=None, pipeline_state=None):
+                  reconstruct_drift=None, autoincr=None, pipeline_state=None,
+                  empty_summaries=None, toolstart_count=None):
         """data: dict mapping (table, column) → list of (ym, total, missing)
         tuples for the enrichment-coverage checks (via mysql_query).
 
@@ -123,6 +124,10 @@ class CmdAuditTest(unittest.TestCase):
         reconstruct_drift = reconstruct_drift or {}
         autoincr = autoincr or {}
         pipeline_state = pipeline_state or {}
+        # check C: summary tables whose MAX(datetime) WHERE value<>'' is
+        # empty (table never populated), and the toolstart row count the
+        # simusage-empty gate probes.  toolstart_count=None → []  (unknown).
+        empty_summaries = tuple(empty_summaries or ())
 
         def mq(sql, params=None):
             if "SELECT MIN(d) FROM" in sql:
@@ -189,9 +194,18 @@ class CmdAuditTest(unittest.TestCase):
                     if f".{table} " in sql and pred in sql:
                         return list(data.get((table, column), []))
                 return []
+            # Check C simusage-empty gate: COUNT(*) of toolstart.  None →
+            # [] (existing tests never reach this since their summary
+            # tables are "fresh").
+            if "COUNT(*) FROM" in sql and ".toolstart" in sql:
+                return [(toolstart_count,)] if toolstart_count is not None else []
             if "MAX(datetime)" in sql:
-                # Check C freshness: a far-future max keeps every summary
-                # table "fresh" so the check stays silent by default.
+                # Check C freshness: a table named in empty_summaries has
+                # no non-empty cells (MAX → NULL); everything else gets a
+                # far-future max so it stays "fresh" and silent.
+                for t in empty_summaries:
+                    if f".{t} " in sql:
+                        return [(None,)]
                 return [(dt(2099, 1, 1, 0, 0, 0),)]
             # All other structural queries (invariant, dirty-stuck,
             # period-14 regression, source coverage, missing period-1)
@@ -288,6 +302,50 @@ class CmdAuditTest(unittest.TestCase):
         self._set_mock(data)
         rc = hzmetrics.cmd_audit(self._args())
         self.assertEqual(rc, 0)
+
+    # ------------------------------------------------------------------
+    # Check C: summary_simusage_vals empty-table gate (tool-less hubs)
+    # ------------------------------------------------------------------
+
+    def _clean_enrichment(self):
+        return {(t, c): [(f"2025-{i:02d}", 1000, 0) for i in range(1, 13)]
+                for t, c, _p, _r in hzmetrics._AUDIT_CHECKS}
+
+    def test_simusage_empty_is_ok_when_no_tool_data(self):
+        # Tool-less hub (collaboration/education, e.g. plantingscience):
+        # toolstart is empty, so an empty summary_simusage_vals is correct
+        # and must NOT be flagged.
+        self._set_mock(self._clean_enrichment(),
+                       empty_summaries={"summary_simusage_vals"},
+                       toolstart_count=0)
+        rc = hzmetrics.cmd_audit(self._args())
+        emitted = self._emitted()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("summary_simusage_vals: no non-empty cells", emitted)
+        self.assertIn("no simulation-tool data on this hub", emitted)
+
+    def test_simusage_empty_is_flagged_when_tool_data_exists(self):
+        # Tools ran (toolstart non-empty) but simusage didn't populate —
+        # that IS a real failure and must still be flagged.
+        self._set_mock(self._clean_enrichment(),
+                       empty_summaries={"summary_simusage_vals"},
+                       toolstart_count=5)
+        rc = hzmetrics.cmd_audit(self._args())
+        emitted = self._emitted()
+        self.assertEqual(rc, 1)
+        self.assertIn("summary_simusage_vals: no non-empty cells", emitted)
+
+    def test_empty_user_vals_always_flagged_regardless_of_toolstart(self):
+        # The gate is simusage-only: summary_user_vals is populated on
+        # every hub, so an empty one is always a finding even when
+        # toolstart is empty.
+        self._set_mock(self._clean_enrichment(),
+                       empty_summaries={"summary_user_vals"},
+                       toolstart_count=0)
+        rc = hzmetrics.cmd_audit(self._args())
+        emitted = self._emitted()
+        self.assertEqual(rc, 1)
+        self.assertIn("summary_user_vals: no non-empty cells", emitted)
 
     # ------------------------------------------------------------------
     # Range collapse
