@@ -5478,6 +5478,16 @@ def cmd_tick(args):
     if _try_whoisonline_lock():
         try:
             do_whoisonline(dry_run=args.dry_run)
+        except Exception:
+            # whoisonline is auxiliary (the real-time session map); a failure
+            # here must NOT propagate and abort the tick, because cmd_run is
+            # called below — an unhandled exception would silently prevent the
+            # :30 metrics run from ever executing.  Seen on cdmhub: apache
+            # could not write the maps XML (PermissionError), which crashed
+            # every tick before cmd_run and stalled the pipeline for weeks
+            # with no visible error (cron stderr was discarded via MAILTO="").
+            # log.exception records the traceback so the next failure is loud.
+            log.exception("[tick] whoisonline failed; continuing to the metrics run")
         finally:
             _release_whoisonline_lock()
     else:
