@@ -6057,13 +6057,41 @@ def do_resolve_dns(db_key, table, date_spec=None, *, all_dates=False,
             # t.host = d.host (indexed) instead of LOWER(t.host) =
             # d.host (function defeats the index).
             t_apply = time.monotonic()
-            update_date_pred = _build_pred("t.")
-            cur.execute(
-                f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
-                f"SET t.host = LOWER(d.host) "
-                f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred} "
-                f"  AND d.host IS NOT NULL")
-            updated = cur.rowcount
+            # Chunk the write-back by the same date windows as phase 1.  The
+            # connection is autocommit, so each chunk's UPDATE releases its
+            # row locks before the next runs.  A single whole-range
+            # JOIN-UPDATE over a multi-day backlog locks every matched row at
+            # once and overflows the InnoDB lock table (error 1206) on a small
+            # buffer pool — the exact failure phase 1 already guards against,
+            # and the one that aborted the current-month analyze when several
+            # days of unresolved IPs had accumulated.  chunk_start/chunk_end
+            # were resolved (or probed from the data) above.
+            updated = 0
+            if chunk_start is not None and chunk_end is not None:
+                cur_d = chunk_start
+                while cur_d < chunk_end:
+                    nxt = min(cur_d + timedelta(days=_DNS_CHUNK_DAYS), chunk_end)
+                    cur.execute(
+                        f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
+                        f"SET t.host = LOWER(d.host) "
+                        f"WHERE (t.host IS NULL OR t.host = '') "
+                        f"  AND t.{d_col} >= %s AND t.{d_col} < %s "
+                        f"  AND d.host IS NOT NULL",
+                        (f"{cur_d.isoformat()} 00:00:00",
+                         f"{nxt.isoformat()} 00:00:00"),
+                    )
+                    updated += cur.rowcount
+                    cur_d = nxt
+            else:
+                # No resolvable date bounds (empty work set, or open-ended
+                # with no data) — fall back to the original single statement.
+                update_date_pred = _build_pred("t.")
+                cur.execute(
+                    f"UPDATE {table} t INNER JOIN _dns_tmp d ON t.ip = d.ip "
+                    f"SET t.host = LOWER(d.host) "
+                    f"WHERE (t.host IS NULL OR t.host = '') {update_date_pred} "
+                    f"  AND d.host IS NOT NULL")
+                updated = cur.rowcount
             apply_dt = time.monotonic() - t_apply
             log.info(f"[resolve-dns] applied: {updated} rows updated in {table}  "
                 f"apply={apply_dt:.1f}s")
