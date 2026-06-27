@@ -1313,7 +1313,10 @@ def _ensure_state_table(metrics_db: str) -> None:
     mysql_exec(
         f"CREATE TABLE IF NOT EXISTS {_state_table(metrics_db)} ("
         "  k VARCHAR(64) NOT NULL,"
-        "  v VARCHAR(255) NOT NULL,"
+        # v is TEXT, not VARCHAR(255): the dirty_months value is a sorted
+        # comma-joined YYYY-MM list that overflows 255 chars past ~32 months
+        # and silently truncates under non-strict sql_mode (see migration #58).
+        "  v TEXT NOT NULL,"
         "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
         "    ON UPDATE CURRENT_TIMESTAMP,"
         "  PRIMARY KEY (k)"
@@ -2092,6 +2095,33 @@ MIGRATIONS.append(Migration(
 ))
 
 
+# pipeline_state.v was VARCHAR(255) (migration #7).  Every value is short
+# EXCEPT `dirty_months`, a sorted comma-joined YYYY-MM list that grows one
+# 8-char token ("YYYY-MM,") per flagged month.  Past ~32 months it exceeds
+# 255 chars and — under the non-strict sql_mode this DB runs — MariaDB
+# SILENTLY TRUNCATES the write, dropping the tail months from the dirty
+# set.  The orchestrator then never re-summarizes those months: stale-but-
+# present summary cells are served with no error.  This bites exactly the
+# multi-year-backfill case dirty_months exists for.  Widen to TEXT (~64 KB,
+# thousands of months); no other key is affected.
+MIGRATIONS.append(Migration(
+    id=58,
+    description=("Widen pipeline_state.v VARCHAR(255) → TEXT — the "
+                 "dirty_months CSV silently truncated past ~32 months under "
+                 "non-strict sql_mode, dropping months from the rebuild set"),
+    sql=("ALTER TABLE {metrics_db}.pipeline_state "
+         "MODIFY COLUMN v TEXT NOT NULL;"),
+    # "Applied" = the column is no longer the original varchar(255).  TEXT
+    # reports data_type='text' (character_maximum_length=65535), so a simple
+    # data_type check is the cleanest auto-mark signal.
+    check_sql=("SELECT COUNT(*) FROM information_schema.columns "
+               "WHERE table_schema='{metrics_db}' "
+               "AND table_name='pipeline_state' "
+               "AND column_name='v' AND data_type='text';"),
+    required=True,
+))
+
+
 # NB: on a host where /var has less than ~2.4× the existing web.MY{D,I}
 # size free, the direct ALTER TABLE in migration #41 can overflow the
 # datadir transient (old MyISAM + new InnoDB live side-by-side during
@@ -2643,7 +2673,7 @@ METRICS_DB_DDL = [
 
     """CREATE TABLE IF NOT EXISTS `{metrics_db}`.`pipeline_state` (
   `k` varchar(64) NOT NULL,
-  `v` varchar(255) NOT NULL,
+  `v` text NOT NULL,
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`k`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3""",
