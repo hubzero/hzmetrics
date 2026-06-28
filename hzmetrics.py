@@ -11208,7 +11208,7 @@ def _reconstruct_cmsauth_key(line: str):
 _RECONSTRUCT_STREAMS = {
     "web": {
         "source_dir":    lambda: HTTPD_IMPORTED,
-        "pattern":       lambda: f"{SITE}-access*log*",
+        "pattern":       lambda: "*-access*log*",
         "label":         "apache",
         "key_from_line": _reconstruct_apache_key,
         "candidate_sql": ("SELECT id, datetime, ip, content FROM {metrics_db}.web "
