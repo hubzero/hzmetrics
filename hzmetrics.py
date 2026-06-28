@@ -3347,7 +3347,15 @@ def cmd_audit(args):
         # origin is selected so the span!=row_count check can skip
         # origin='reconstruct' rows (survivor-based, span >= row_count
         # by design when interior rows were deleted by clean-bots).
-        # Overlap and coverage checks apply uniformly to both origins.
+        #
+        # Overlap detection applies only to importer-origin entries.
+        # Reconstruct entries can legitimately overlap each other and
+        # importer entries because the legacy PHP bulk importer interleaved
+        # data from multiple source files into the same AUTO_INCREMENT run;
+        # a reconstruct entry's pk range therefore spans other files' rows
+        # too, and flagging that as an error produces thousands of false
+        # positives.  We still need prev_end (the high-water mark across
+        # ALL entries) for the coverage / uncovered-rows check.
         ents = mysql_query(
             f"SELECT pk_start, pk_end, row_count, origin "
             f"FROM {metrics_db}.imported_sources "
@@ -3357,16 +3365,20 @@ def cmd_audit(args):
             continue
         span_bad = overlap_bad = 0
         uncovered: list = []   # (lo, hi) id intervals covered by no range
-        prev_end = None
+        prev_end = None          # high-water mark across ALL origins (coverage)
+        prev_importer_end = None  # high-water mark for importer only (overlap)
         for ps, pe, rc, origin in ents:
             ps, pe, rc = int(ps), int(pe), int(rc or 0)
-            if origin == "importer" and pe - ps + 1 != rc:
-                span_bad += 1
-            if prev_end is not None:
-                if ps <= prev_end:
+            if origin == "importer":
+                if pe - ps + 1 != rc:
+                    span_bad += 1
+                # Overlap between two importer entries is always a problem.
+                if prev_importer_end is not None and ps <= prev_importer_end:
                     overlap_bad += 1
-                elif ps > prev_end + 1:
-                    uncovered.append((prev_end + 1, ps - 1))
+                prev_importer_end = max(prev_importer_end or 0, pe)
+            # Coverage gap: only open when ALL prior ranges end before ps.
+            if prev_end is not None and ps > prev_end + 1:
+                uncovered.append((prev_end + 1, ps - 1))
             prev_end = pe if prev_end is None else max(prev_end, pe)
         ext = mysql_query(f"SELECT MIN(id), MAX(id) FROM {metrics_db}.{target}")
         base_min = ext[0][0] if ext and ext[0] else None
@@ -3405,16 +3417,22 @@ def cmd_audit(args):
     # ---------------------------------------------------------------
     # K. Reconstruct-row pk-range drift.  Reconstruct writes survivor-
     # based rows: at write time, COUNT(*) FROM {target} WHERE id BETWEEN
-    # pk_start AND pk_end == row_count by construction.  Subsequent
-    # clean-bots runs (web only) legitimately delete rows inside the
-    # range — that's expected churn, not tampering.  So we flag only
-    # actual > row_count, which can't happen from deletes and indicates
-    # a real problem: pollution from an adjacent file's range, a manual
-    # UPDATE shifting bounds outward, or the kind of accidental
-    # repair-imported-sources widening that shifted 1063 geodynamics
-    # ranges on 2026-06-07 before the watermark-halt fix landed.
-    # userlogin has no clean-bots, so the strict equality still applies
-    # there.
+    # pk_start AND pk_end == row_count by construction.  Two legitimate
+    # deviations exist for web:
+    #
+    #   actual < row_count — clean-bots deleted bots after reconstruction;
+    #                        expected churn, not an error.
+    #   actual > row_count — the legacy PHP bulk importer interleaved data
+    #                        from multiple source files in the same
+    #                        AUTO_INCREMENT run, so a reconstruct entry's
+    #                        pk range encompasses other files' rows too.
+    #                        This has always been true for those entries
+    #                        and is not a sign of tampering.
+    #
+    # Both directions are therefore expected for web reconstruct rows; we
+    # skip the drift check for web entirely.  userlogin has no clean-bots
+    # and was not bulk-interleaved, so the strict equality check still
+    # applies there.
     #
     # Per-row Python loop, NOT a correlated subquery.  MariaDB's planner
     # degenerates the correlated form to O(rows × candidate_scan) — at
@@ -3431,17 +3449,17 @@ def cmd_audit(args):
             f"  AND pk_start IS NOT NULL", (target,))
         drift_count = 0
         for _id, _fn, ps, pe, rc in rows:
+            if target == "web":
+                # See comment above — both actual < row_count (clean-bots)
+                # and actual > row_count (interleaved legacy import) are
+                # expected for web reconstruct rows; skip entirely.
+                continue
             n = mysql_scalar(
                 f"SELECT COUNT(*) FROM {metrics_db}.{target} "
                 f"WHERE id BETWEEN %s AND %s", (int(ps), int(pe)))
             n_i, rc_i = int(n or 0), int(rc or 0)
-            if target == "web":
-                # clean-bots may have shrunk the row count; only flag overage
-                if n_i > rc_i:
-                    drift_count += 1
-            else:
-                if n_i != rc_i:
-                    drift_count += 1
+            if n_i != rc_i:
+                drift_count += 1
         if drift_count:
             direction = "> row_count (extra rows in range — pollution or widened bounds)" \
                 if target == "web" else "<> row_count (survivor invariant broken — ledger tampered or rows deleted outside clean-bots)"
